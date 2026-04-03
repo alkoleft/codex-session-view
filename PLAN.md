@@ -12,6 +12,63 @@
 - Английский допустим только для имён файлов и каталогов, команд, API, форматов, названий библиотек, code identifiers и устоявшихся технических терминов.
 - Новые документы, ADR и архитектурные описания должны соблюдать это правило по умолчанию.
 
+## Утверждённый TODO-чеклист (Этапы 0-8)
+
+- `[x]` Этап 0.1. Инвентаризация Python-контрактов поведения и первичный `python -> rust` mapping.
+  Scope: зафиксировать источники контрактов и целевые Rust-модули для паритета.
+  Артефакты: `docs/parity/python-test-inventory.md`.
+  Verify: документ покрывает `claim/finalize`, `heartbeat/recovery`, fail-closed, artifacts, event normalization, runner flow, console UI и содержит явную таблицу `python -> rust`.
+
+- `[ ]` Этап 0.2. Зафиксировать минимальный acceptance set `v1` в машиночитаемом виде.
+  Scope: определить обязательные сценарии `v1` и формат их запуска.
+  Артефакты: `docs/parity/acceptance-v1.md`, `tests/acceptance/manifest.json` (или эквивалентный manifest).
+  Verify: список кейсов воспроизводим, покрывает required-for-parity контракты и пригоден для CI.
+
+- `[ ]` Этап 0.3. Добавить и задокументировать блокирующий CI-gate `acceptance-v1`.
+  Scope: встроить запуск acceptance-набора в pipeline как обязательный gate.
+  Артефакты: `.github/workflows/acceptance-v1.yml` (или эквивалент), обновление `README.md`.
+  Verify: job `acceptance-v1` присутствует и помечен как required status check для ветки `v1`.
+
+- `[ ]` Этап 1. Создать каркас Rust-проекта.
+  Scope: инициализировать crate, CLI `run-next`, базовые модели и error layer.
+  Артефакты: `Cargo.toml`, `src/main.rs`, `src/cli.rs`, `src/models.rs`, `src/error.rs`, `src/util.rs`.
+  Verify: `cargo test` и `cargo run -- run-next --help` выполняются успешно.
+
+- `[ ]` Этап 2. Перенести file-based task engine.
+  Scope: парсинг markdown-задач, claim/finalize, recovery, archive, atomic write.
+  Артефакты: `src/task_file.rs`, `tests/task_file.rs`.
+  Verify: портированные сценарии из `tests/test_task_file.py` проходят без регрессий.
+
+- `[ ]` Этап 3. Перенести locking.
+  Scope: lock-файл, `flock`, heartbeat payload и конкурентные инварианты.
+  Артефакты: `src/lockfile.rs`, интеграционные тесты конкурентности.
+  Verify: подтверждены инварианты no double-claim, атомарный finalize, корректный stale recovery под конкуренцией.
+
+- `[ ]` Этап 4. Перенести event model и readers.
+  Scope: нормализация root/subagent событий в совместимый `EventRecord`.
+  Артефакты: `src/events/record.rs`, `src/events/payloads.rs`, `src/events/readers.rs`, `tests/event_readers.rs`.
+  Verify: портированные сценарии из `tests/test_event_readers.py` проходят; fail-closed сигналы эквивалентны Python.
+
+- `[ ]` Этап 5. Перенести runner и artifact pipeline.
+  Scope: orchestration loop `run-next`, subprocess `codex exec`, сбор stdout/stderr, summary и finalize.
+  Артефакты: `src/runner.rs`, `src/logs.rs`, `tests/runner.rs`.
+  Verify: ключевые сценарии из `tests/test_runner.py` проходят; layout `.codex-worker` совместим по смыслу.
+
+- `[ ]` Этап 6. Перенести event projector и live UI.
+  Scope: snapshot/timeline/tree и терминальное отображение событий.
+  Артефакты: `src/events/projector.rs`, `src/ui/console.rs`, `tests/event_projector.rs`, `tests/console_ui.rs`.
+  Verify: портированные сценарии из `tests/test_event_model.py` и `tests/test_console_ui.py` проходят.
+
+- `[ ]` Этап 7. Devcontainer, DX и документация.
+  Scope: стандартизировать окружение сборки/тестов и запуск в контейнере.
+  Артефакты: `.devcontainer/devcontainer.json`, документация запуска и тестирования.
+  Verify: проект открывается в devcontainer без ручной донастройки; smoke run воспроизводим.
+
+- `[ ]` Этап 8. Проверка паритета с Python-версией.
+  Scope: выполнить acceptance-набор и smoke-сверку статусов, summary и event types.
+  Артефакты: отчёт `acceptance-v1` с pass/fail по кейсам, обновлённый раздел parity в документации.
+  Verify: Rust-версия проходит согласованный acceptance set и может использоваться как drop-in replacement для `run-next`.
+
 ## 1. Цель
 
 Собрать новую Rust-версию `codex-worker` с сохранением ключевого поведения текущей Python-реализации:
