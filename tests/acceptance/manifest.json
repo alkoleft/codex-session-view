@@ -1,0 +1,71 @@
+{
+  "version": "1.0",
+  "suite": "acceptance-v1",
+  "updated_at": "2026-04-04",
+  "cases": [
+    {
+      "id": "ACPT-001",
+      "title": "Claim/finalize happy path",
+      "priority": "required-for-parity",
+      "covers": ["claim/finalize", "runner flow"],
+      "rust_stage": ["2", "5"],
+      "status": "planned"
+    },
+    {
+      "id": "ACPT-002",
+      "title": "Heartbeat/recovery stale-running",
+      "priority": "required-for-parity",
+      "covers": ["heartbeat/recovery"],
+      "rust_stage": ["2", "3"],
+      "status": "planned"
+    },
+    {
+      "id": "ACPT-003",
+      "title": "Fail-closed на невалидном JSON",
+      "priority": "required-for-parity",
+      "covers": ["fail-closed", "runner flow"],
+      "rust_stage": ["4", "5"],
+      "status": "planned"
+    },
+    {
+      "id": "ACPT-004",
+      "title": "Артефакты run layout",
+      "priority": "required-for-parity",
+      "covers": ["artifacts"],
+      "rust_stage": ["5"],
+      "status": "planned"
+    },
+    {
+      "id": "ACPT-005",
+      "title": "Event normalization core stream",
+      "priority": "required-for-parity",
+      "covers": ["event normalization"],
+      "rust_stage": ["4"],
+      "status": "planned"
+    },
+    {
+      "id": "ACPT-006",
+      "title": "Event normalization subagent session import",
+      "priority": "required-for-parity",
+      "covers": ["event normalization", "artifacts"],
+      "rust_stage": ["4", "5"],
+      "status": "planned"
+    },
+    {
+      "id": "ACPT-007",
+      "title": "Runner flow: последовательная обработка очереди",
+      "priority": "required-for-parity",
+      "covers": ["runner flow", "claim/finalize"],
+      "rust_stage": ["5"],
+      "status": "planned"
+    },
+    {
+      "id": "ACPT-008",
+      "title": "Runner flow: классификация connection failure",
+      "priority": "required-for-parity",
+      "covers": ["runner flow", "fail-closed"],
+      "rust_stage": ["5"],
+      "status": "planned"
+    }
+  ]
+}

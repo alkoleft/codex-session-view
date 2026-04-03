@@ -19,7 +19,7 @@
   Артефакты: `docs/parity/python-test-inventory.md`.
   Verify: документ покрывает `claim/finalize`, `heartbeat/recovery`, fail-closed, artifacts, event normalization, runner flow, console UI и содержит явную таблицу `python -> rust`.
 
-- `[ ]` Этап 0.2. Зафиксировать минимальный acceptance set `v1` в машиночитаемом виде.
+- `[x]` Этап 0.2. Зафиксировать минимальный acceptance set `v1` в машиночитаемом виде.
   Scope: определить обязательные сценарии `v1` и формат их запуска.
   Артефакты: `docs/parity/acceptance-v1.md`, `tests/acceptance/manifest.json` (или эквивалентный manifest).
   Verify: список кейсов воспроизводим, покрывает required-for-parity контракты и пригоден для CI.
