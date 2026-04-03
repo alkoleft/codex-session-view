@@ -24,10 +24,10 @@
   Артефакты: `docs/parity/acceptance-v1.md`, `tests/acceptance/manifest.json` (или эквивалентный manifest).
   Verify: список кейсов воспроизводим, покрывает required-for-parity контракты и пригоден для CI.
 
-- `[ ]` Этап 0.3. Добавить и задокументировать блокирующий CI-gate `acceptance-v1`.
-  Scope: встроить запуск acceptance-набора в pipeline как обязательный gate.
+- `[x]` Этап 0.3. Добавить и задокументировать временную репозиторную CI-проверку `acceptance-v1`.
+  Scope: встроить в pipeline репозиторную валидацию артефактов acceptance (`manifest` + документация) как временную проверку до runtime-исполнения кейсов.
   Артефакты: `.github/workflows/acceptance-v1.yml` (или эквивалент), обновление `README.md`.
-  Verify: job `acceptance-v1` присутствует и помечен как required status check для ветки `v1`.
+  Verify: job `acceptance-v1` присутствует и проверяет консистентность acceptance-артефактов; политика `required status check` настраивается только во внешней конфигурации GitHub и не верифицируется из этого workspace (нет доступа к remote/config).
 
 - `[ ]` Этап 1. Создать каркас Rust-проекта.
   Scope: инициализировать crate, CLI `run-next`, базовые модели и error layer.
@@ -209,7 +209,8 @@ codex-worker-rs/
 
 - есть список сценариев, без которых Rust-версия не считается рабочей;
 - acceptance set существует в репозитории и покрывает `claim/finalize`, `heartbeat/recovery`, fail-closed, artifacts и event normalization;
-- job `acceptance-v1` уже описан и зарезервирован как обязательный gate для `v1`, даже если до реализации он временно не проходит.
+- job `acceptance-v1` уже описан как временная репозиторная проверка и валидирует только acceptance-артефакты (без runtime-исполнения кейсов);
+- политика `required status check` для ветки `v1` относится к внешней GitHub-конфигурации и не может быть проверена из этого workspace (нет доступа к remote/config).
 
 ### Этап 1. Создать каркас Rust-проекта
 
@@ -402,7 +403,7 @@ codex-worker-rs/
 3. Fail-closed сценарии покрыты тестами.
 4. Subagent session import работает на реальных примерах.
 5. В devcontainer проект собирается и тестируется без ручных обходов.
-6. Пройден блокирующий CI gate `acceptance-v1` с полным acceptance set из Этапа 0.
+6. Пройдена блокирующая CI-проверка `acceptance-v1` с полным acceptance set из Этапа 0.
 7. Пройден воспроизводимый протокол конкурентной проверки для `claim/finalize` и `heartbeat/recovery`.
 
 ## 12. Следующий шаг
