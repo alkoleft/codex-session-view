@@ -2,6 +2,10 @@
 
 Rust-порт `codex-worker` с поэтапным переносом поведения Python-версии.
 
+## Базовый эталон исходников (Шаг 1)
+
+Процедура создания воспроизводимого baseline-артефакта из staged tree Python-репозитория описана в `docs/parity/source-baseline.md`.
+
 ## CI-проверка `acceptance-v1` (Этап 0.3, временная репозиторная)
 
 В репозитории добавлен workflow `.github/workflows/acceptance-v1.yml` с job `acceptance-v1`.
