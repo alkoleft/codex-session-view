@@ -1,12 +1,14 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::{BufRead, BufReader, Write};
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use chrono::{Datelike, Duration as ChronoDuration, Utc};
 use regex::Regex;
 use serde_json::{Map, Value};
 
@@ -20,10 +22,13 @@ use crate::task_file::{
     archive_snapshot_if_completed, claim_next_task, finalize_task, load_snapshot, recover_stale_tasks,
     refresh_heartbeat, write_snapshot_atomic, TaskFileError,
 };
+use crate::util::normalize_path;
 use crate::ui::console::WorkerConsole;
 use crate::util::utc_now_iso;
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
+const SUBAGENT_SESSION_LOOKUP_RETRY_SECONDS: f64 = 1.0;
+const RECENT_SUBAGENT_SESSION_DAY_WINDOW: usize = 3;
 
 enum StreamEvent {
     StdoutLine(String),
@@ -32,6 +37,19 @@ enum StreamEvent {
     StderrDone,
     StdoutError(String),
     StderrError(String),
+}
+
+#[derive(Debug, Default)]
+struct SubagentSessionTail {
+    thread_id: String,
+    imported_path: PathBuf,
+    session_path: Option<PathBuf>,
+    read_cursor: u64,
+    partial_line: String,
+    announced: bool,
+    missing_announced: bool,
+    call_names: HashMap<String, String>,
+    last_lookup_at: Option<Instant>,
 }
 
 #[derive(Debug)]
@@ -279,6 +297,7 @@ impl CodexWorker {
         let mut tool_counts: HashMap<String, u64> = HashMap::new();
         let mut subagent_counts: HashMap<String, u64> = HashMap::new();
         let mut subagent_threads: HashSet<String> = HashSet::new();
+        let mut session_tails: HashMap<String, SubagentSessionTail> = HashMap::new();
 
         let mut reader = JsonOutputEventReader::new(
             RunEventContext {
@@ -362,8 +381,23 @@ impl CodexWorker {
         let mut stderr_done = false;
         let mut stream_error: Option<String> = None;
         while !(stdout_done && stderr_done) {
-            let event = match rx.recv() {
+            let event = match rx.recv_timeout(Duration::from_millis(200)) {
                 Ok(event) => event,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    seq = self.sync_subagent_sessions(
+                        claimed,
+                        &paths,
+                        seq,
+                        &mut event_counts,
+                        &mut tool_counts,
+                        &mut subagent_counts,
+                        &subagent_threads,
+                        reader.state.thread_id.as_deref().unwrap_or(""),
+                        &mut session_tails,
+                        false,
+                    )?;
+                    continue;
+                }
                 Err(err) => {
                     stream_error = Some(format!(
                         "stream reader channel closed unexpectedly: {err}"
@@ -387,6 +421,18 @@ impl CodexWorker {
                     write_event(&paths.events, &record)?;
                     self.maybe_write_problem_examples(&paths, &record)?;
                     self.emit_event(&record);
+                    seq = self.sync_subagent_sessions(
+                        claimed,
+                        &paths,
+                        seq,
+                        &mut event_counts,
+                        &mut tool_counts,
+                        &mut subagent_counts,
+                        &subagent_threads,
+                        reader.state.thread_id.as_deref().unwrap_or(""),
+                        &mut session_tails,
+                        false,
+                    )?;
                 }
                 StreamEvent::StderrLine(line) => {
                     stderr_handle.write_all(line.as_bytes())?;
@@ -412,12 +458,48 @@ impl CodexWorker {
                     *event_counts.entry(record.event_type.clone()).or_insert(0) += 1;
                     write_event(&paths.events, &record)?;
                     self.emit("stderr", line.trim_end_matches('\n'));
+                    seq = self.sync_subagent_sessions(
+                        claimed,
+                        &paths,
+                        seq,
+                        &mut event_counts,
+                        &mut tool_counts,
+                        &mut subagent_counts,
+                        &subagent_threads,
+                        reader.state.thread_id.as_deref().unwrap_or(""),
+                        &mut session_tails,
+                        false,
+                    )?;
                 }
                 StreamEvent::StdoutDone => {
                     stdout_done = true;
+                    seq = self.sync_subagent_sessions(
+                        claimed,
+                        &paths,
+                        seq,
+                        &mut event_counts,
+                        &mut tool_counts,
+                        &mut subagent_counts,
+                        &subagent_threads,
+                        reader.state.thread_id.as_deref().unwrap_or(""),
+                        &mut session_tails,
+                        false,
+                    )?;
                 }
                 StreamEvent::StderrDone => {
                     stderr_done = true;
+                    seq = self.sync_subagent_sessions(
+                        claimed,
+                        &paths,
+                        seq,
+                        &mut event_counts,
+                        &mut tool_counts,
+                        &mut subagent_counts,
+                        &subagent_threads,
+                        reader.state.thread_id.as_deref().unwrap_or(""),
+                        &mut session_tails,
+                        false,
+                    )?;
                 }
                 StreamEvent::StdoutError(err) => {
                     stream_error = Some(format!("stdout read failed: {err}"));
@@ -436,6 +518,18 @@ impl CodexWorker {
         let exit_code = proc_status.code();
         heartbeat_stop.store(true, Ordering::Relaxed);
         let _ = heartbeat_thread.join();
+        self.sync_subagent_sessions(
+            claimed,
+            &paths,
+            seq,
+            &mut event_counts,
+            &mut tool_counts,
+            &mut subagent_counts,
+            &subagent_threads,
+            reader.state.thread_id.as_deref().unwrap_or(""),
+            &mut session_tails,
+            true,
+        )?;
         let heartbeat_failure = heartbeat_error
             .lock()
             .ok()
@@ -665,8 +759,18 @@ impl CodexWorker {
 
     fn maybe_write_problem_examples(&self, paths: &RunPaths, event: &EventRecord) -> AppResult<()> {
         if event.event_type == "raw.unparsed" {
-            write_event(&paths.raw_unparsed_dir.join("main.jsonl"), event)?;
-            write_event(&paths.problem_examples_dir.join("main.jsonl"), event)?;
+            let target = if event
+                .payload
+                .get("actor_type")
+                .and_then(Value::as_str)
+                == Some("subagent")
+            {
+                "subagents.jsonl"
+            } else {
+                "main.jsonl"
+            };
+            write_event(&paths.raw_unparsed_dir.join(target), event)?;
+            write_event(&paths.problem_examples_dir.join(target), event)?;
         } else if event.event_type == "error" {
             write_event(&paths.problem_examples_dir.join("main.jsonl"), event)?;
         }
@@ -728,6 +832,198 @@ impl CodexWorker {
         Value::Object(analysis)
     }
 
+    fn sync_subagent_sessions(
+        &mut self,
+        claimed: &ClaimedTask,
+        paths: &RunPaths,
+        mut seq: u64,
+        event_counts: &mut HashMap<String, u64>,
+        tool_counts: &mut HashMap<String, u64>,
+        subagent_counts: &mut HashMap<String, u64>,
+        subagent_threads: &HashSet<String>,
+        parent_thread_id: &str,
+        session_tails: &mut HashMap<String, SubagentSessionTail>,
+        final_pass: bool,
+    ) -> AppResult<u64> {
+        if subagent_threads.is_empty() {
+            return Ok(seq);
+        }
+        let sessions_root = self.sessions_root().join("sessions");
+        if !sessions_root.exists() {
+            if final_pass {
+                self.emit("subagent", &format!("sessions root not found: {}", sessions_root.display()));
+            }
+            return Ok(seq);
+        }
+
+        let mut thread_ids: Vec<String> = subagent_threads.iter().cloned().collect();
+        thread_ids.sort();
+        for thread_id in thread_ids {
+            let tail = session_tails
+                .entry(thread_id.clone())
+                .or_insert_with(|| SubagentSessionTail {
+                    thread_id: thread_id.clone(),
+                    imported_path: paths.subagents_dir.join(format!("{thread_id}.jsonl")),
+                    ..SubagentSessionTail::default()
+                });
+
+            if tail
+                .session_path
+                .as_ref()
+                .is_none_or(|path| !path.exists())
+            {
+                let now = Instant::now();
+                let should_lookup = final_pass
+                    || tail.last_lookup_at.is_none()
+                    || tail
+                        .last_lookup_at
+                        .is_some_and(|seen| seen.elapsed().as_secs_f64() >= SUBAGENT_SESSION_LOOKUP_RETRY_SECONDS);
+                if should_lookup {
+                    tail.last_lookup_at = Some(now);
+                    tail.session_path =
+                        self.find_session_file(&sessions_root, &thread_id, final_pass);
+                }
+            }
+
+            if tail.session_path.is_none() {
+                if final_pass && !tail.missing_announced {
+                    self.emit("subagent", &format!("session missing thread_id={thread_id}"));
+                    tail.missing_announced = true;
+                }
+                continue;
+            }
+
+            if !tail.announced {
+                self.emit("subagent", &format!("session_imported thread_id={thread_id}"));
+                tail.announced = true;
+            }
+
+            seq = self.tail_subagent_session(
+                claimed,
+                paths,
+                seq,
+                tail,
+                event_counts,
+                tool_counts,
+                subagent_counts,
+                parent_thread_id,
+                final_pass,
+            )?;
+        }
+        Ok(seq)
+    }
+
+    fn tail_subagent_session(
+        &mut self,
+        claimed: &ClaimedTask,
+        paths: &RunPaths,
+        mut seq: u64,
+        tail: &mut SubagentSessionTail,
+        event_counts: &mut HashMap<String, u64>,
+        tool_counts: &mut HashMap<String, u64>,
+        subagent_counts: &mut HashMap<String, u64>,
+        parent_thread_id: &str,
+        final_pass: bool,
+    ) -> AppResult<u64> {
+        let Some(session_path) = tail.session_path.clone() else {
+            return Ok(seq);
+        };
+
+        let mut output_reader = JsonOutputEventReader::new(
+            RunEventContext {
+                task_id: claimed.task.task_id().unwrap_or_default().to_string(),
+                run_id: claimed.run_id.clone(),
+            },
+            None,
+        );
+
+        if let Some(parent) = tail.imported_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut source = File::open(&session_path)?;
+        source.seek(SeekFrom::Start(tail.read_cursor))?;
+        let mut chunk = String::new();
+        source.read_to_string(&mut chunk)?;
+        tail.read_cursor = source.stream_position()?;
+        if chunk.is_empty() && !final_pass {
+            return Ok(seq);
+        }
+
+        let mut imported = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&tail.imported_path)?;
+        if !chunk.is_empty() {
+            imported.write_all(chunk.as_bytes())?;
+        }
+
+        let combined = format!("{}{}", tail.partial_line, chunk);
+        let mut lines: Vec<String> = combined.lines().map(str::to_string).collect();
+        if final_pass {
+            tail.partial_line.clear();
+        } else if combined.ends_with('\n') {
+            tail.partial_line.clear();
+        } else {
+            tail.partial_line = lines.pop().unwrap_or(combined);
+        }
+
+        for stripped in lines {
+            if stripped.is_empty() {
+                continue;
+            }
+            seq += 1;
+            let ts = utc_now_iso();
+            let parsed = match serde_json::from_str::<Value>(&stripped) {
+                Ok(Value::Object(obj)) => obj,
+                _ => {
+                    let event = EventRecord {
+                        schema_version: 1,
+                        ts,
+                        task_id: claimed.task.task_id().unwrap_or_default().to_string(),
+                        run_id: claimed.run_id.clone(),
+                        seq,
+                        event_type: "raw.unparsed".to_string(),
+                        raw_type: "invalid_json".to_string(),
+                        parse_status: "unparsed".to_string(),
+                        payload: Value::Object(Map::from_iter([
+                            ("actor_type".to_string(), Value::from("subagent")),
+                            ("thread_id".to_string(), Value::from(tail.thread_id.clone())),
+                            ("text".to_string(), Value::from(stripped.clone())),
+                        ])),
+                    };
+                    write_event(&paths.events, &event)?;
+                    self.maybe_write_problem_examples(paths, &event)?;
+                    *event_counts.entry(event.event_type.clone()).or_insert(0) += 1;
+                    self.emit_event(&event);
+                    continue;
+                }
+            };
+
+            let Some(codex_event) = output_reader.parse_subagent_session_payload(
+                seq,
+                &parsed,
+                &tail.imported_path,
+                parent_thread_id,
+                &tail.thread_id,
+                &mut tail.call_names,
+                tool_counts,
+                subagent_counts,
+            ) else {
+                seq -= 1;
+                continue;
+            };
+
+            let event = codex_event.to_record();
+            write_event(&paths.events, &event)?;
+            self.maybe_write_problem_examples(paths, &event)?;
+            *event_counts.entry(event.event_type.clone()).or_insert(0) += 1;
+            self.emit_event(&event);
+        }
+
+        Ok(seq)
+    }
+
     fn emit(&mut self, kind: &str, message: &str) {
         if let Some(ui) = self.ui.as_mut() {
             let _ = ui.on_emit(kind, message);
@@ -738,6 +1034,94 @@ impl CodexWorker {
         if let Some(ui) = self.ui.as_mut() {
             let _ = ui.on_event(event);
         }
+    }
+
+    fn sessions_root(&self) -> PathBuf {
+        if let Some(path) = &self.config.codex_home {
+            return path.clone();
+        }
+        let raw = std::env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("~/.codex"));
+        normalize_path(&raw)
+    }
+
+    fn find_session_file(
+        &self,
+        sessions_root: &Path,
+        thread_id: &str,
+        exhaustive: bool,
+    ) -> Option<PathBuf> {
+        let mut matches = Vec::new();
+        for day_dir in self.candidate_session_dirs(sessions_root, exhaustive) {
+            let entries = std::fs::read_dir(&day_dir).ok()?;
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+                if path.is_file() && file_name.ends_with(".jsonl") && file_name.contains(thread_id) {
+                    matches.push(path);
+                }
+            }
+            if !matches.is_empty() {
+                matches.sort();
+                return matches.pop();
+            }
+        }
+        None
+    }
+
+    fn candidate_session_dirs(&self, sessions_root: &Path, exhaustive: bool) -> Vec<PathBuf> {
+        if exhaustive {
+            return self.iter_session_dirs(sessions_root);
+        }
+
+        let today = Utc::now().date_naive();
+        let mut candidates = Vec::new();
+        for offset in 0..RECENT_SUBAGENT_SESSION_DAY_WINDOW {
+            let day = today - ChronoDuration::days(offset as i64);
+            let day_dir = sessions_root
+                .join(format!("{:04}", day.year()))
+                .join(format!("{:02}", day.month()))
+                .join(format!("{:02}", day.day()));
+            if day_dir.is_dir() {
+                candidates.push(day_dir);
+            }
+        }
+        if !candidates.is_empty() {
+            return candidates;
+        }
+        self.iter_session_dirs(sessions_root)
+            .into_iter()
+            .take(RECENT_SUBAGENT_SESSION_DAY_WINDOW)
+            .collect()
+    }
+
+    fn iter_session_dirs(&self, sessions_root: &Path) -> Vec<PathBuf> {
+        let mut result = Vec::new();
+        let Ok(years) = std::fs::read_dir(sessions_root) else {
+            return result;
+        };
+        let mut year_dirs: Vec<PathBuf> = years.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+        year_dirs.sort();
+        year_dirs.reverse();
+        for year_dir in year_dirs {
+            let Ok(months) = std::fs::read_dir(&year_dir) else {
+                continue;
+            };
+            let mut month_dirs: Vec<PathBuf> = months.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+            month_dirs.sort();
+            month_dirs.reverse();
+            for month_dir in month_dirs {
+                let Ok(days) = std::fs::read_dir(&month_dir) else {
+                    continue;
+                };
+                let mut day_dirs: Vec<PathBuf> = days.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+                day_dirs.sort();
+                day_dirs.reverse();
+                result.extend(day_dirs);
+            }
+        }
+        result
     }
 }
 

@@ -589,3 +589,78 @@ fn spawn_failure_finalizes_task_and_writes_summary() {
         Some("process_spawn_failed")
     );
 }
+
+#[test]
+fn subagent_sessions_are_imported_from_codex_home() {
+    let tmp = tempfile::tempdir().expect("tmpdir should be created");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).expect("repo dir should be created");
+    let task_file = tmp.path().join("task.md");
+    fs::write(
+        &task_file,
+        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+    )
+    .expect("task file should be written");
+
+    let codex_home = tmp.path().join("codex-home");
+    let session_dir = codex_home.join("sessions").join("2026").join("03").join("24");
+    fs::create_dir_all(&session_dir).expect("session dir should be created");
+    fs::write(
+        session_dir.join("sub-1-session.jsonl"),
+        concat!(
+            "{\"timestamp\":\"2026-03-24T09:41:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sub-1\",\"cwd\":\"/repo\",\"agent_nickname\":\"Lovelace\",\"agent_role\":\"reviewer\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"root-1\"}}}}}\n",
+            "{\"timestamp\":\"2026-03-24T09:41:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"checking\"}]}}\n",
+            "{bad json\n"
+        ),
+    )
+    .expect("session file should be written");
+
+    let fake = tmp.path().join("fake-codex");
+    write_fake_codex(
+        &fake,
+        r#"printf '%s\n' '{"type":"thread.started","thread_id":"root-1"}'
+printf '%s\n' '{"type":"turn.started"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"collab_tool_call","id":"ct-1","tool":"spawn_agent","status":"completed","sender_thread_id":"root-1","receiver_thread_ids":["sub-1"],"prompt":"go","agents_states":{"sub-1":{"status":"ok","message":"done"}}}}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}'
+printf '%s\n' '{"type":"turn.completed"}'"#,
+    );
+
+    let mut config = worker_config(&task_file, &fake);
+    config.codex_home = Some(codex_home);
+    let mut worker = CodexWorker::new(config);
+    let exit = worker.run_next().expect("run should finish");
+    assert_eq!(exit, 0);
+
+    let logs_root = tmp.path().join(".codex-worker");
+    let events = fs::read_to_string(
+        find_named_file(&logs_root, "events.jsonl").expect("events.jsonl should exist"),
+    )
+    .expect("events should be readable");
+    assert!(events.contains("\"event_type\":\"agent.session\""));
+    assert!(events.contains("\"event_type\":\"agent.message\""));
+    assert!(events.contains("\"actor_type\":\"subagent\""));
+    assert!(events.contains("\"thread_id\":\"sub-1\""));
+
+    let imported = fs::read_to_string(
+        find_path_ending_with(&logs_root, Path::new("subagents/sub-1.jsonl"))
+            .expect("imported subagent log should exist"),
+    )
+    .expect("imported subagent log should be readable");
+    assert!(imported.contains("\"type\":\"session_meta\""));
+    assert!(imported.contains("\"type\":\"response_item\""));
+
+    let raw_unparsed = fs::read_to_string(
+        find_path_ending_with(&logs_root, Path::new("raw_unparsed/subagents.jsonl"))
+            .expect("raw_unparsed/subagents.jsonl should exist"),
+    )
+    .expect("raw_unparsed/subagents should be readable");
+    assert!(raw_unparsed.contains("\"event_type\":\"raw.unparsed\""));
+    assert!(raw_unparsed.contains("\"thread_id\":\"sub-1\""));
+
+    let problem_examples = fs::read_to_string(
+        find_path_ending_with(&logs_root, Path::new("problem_examples/subagents.jsonl"))
+            .expect("problem_examples/subagents.jsonl should exist"),
+    )
+    .expect("problem_examples/subagents should be readable");
+    assert!(problem_examples.contains("\"event_type\":\"raw.unparsed\""));
+}
