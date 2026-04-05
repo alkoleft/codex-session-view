@@ -20,6 +20,7 @@ use crate::task_file::{
     archive_snapshot_if_completed, claim_next_task, finalize_task, load_snapshot, recover_stale_tasks,
     refresh_heartbeat, write_snapshot_atomic, TaskFileError,
 };
+use crate::ui::console::WorkerConsole;
 use crate::util::utc_now_iso;
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -37,6 +38,7 @@ enum StreamEvent {
 pub struct CodexWorker {
     pub config: WorkerConfig,
     worker_id: String,
+    ui: Option<WorkerConsole>,
 }
 
 impl CodexWorker {
@@ -49,29 +51,49 @@ impl CodexWorker {
                 .unwrap_or_default()
                 .as_secs()
         );
-        Self { config, worker_id }
+        let ui = if config.log_to_stdout {
+            Some(WorkerConsole::new(config.clone()))
+        } else {
+            None
+        };
+        Self { config, worker_id, ui }
     }
 
     pub fn run_next(&mut self) -> AppResult<i32> {
-        if self.config.dry_run {
-            return Ok(0);
+        if let Some(ui) = self.ui.as_mut() {
+            let _ = ui.start();
         }
 
-        let mut processed_any = false;
-        loop {
-            let claimed = self.claim_next_task()?;
-            let Some(claimed) = claimed else {
-                if !processed_any {
-                    return Ok(0);
-                }
-                return Ok(0);
-            };
-            processed_any = true;
-            let exit_code = self.execute_claimed_task(&claimed)?;
-            if exit_code != 0 {
-                return Ok(exit_code);
+        if self.config.dry_run {
+            let result = Ok(0);
+            if let Some(ui) = self.ui.as_mut() {
+                let _ = ui.finish();
             }
+            return result;
         }
+
+        let result = (|| {
+            let mut processed_any = false;
+            loop {
+                let claimed = self.claim_next_task()?;
+                let Some(claimed) = claimed else {
+                    if !processed_any {
+                        self.emit("idle", &format!("no pending tasks in {}", self.config.task_file.display()));
+                    }
+                    return Ok(0);
+                };
+                processed_any = true;
+                let exit_code = self.execute_claimed_task(&claimed)?;
+                if exit_code != 0 {
+                    return Ok(exit_code);
+                }
+            }
+        })();
+
+        if let Some(ui) = self.ui.as_mut() {
+            let _ = ui.finish();
+        }
+        result
     }
 
     fn claim_next_task(&mut self) -> AppResult<Option<ClaimedTask>> {
@@ -94,6 +116,10 @@ impl CodexWorker {
         let (recovered_content, recovered_ids) =
             recover_stale_tasks(&snapshot, self.config.stale_after).map_err(task_err)?;
         if !recovered_ids.is_empty() {
+            self.emit(
+                "recovery",
+                &format!("marked stale tasks as failed: {}", recovered_ids.join(", ")),
+            );
             write_snapshot_atomic(&task_file, &recovered_content).map_err(task_err)?;
             snapshot = load_snapshot(&task_file).map_err(task_err)?;
         }
@@ -114,6 +140,9 @@ impl CodexWorker {
             .cloned()
             .unwrap_or(task);
         lock.release().map_err(lock_err)?;
+        if let Some(ui) = self.ui.as_mut() {
+            let _ = ui.on_claim(&fresh_task, &run_id);
+        }
 
         Ok(Some(ClaimedTask {
             task: fresh_task,
@@ -136,6 +165,9 @@ impl CodexWorker {
 
         let prompt = self.build_prompt(&claimed.task)?;
         std::fs::write(&paths.prompt, prompt.as_bytes())?;
+        if let Some(ui) = self.ui.as_mut() {
+            let _ = ui.on_start(&claimed.task, &claimed.run_id);
+        }
 
         let mut summary = RunSummary::default();
         summary.task_id = claimed.task.task_id().unwrap_or_default().to_string();
@@ -211,6 +243,15 @@ impl CodexWorker {
                         final_task,
                         &paths.summary.display().to_string(),
                     )?;
+                }
+                if let Some(ui) = self.ui.as_mut() {
+                    let _ = ui.on_result(
+                        &summary.task_id,
+                        &claimed.task.title,
+                        &summary.run_id,
+                        "failed",
+                        Some("process_spawn_failed"),
+                    );
                 }
 
                 return Ok(1);
@@ -345,6 +386,7 @@ impl CodexWorker {
                     let record = parsed_event.to_record();
                     write_event(&paths.events, &record)?;
                     self.maybe_write_problem_examples(&paths, &record)?;
+                    self.emit_event(&record);
                 }
                 StreamEvent::StderrLine(line) => {
                     stderr_handle.write_all(line.as_bytes())?;
@@ -369,6 +411,7 @@ impl CodexWorker {
                     };
                     *event_counts.entry(record.event_type.clone()).or_insert(0) += 1;
                     write_event(&paths.events, &record)?;
+                    self.emit("stderr", line.trim_end_matches('\n'));
                 }
                 StreamEvent::StdoutDone => {
                     stdout_done = true;
@@ -478,6 +521,15 @@ impl CodexWorker {
             .find(|item| item.task_id().ok() == Some(summary.task_id.as_str()))
         {
             update_task_snapshot(&paths.task_json, final_task, &paths.summary.display().to_string())?;
+        }
+        if let Some(ui) = self.ui.as_mut() {
+            let _ = ui.on_result(
+                &summary.task_id,
+                &claimed.task.title,
+                &summary.run_id,
+                &summary.status,
+                summary.failure_reason.as_deref(),
+            );
         }
 
         Ok(exit)
@@ -674,6 +726,18 @@ impl CodexWorker {
             }
         }
         Value::Object(analysis)
+    }
+
+    fn emit(&mut self, kind: &str, message: &str) {
+        if let Some(ui) = self.ui.as_mut() {
+            let _ = ui.on_emit(kind, message);
+        }
+    }
+
+    fn emit_event(&mut self, event: &EventRecord) {
+        if let Some(ui) = self.ui.as_mut() {
+            let _ = ui.on_event(event);
+        }
     }
 }
 
