@@ -5,6 +5,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::config::{build_worker_config, RunNextConfigInput};
 use crate::error::{AppError, AppResult};
+use crate::runner::CodexWorker;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -107,8 +108,9 @@ pub fn main() -> i32 {
 fn run(cli: Cli) -> AppResult<i32> {
     match cli.command {
         Command::RunNext(args) => {
-            let _config = build_worker_config(args.into_input())?;
-            Err(AppError::NotImplemented("run-next execution"))
+            let config = build_worker_config(args.into_input())?;
+            let mut worker = CodexWorker::new(config);
+            worker.run_next()
         }
     }
 }

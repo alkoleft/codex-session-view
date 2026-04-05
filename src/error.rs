@@ -15,6 +15,9 @@ pub enum AppError {
     #[error("invalid value for `{field}`: {reason}")]
     Validation { field: &'static str, reason: String },
 
+    #[error("{0}")]
+    Runner(String),
+
     #[error("not implemented yet: {0}")]
     NotImplemented(&'static str),
 

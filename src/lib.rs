@@ -3,6 +3,8 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod lockfile;
+pub mod logs;
 pub mod models;
+pub mod runner;
 pub mod task_file;
 pub mod util;

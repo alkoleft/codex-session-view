@@ -73,6 +73,10 @@ pub fn sha256_text(value: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+pub fn hash8(value: &str) -> String {
+    sha256_text(value).chars().take(8).collect()
+}
+
 pub fn slugify(value: &str, max_length: usize) -> String {
     let normalized = value.trim().to_lowercase();
     let non_slug = Regex::new(r"[^a-z0-9_-]+").expect("non_slug regex must compile");
