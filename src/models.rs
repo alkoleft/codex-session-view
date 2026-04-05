@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
+pub use crate::events::record::EventRecord;
 
 pub const TASK_START_MARKER: &str = "<!-- codex-task:start -->";
 pub const TASK_END_MARKER: &str = "<!-- codex-task:end -->";
@@ -127,19 +128,6 @@ impl Default for RunSummary {
             paths: BTreeMap::new(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct EventRecord {
-    pub schema_version: u32,
-    pub ts: String,
-    pub seq: u64,
-    pub event_type: String,
-    pub raw_type: String,
-    pub parse_status: String,
-    pub run_id: String,
-    pub task_id: String,
-    pub payload: Value,
 }
 
 #[cfg(test)]
