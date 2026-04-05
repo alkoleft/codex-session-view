@@ -1,6 +1,10 @@
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
 
+use chrono::{Timelike, Utc};
+use regex::Regex;
+use sha2::{Digest, Sha256};
+
 pub fn normalize_path(path: &Path) -> PathBuf {
     let path = expand_tilde(path);
     if path.is_absolute() {
@@ -54,6 +58,69 @@ fn collapse_path_components(path: PathBuf) -> PathBuf {
 
 pub fn normalize_optional_path(value: Option<PathBuf>) -> Option<PathBuf> {
     value.map(|p| normalize_path(&p))
+}
+
+pub fn utc_now_iso() -> String {
+    Utc::now()
+        .with_nanosecond(0)
+        .unwrap_or_else(Utc::now)
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+pub fn sha256_text(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+pub fn slugify(value: &str, max_length: usize) -> String {
+    let normalized = value.trim().to_lowercase();
+    let non_slug = Regex::new(r"[^a-z0-9_-]+").expect("non_slug regex must compile");
+    let multi_dash = Regex::new(r"-{2,}").expect("multi_dash regex must compile");
+
+    let mut slug = non_slug.replace_all(&normalized, "-").into_owned();
+    slug = multi_dash.replace_all(&slug, "-").into_owned();
+    slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        slug = "task".to_string();
+    }
+
+    let mut clipped: String = slug.chars().take(max_length).collect();
+    while clipped.ends_with('-') {
+        clipped.pop();
+    }
+    if clipped.is_empty() {
+        "task".to_string()
+    } else {
+        clipped
+    }
+}
+
+pub fn ensure_parent(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(())
+}
+
+pub fn process_exists(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        let rc = unsafe { libc::kill(pid, 0) };
+        if rc == 0 {
+            return true;
+        }
+        let err = std::io::Error::last_os_error();
+        return err.raw_os_error() == Some(libc::EPERM);
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 fn expand_tilde(path: &Path) -> PathBuf {

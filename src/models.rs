@@ -8,6 +8,16 @@ use crate::error::{AppError, AppResult};
 
 pub const TASK_START_MARKER: &str = "<!-- codex-task:start -->";
 pub const TASK_END_MARKER: &str = "<!-- codex-task:end -->";
+pub const WORKER_OWNED_METADATA: &[&str] = &[
+    "last_run_id",
+    "last_started_at",
+    "last_heartbeat_at",
+    "last_finished_at",
+    "last_result",
+    "last_error",
+    "lease_owner",
+    "lease_pid",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskBlock {
@@ -15,6 +25,8 @@ pub struct TaskBlock {
     pub status: String,
     pub metadata: BTreeMap<String, String>,
     pub explicit_metadata_keys: BTreeSet<String>,
+    #[serde(default)]
+    pub explicit_metadata_order: Vec<String>,
     pub body: String,
     pub raw_text: String,
     pub start: usize,
@@ -43,6 +55,24 @@ impl TaskBlock {
     pub fn cwd(&self) -> Option<&str> {
         self.metadata.get("cwd").map(String::as_str)
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskFileSnapshot {
+    pub path: PathBuf,
+    pub content: String,
+    pub tasks: Vec<TaskBlock>,
+    pub sha256: String,
+    pub mtime_ns: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimedTask {
+    pub task: TaskBlock,
+    pub run_id: String,
+    pub worker_id: String,
+    pub worker_pid: u32,
+    pub snapshot: TaskFileSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -131,6 +161,7 @@ mod tests {
             status: "todo".to_string(),
             metadata: BTreeMap::new(),
             explicit_metadata_keys,
+            explicit_metadata_order: vec!["id".to_string()],
             body: String::new(),
             raw_text: String::new(),
             start: 0,
@@ -151,6 +182,7 @@ mod tests {
             status: "todo".to_string(),
             metadata,
             explicit_metadata_keys: BTreeSet::new(),
+            explicit_metadata_order: Vec::new(),
             body: String::new(),
             raw_text: String::new(),
             start: 0,
@@ -167,6 +199,7 @@ mod tests {
             status: "todo".to_string(),
             metadata: BTreeMap::new(),
             explicit_metadata_keys: BTreeSet::new(),
+            explicit_metadata_order: Vec::new(),
             body: String::new(),
             raw_text: String::new(),
             start: 0,
@@ -181,6 +214,7 @@ mod tests {
             status: "todo".to_string(),
             metadata,
             explicit_metadata_keys: BTreeSet::new(),
+            explicit_metadata_order: Vec::new(),
             body: String::new(),
             raw_text: String::new(),
             start: 0,
@@ -209,7 +243,8 @@ mod tests {
         };
 
         let encoded = serde_json::to_string(&record).expect("event should serialize");
-        let decoded: EventRecord = serde_json::from_str(&encoded).expect("event should deserialize");
+        let decoded: EventRecord =
+            serde_json::from_str(&encoded).expect("event should deserialize");
         assert_eq!(decoded.payload["output"][1]["exit_code"], 0);
     }
 
