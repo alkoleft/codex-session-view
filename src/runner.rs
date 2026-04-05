@@ -45,11 +45,12 @@ struct SubagentSessionTail {
     imported_path: PathBuf,
     session_path: Option<PathBuf>,
     read_cursor: u64,
-    partial_line: String,
+    partial_bytes: Vec<u8>,
     announced: bool,
     missing_announced: bool,
     call_names: HashMap<String, String>,
     last_lookup_at: Option<Instant>,
+    last_error: Option<String>,
 }
 
 #[derive(Debug)]
@@ -898,7 +899,7 @@ impl CodexWorker {
                 tail.announced = true;
             }
 
-            seq = self.tail_subagent_session(
+            match self.tail_subagent_session(
                 claimed,
                 paths,
                 seq,
@@ -908,7 +909,22 @@ impl CodexWorker {
                 subagent_counts,
                 parent_thread_id,
                 final_pass,
-            )?;
+            ) {
+                Ok(next_seq) => {
+                    tail.last_error = None;
+                    seq = next_seq;
+                }
+                Err(err) => {
+                    let message = err.to_string();
+                    if tail.last_error.as_deref() != Some(message.as_str()) {
+                        self.emit(
+                            "subagent",
+                            &format!("session import failed thread_id={thread_id}: {message}"),
+                        );
+                        tail.last_error = Some(message);
+                    }
+                }
+            }
         }
         Ok(seq)
     }
@@ -943,8 +959,8 @@ impl CodexWorker {
 
         let mut source = File::open(&session_path)?;
         source.seek(SeekFrom::Start(tail.read_cursor))?;
-        let mut chunk = String::new();
-        source.read_to_string(&mut chunk)?;
+        let mut chunk = Vec::new();
+        source.read_to_end(&mut chunk)?;
         tail.read_cursor = source.stream_position()?;
         if chunk.is_empty() && !final_pass {
             return Ok(seq);
@@ -955,43 +971,47 @@ impl CodexWorker {
             .append(true)
             .open(&tail.imported_path)?;
         if !chunk.is_empty() {
-            imported.write_all(chunk.as_bytes())?;
+            imported.write_all(&chunk)?;
         }
 
-        let combined = format!("{}{}", tail.partial_line, chunk);
-        let mut lines: Vec<String> = combined.lines().map(str::to_string).collect();
-        if final_pass {
-            tail.partial_line.clear();
-        } else if combined.ends_with('\n') {
-            tail.partial_line.clear();
-        } else {
-            tail.partial_line = lines.pop().unwrap_or(combined);
-        }
+        let lines = split_session_chunk_lines(&mut tail.partial_bytes, &chunk, final_pass);
 
-        for stripped in lines {
+        for line in lines {
+            let stripped = trim_line_bytes(&line);
             if stripped.is_empty() {
                 continue;
             }
             seq += 1;
             let ts = utc_now_iso();
-            let parsed = match serde_json::from_str::<Value>(&stripped) {
+            let stripped = match std::str::from_utf8(stripped) {
+                Ok(text) => text,
+                Err(_) => {
+                    let event = subagent_unparsed_event(
+                        claimed,
+                        seq,
+                        &ts,
+                        &tail.thread_id,
+                        "invalid_utf8",
+                        String::from_utf8_lossy(stripped).into_owned(),
+                    );
+                    write_event(&paths.events, &event)?;
+                    self.maybe_write_problem_examples(paths, &event)?;
+                    *event_counts.entry(event.event_type.clone()).or_insert(0) += 1;
+                    self.emit_event(&event);
+                    continue;
+                }
+            };
+            let parsed = match serde_json::from_str::<Value>(stripped) {
                 Ok(Value::Object(obj)) => obj,
                 _ => {
-                    let event = EventRecord {
-                        schema_version: 1,
-                        ts,
-                        task_id: claimed.task.task_id().unwrap_or_default().to_string(),
-                        run_id: claimed.run_id.clone(),
+                    let event = subagent_unparsed_event(
+                        claimed,
                         seq,
-                        event_type: "raw.unparsed".to_string(),
-                        raw_type: "invalid_json".to_string(),
-                        parse_status: "unparsed".to_string(),
-                        payload: Value::Object(Map::from_iter([
-                            ("actor_type".to_string(), Value::from("subagent")),
-                            ("thread_id".to_string(), Value::from(tail.thread_id.clone())),
-                            ("text".to_string(), Value::from(stripped.clone())),
-                        ])),
-                    };
+                        &ts,
+                        &tail.thread_id,
+                        "invalid_json",
+                        stripped.to_string(),
+                    );
                     write_event(&paths.events, &event)?;
                     self.maybe_write_problem_examples(paths, &event)?;
                     *event_counts.entry(event.event_type.clone()).or_insert(0) += 1;
@@ -1054,11 +1074,16 @@ impl CodexWorker {
     ) -> Option<PathBuf> {
         let mut matches = Vec::new();
         for day_dir in self.candidate_session_dirs(sessions_root, exhaustive) {
-            let entries = std::fs::read_dir(&day_dir).ok()?;
+            let Ok(entries) = std::fs::read_dir(&day_dir) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 let path = entry.path();
                 let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
-                if path.is_file() && file_name.ends_with(".jsonl") && file_name.contains(thread_id) {
+                if path.is_file()
+                    && file_name.ends_with(".jsonl")
+                    && session_file_name_matches_thread_id(file_name, thread_id)
+                {
                     matches.push(path);
                 }
             }
@@ -1156,6 +1181,71 @@ fn next_run_id() -> String {
     format!("{ts:x}-{counter:x}")
 }
 
+fn subagent_unparsed_event(
+    claimed: &ClaimedTask,
+    seq: u64,
+    ts: &str,
+    thread_id: &str,
+    raw_type: &str,
+    text: String,
+) -> EventRecord {
+    EventRecord {
+        schema_version: 1,
+        ts: ts.to_string(),
+        task_id: claimed.task.task_id().unwrap_or_default().to_string(),
+        run_id: claimed.run_id.clone(),
+        seq,
+        event_type: "raw.unparsed".to_string(),
+        raw_type: raw_type.to_string(),
+        parse_status: "unparsed".to_string(),
+        payload: Value::Object(Map::from_iter([
+            ("actor_type".to_string(), Value::from("subagent")),
+            ("thread_id".to_string(), Value::from(thread_id.to_string())),
+            ("text".to_string(), Value::from(text)),
+        ])),
+    }
+}
+
+fn session_file_name_matches_thread_id(file_name: &str, thread_id: &str) -> bool {
+    file_name.match_indices(thread_id).any(|(start, _)| {
+        let before = file_name[..start].chars().next_back();
+        let after = file_name[start + thread_id.len()..].chars().next();
+        session_name_boundary(before) && session_name_boundary(after)
+    })
+}
+
+fn session_name_boundary(ch: Option<char>) -> bool {
+    ch.is_none_or(|value| !value.is_ascii_alphanumeric())
+}
+
+fn split_session_chunk_lines(partial_bytes: &mut Vec<u8>, chunk: &[u8], final_pass: bool) -> Vec<Vec<u8>> {
+    let mut combined = std::mem::take(partial_bytes);
+    combined.extend_from_slice(chunk);
+
+    let mut lines = Vec::new();
+    let mut line_start = 0usize;
+    for (idx, byte) in combined.iter().enumerate() {
+        if *byte == b'\n' {
+            lines.push(combined[line_start..idx].to_vec());
+            line_start = idx + 1;
+        }
+    }
+
+    if final_pass {
+        if line_start < combined.len() {
+            lines.push(combined[line_start..].to_vec());
+        }
+    } else {
+        partial_bytes.extend_from_slice(&combined[line_start..]);
+    }
+
+    lines
+}
+
+fn trim_line_bytes(line: &[u8]) -> &[u8] {
+    line.strip_suffix(b"\r").unwrap_or(line)
+}
+
 fn heartbeat_interval(stale_after_seconds: f64) -> Duration {
     let seconds = (stale_after_seconds / 2.0)
         .min(1.0)
@@ -1237,7 +1327,19 @@ fn _heartbeat_probe(snapshot: &crate::models::TaskFileSnapshot, task_id: &str, w
 
 #[cfg(test)]
 mod tests {
-    use super::heartbeat_interval;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    use chrono::{Datelike, Utc};
+    use tempfile::tempdir;
+
+    use crate::models::WorkerConfig;
+
+    use super::{
+        heartbeat_interval, session_file_name_matches_thread_id, split_session_chunk_lines,
+        CodexWorker,
+    };
 
     #[test]
     fn heartbeat_interval_is_below_stale_threshold_for_small_values() {
@@ -1245,5 +1347,121 @@ mod tests {
         let interval = heartbeat_interval(stale_after);
         assert!(interval.as_secs_f64() < stale_after);
         assert!(interval.as_secs_f64() < 1.0);
+    }
+
+    #[test]
+    fn session_file_match_requires_full_thread_token() {
+        assert!(session_file_name_matches_thread_id(
+            "rollout-demo-sub-1.jsonl",
+            "sub-1"
+        ));
+        assert!(session_file_name_matches_thread_id(
+            "sub-1-session.jsonl",
+            "sub-1"
+        ));
+        assert!(!session_file_name_matches_thread_id(
+            "rollout-demo-sub-10.jsonl",
+            "sub-1"
+        ));
+    }
+
+    #[test]
+    fn split_session_chunk_lines_preserves_partial_utf8_until_next_tick() {
+        let mut partial = Vec::new();
+        let first = split_session_chunk_lines(&mut partial, b"{\"text\":\"\xD0", false);
+        assert!(first.is_empty());
+        assert_eq!(partial, b"{\"text\":\"\xD0");
+
+        let second = split_session_chunk_lines(&mut partial, b"\x9F\"}\n", false);
+        assert_eq!(second, vec![b"{\"text\":\"\xD0\x9F\"}".to_vec()]);
+        assert!(partial.is_empty());
+    }
+
+    #[test]
+    fn find_session_file_prefers_exact_thread_match_over_prefix_match() {
+        let tmp = tempdir().expect("tmpdir should be created");
+        let codex_home = tmp.path().join(".codex");
+        let today = Utc::now().date_naive();
+        let sessions_dir = codex_home
+            .join("sessions")
+            .join(format!("{:04}", today.year()))
+            .join(format!("{:02}", today.month()))
+            .join(format!("{:02}", today.day()));
+        fs::create_dir_all(&sessions_dir).expect("sessions dir should be created");
+        let exact = sessions_dir.join("rollout-demo-sub-1.jsonl");
+        let prefix = sessions_dir.join("rollout-demo-sub-10.jsonl");
+        fs::write(&exact, "").expect("exact session should be created");
+        fs::write(&prefix, "").expect("prefix session should be created");
+
+        let worker = CodexWorker::new(WorkerConfig {
+            task_file: tmp.path().join("task.md"),
+            codex_bin: "codex".to_string(),
+            codex_home: Some(codex_home.clone()),
+            logs_dir: None,
+            default_cwd: None,
+            model: None,
+            sandbox: None,
+            approval_policy: None,
+            prompt_template: None,
+            poll_interval: 2.0,
+            stale_after: 30.0,
+            dry_run: false,
+            log_to_stdout: false,
+        });
+
+        let found = worker
+            .find_session_file(&codex_home.join("sessions"), "sub-1", false)
+            .expect("matching session should be found");
+
+        assert_eq!(found, exact);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_session_file_skips_unreadable_day_dir() {
+        let tmp = tempdir().expect("tmpdir should be created");
+        let codex_home = tmp.path().join(".codex");
+        let sessions_root = codex_home.join("sessions");
+        let blocked = sessions_root.join("2026").join("03").join("25");
+        let readable = sessions_root.join("2026").join("03").join("24");
+        fs::create_dir_all(&blocked).expect("blocked dir should be created");
+        fs::create_dir_all(&readable).expect("readable dir should be created");
+
+        let blocked_meta = fs::metadata(&blocked).expect("blocked metadata should exist");
+        let mut blocked_perms = blocked_meta.permissions();
+        blocked_perms.set_mode(0o000);
+        fs::set_permissions(&blocked, blocked_perms)
+            .expect("blocked permissions should be updated");
+
+        let expected = readable.join("rollout-demo-sub-1.jsonl");
+        fs::write(&expected, "").expect("readable session should be created");
+
+        let worker = CodexWorker::new(WorkerConfig {
+            task_file: tmp.path().join("task.md"),
+            codex_bin: "codex".to_string(),
+            codex_home: Some(codex_home.clone()),
+            logs_dir: None,
+            default_cwd: None,
+            model: None,
+            sandbox: None,
+            approval_policy: None,
+            prompt_template: None,
+            poll_interval: 2.0,
+            stale_after: 30.0,
+            dry_run: false,
+            log_to_stdout: false,
+        });
+
+        let found = worker
+            .find_session_file(&sessions_root, "sub-1", true)
+            .expect("matching session should be found");
+
+        let mut restore = fs::metadata(&blocked)
+            .expect("blocked metadata should still exist")
+            .permissions();
+        restore.set_mode(0o755);
+        fs::set_permissions(&blocked, restore).expect("blocked permissions should be restored");
+
+        assert_eq!(found, expected);
     }
 }

@@ -1,12 +1,14 @@
 #![cfg(unix)]
 
 use std::fs;
+use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use chrono::{Datelike, Utc};
 use codex_worker_rs::models::WorkerConfig;
 use codex_worker_rs::runner::CodexWorker;
 use serde_json::Value;
@@ -663,4 +665,133 @@ printf '%s\n' '{"type":"turn.completed"}'"#,
     )
     .expect("problem_examples/subagents should be readable");
     assert!(problem_examples.contains("\"event_type\":\"raw.unparsed\""));
+}
+
+#[test]
+fn subagent_session_partial_utf8_does_not_fail_run() {
+    let tmp = tempfile::tempdir().expect("tmpdir should be created");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).expect("repo dir should be created");
+    let task_file = tmp.path().join("task.md");
+    fs::write(
+        &task_file,
+        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+    )
+    .expect("task file should be written");
+
+    let codex_home = tmp.path().join("codex-home");
+    let today = Utc::now().date_naive();
+    let session_dir = codex_home
+        .join("sessions")
+        .join(format!("{:04}", today.year()))
+        .join(format!("{:02}", today.month()))
+        .join(format!("{:02}", today.day()));
+    fs::create_dir_all(&session_dir).expect("session dir should be created");
+    let session_file = session_dir.join("sub-1-session.jsonl");
+    fs::write(
+        &session_file,
+        "{\"timestamp\":\"2026-03-24T09:41:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sub-1\",\"cwd\":\"/repo\",\"agent_nickname\":\"Lovelace\",\"agent_role\":\"reviewer\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"root-1\"}}}}}\n",
+    )
+    .expect("session file should be written");
+
+    let writer_path = session_file.clone();
+    let writer = thread::spawn(move || {
+        thread::sleep(Duration::from_millis(150));
+        let mut handle = fs::OpenOptions::new()
+            .append(true)
+            .open(&writer_path)
+            .expect("session file should be appendable");
+        handle
+            .write_all(b"{\"timestamp\":\"2026-03-24T09:41:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"\xD0")
+            .expect("partial utf8 prefix should be written");
+        handle.flush().expect("prefix should be flushed");
+        thread::sleep(Duration::from_millis(250));
+        handle
+            .write_all(b"\x9F\"}]}}\n")
+            .expect("partial utf8 suffix should be written");
+        handle.flush().expect("suffix should be flushed");
+    });
+
+    let fake = tmp.path().join("fake-codex");
+    write_fake_codex(
+        &fake,
+        r#"printf '%s\n' '{"type":"thread.started","thread_id":"root-1"}'
+printf '%s\n' '{"type":"turn.started"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"collab_tool_call","id":"ct-1","tool":"spawn_agent","status":"completed","sender_thread_id":"root-1","receiver_thread_ids":["sub-1"],"prompt":"go","agents_states":{"sub-1":{"status":"ok","message":"done"}}}}'
+sleep 1
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}'
+printf '%s\n' '{"type":"turn.completed"}'"#,
+    );
+
+    let mut config = worker_config(&task_file, &fake);
+    config.codex_home = Some(codex_home);
+    let mut worker = CodexWorker::new(config);
+    let exit = worker.run_next().expect("run should finish");
+    writer.join().expect("writer should finish");
+    assert_eq!(exit, 0);
+
+    let logs_root = tmp.path().join(".codex-worker");
+    let events = fs::read_to_string(
+        find_named_file(&logs_root, "events.jsonl").expect("events.jsonl should exist"),
+    )
+    .expect("events should be readable");
+    assert!(events.contains("\"event_type\":\"agent.session\""));
+    assert!(events.contains("\"event_type\":\"agent.message\""));
+    assert!(events.contains("\"thread_id\":\"sub-1\""));
+    assert!(!events.contains("\"raw_type\":\"invalid_utf8\""));
+}
+
+#[test]
+fn unreadable_subagent_session_is_best_effort() {
+    let tmp = tempfile::tempdir().expect("tmpdir should be created");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).expect("repo dir should be created");
+    let task_file = tmp.path().join("task.md");
+    fs::write(
+        &task_file,
+        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+    )
+    .expect("task file should be written");
+
+    let codex_home = tmp.path().join("codex-home");
+    let today = Utc::now().date_naive();
+    let session_dir = codex_home
+        .join("sessions")
+        .join(format!("{:04}", today.year()))
+        .join(format!("{:02}", today.month()))
+        .join(format!("{:02}", today.day()));
+    fs::create_dir_all(&session_dir).expect("session dir should be created");
+    let session_file = session_dir.join("sub-1-session.jsonl");
+    fs::write(&session_file, "{\"timestamp\":\"2026-03-24T09:41:00Z\"}\n")
+        .expect("session file should be written");
+    let mut perms = fs::metadata(&session_file)
+        .expect("session file should exist")
+        .permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&session_file, perms).expect("session file should become unreadable");
+
+    let fake = tmp.path().join("fake-codex");
+    write_fake_codex(
+        &fake,
+        r#"printf '%s\n' '{"type":"thread.started","thread_id":"root-1"}'
+printf '%s\n' '{"type":"turn.started"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"collab_tool_call","id":"ct-1","tool":"spawn_agent","status":"completed","sender_thread_id":"root-1","receiver_thread_ids":["sub-1"],"prompt":"go","agents_states":{"sub-1":{"status":"ok","message":"done"}}}}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}'
+printf '%s\n' '{"type":"turn.completed"}'"#,
+    );
+
+    let mut config = worker_config(&task_file, &fake);
+    config.codex_home = Some(codex_home);
+    let mut worker = CodexWorker::new(config);
+    let exit = worker.run_next().expect("run should finish");
+
+    let mut restore = fs::metadata(&session_file)
+        .expect("session file should still exist")
+        .permissions();
+    restore.set_mode(0o644);
+    fs::set_permissions(&session_file, restore).expect("session file permissions should restore");
+
+    assert_eq!(exit, 0);
+    let task = read_task_content(&worker, &task_file);
+    assert!(task.contains("# [x] Demo"));
 }
