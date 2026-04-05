@@ -1,6 +1,6 @@
 # Acceptance Set `v1` для Rust-порта
 
-Дата: 2026-04-04
+Дата: 2026-04-05
 
 Цель: зафиксировать минимальный набор acceptance-кейсов, который подтверждает поведенческий паритет Rust-версии с Python-контрактами из `docs/parity/python-test-inventory.md` для блоков `required-for-parity`.
 
@@ -9,6 +9,13 @@
 - В `acceptance-v1` входят только кейсы с приоритетом `required-for-parity`.
 - Каждый кейс должен быть воспроизводим через заранее подготовленные фикстуры.
 - Итоговая проверка `v1` считается пройденной только при `PASS` всех кейсов.
+
+## Как запускается набор
+
+- Локальный запуск: `python3 scripts/acceptance_v1.py`
+- Машиночитаемый источник команд: `tests/acceptance/manifest.json`
+- Отчёт выполнения: `target/acceptance-v1/report.json`
+- CI-эквивалент: workflow `.github/workflows/acceptance-v1.yml`
 
 ## Кейсы
 
@@ -131,3 +138,14 @@
 | `artifacts` | `ACPT-004`, `ACPT-006` |
 | `event normalization` | `ACPT-005`, `ACPT-006` |
 | `runner flow` | `ACPT-001`, `ACPT-003`, `ACPT-007`, `ACPT-008` |
+
+## Фактический статус на 2026-04-05
+
+- `ACPT-001`: `PASS`
+- `ACPT-002`: `PASS`
+- `ACPT-003`: `PASS`
+- `ACPT-004`: `PASS`
+- `ACPT-005`: `PASS`
+- `ACPT-006`: `PASS`
+- `ACPT-007`: `PASS`
+- `ACPT-008`: `PASS`

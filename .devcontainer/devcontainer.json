@@ -1,0 +1,28 @@
+{
+  "name": "codex-worker-rs",
+  "image": "mcr.microsoft.com/devcontainers/rust:1-1-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    },
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11"
+    }
+  },
+  "remoteEnv": {
+    "CODEX_HOME": "${containerWorkspaceFolder}/.codex-mount"
+  },
+  "postCreateCommand": "mkdir -p .codex-mount/sessions && cargo fetch --locked && npm install -g --no-fund --no-audit @openai/codex",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "ms-python.python",
+        "tamasfe.even-better-toml"
+      ]
+    }
+  },
+  "mounts": [
+    "source=/home/alko/.codex/auth.json,target=${containerWorkspaceFolder}/.codex-mount/auth.json,type=bind"
+  ]
+}

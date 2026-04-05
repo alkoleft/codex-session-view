@@ -1,7 +1,7 @@
 {
   "version": "1.0",
   "suite": "acceptance-v1",
-  "updated_at": "2026-04-04",
+  "updated_at": "2026-04-05",
   "cases": [
     {
       "id": "ACPT-001",
@@ -9,7 +9,10 @@
       "priority": "required-for-parity",
       "covers": ["claim/finalize", "runner flow"],
       "rust_stage": ["2", "5"],
-      "status": "planned"
+      "status": "passing",
+      "commands": [
+        ["cargo", "test", "--test", "runner", "successful_run_completes_task_and_writes_logs", "--", "--exact"]
+      ]
     },
     {
       "id": "ACPT-002",
@@ -17,7 +20,11 @@
       "priority": "required-for-parity",
       "covers": ["heartbeat/recovery"],
       "rust_stage": ["2", "3"],
-      "status": "planned"
+      "status": "passing",
+      "commands": [
+        ["cargo", "test", "--test", "task_file", "recover_stale_running_marks_failed", "--", "--exact"],
+        ["cargo", "test", "--test", "task_file", "recover_stale_running_marks_failed_when_process_missing", "--", "--exact"]
+      ]
     },
     {
       "id": "ACPT-003",
@@ -25,7 +32,10 @@
       "priority": "required-for-parity",
       "covers": ["fail-closed", "runner flow"],
       "rust_stage": ["4", "5"],
-      "status": "planned"
+      "status": "passing",
+      "commands": [
+        ["cargo", "test", "--test", "runner", "invalid_json_fails_closed", "--", "--exact"]
+      ]
     },
     {
       "id": "ACPT-004",
@@ -33,7 +43,10 @@
       "priority": "required-for-parity",
       "covers": ["artifacts"],
       "rust_stage": ["5"],
-      "status": "planned"
+      "status": "passing",
+      "commands": [
+        ["cargo", "test", "--test", "runner", "successful_run_completes_task_and_writes_logs", "--", "--exact"]
+      ]
     },
     {
       "id": "ACPT-005",
@@ -41,7 +54,12 @@
       "priority": "required-for-parity",
       "covers": ["event normalization"],
       "rust_stage": ["4"],
-      "status": "planned"
+      "status": "passing",
+      "commands": [
+        ["cargo", "test", "--test", "event_readers", "reader_emits_agent_tool_and_file_event_types", "--", "--exact"],
+        ["cargo", "test", "--test", "event_readers", "mcp_web_search_todo_are_parsed_without_raw_unparsed", "--", "--exact"],
+        ["cargo", "test", "--test", "event_readers", "reader_emits_error_event_type_for_top_level_error", "--", "--exact"]
+      ]
     },
     {
       "id": "ACPT-006",
@@ -49,7 +67,12 @@
       "priority": "required-for-parity",
       "covers": ["event normalization", "artifacts"],
       "rust_stage": ["4", "5"],
-      "status": "planned"
+      "status": "passing",
+      "commands": [
+        ["cargo", "test", "--test", "runner", "subagent_sessions_are_imported_from_codex_home", "--", "--exact"],
+        ["cargo", "test", "--test", "runner", "subagent_session_partial_utf8_does_not_fail_run", "--", "--exact"],
+        ["cargo", "test", "--test", "runner", "unreadable_subagent_session_is_best_effort", "--", "--exact"]
+      ]
     },
     {
       "id": "ACPT-007",
@@ -57,7 +80,10 @@
       "priority": "required-for-parity",
       "covers": ["runner flow", "claim/finalize"],
       "rust_stage": ["5"],
-      "status": "planned"
+      "status": "passing",
+      "commands": [
+        ["cargo", "test", "--test", "runner", "successful_run_archives_task_file_when_all_tasks_completed", "--", "--exact"]
+      ]
     },
     {
       "id": "ACPT-008",
@@ -65,7 +91,11 @@
       "priority": "required-for-parity",
       "covers": ["runner flow", "fail-closed"],
       "rust_stage": ["5"],
-      "status": "planned"
+      "status": "passing",
+      "commands": [
+        ["cargo", "test", "--test", "runner", "connection_failure_is_classified_in_summary", "--", "--exact"],
+        ["cargo", "test", "--test", "runner", "connection_failure_401_is_classified_as_authn_required", "--", "--exact"]
+      ]
     }
   ]
 }

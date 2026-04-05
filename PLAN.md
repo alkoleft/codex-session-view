@@ -1,6 +1,6 @@
 # План: `codex-worker-rs`
 
-Дата: 2026-04-04
+Дата: 2026-04-05
 
 Исходный проект: `/home/alko/develop/open-source/ai/infrastructure/codex-worker`
 
@@ -29,45 +29,45 @@
   Артефакты: `.github/workflows/acceptance-v1.yml` (или эквивалент), обновление `README.md`.
   Verify: job `acceptance-v1` присутствует и проверяет консистентность acceptance-артефактов; политика `required status check` настраивается только во внешней конфигурации GitHub и не верифицируется из этого workspace (нет доступа к remote/config).
 
-- `[ ]` Этап 1. Создать каркас Rust-проекта.
+- `[x]` Этап 1. Создать каркас Rust-проекта.
   Scope: инициализировать crate, CLI `run-next`, базовые модели и error layer.
   Артефакты: `Cargo.toml`, `src/main.rs`, `src/cli.rs`, `src/models.rs`, `src/error.rs`, `src/util.rs`.
   Verify: `cargo test` и `cargo run -- run-next --help` выполняются успешно.
 
-- `[ ]` Этап 2. Перенести file-based task engine.
+- `[x]` Этап 2. Перенести file-based task engine.
   Scope: парсинг markdown-задач, claim/finalize, recovery, archive, atomic write.
   Артефакты: `src/task_file.rs`, `tests/task_file.rs`.
   Verify: портированные сценарии из `tests/test_task_file.py` проходят без регрессий.
 
-- `[ ]` Этап 3. Перенести locking.
+- `[x]` Этап 3. Перенести locking.
   Scope: lock-файл, `flock`, heartbeat payload и конкурентные инварианты.
   Артефакты: `src/lockfile.rs`, интеграционные тесты конкурентности.
   Verify: подтверждены инварианты no double-claim, атомарный finalize, корректный stale recovery под конкуренцией.
 
-- `[ ]` Этап 4. Перенести event model и readers.
+- `[x]` Этап 4. Перенести event model и readers.
   Scope: нормализация root/subagent событий в совместимый `EventRecord`.
   Артефакты: `src/events/record.rs`, `src/events/payloads.rs`, `src/events/readers.rs`, `tests/event_readers.rs`.
   Verify: портированные сценарии из `tests/test_event_readers.py` проходят; fail-closed сигналы эквивалентны Python.
 
-- `[ ]` Этап 5. Перенести runner и artifact pipeline.
+- `[x]` Этап 5. Перенести runner и artifact pipeline.
   Scope: orchestration loop `run-next`, subprocess `codex exec`, сбор stdout/stderr, summary и finalize.
   Артефакты: `src/runner.rs`, `src/logs.rs`, `tests/runner.rs`.
   Verify: ключевые сценарии из `tests/test_runner.py` проходят; layout `.codex-worker` совместим по смыслу.
 
-- `[ ]` Этап 6. Перенести event projector и live UI.
+- `[x]` Этап 6. Перенести event projector и live UI.
   Scope: snapshot/timeline/tree и терминальное отображение событий.
   Артефакты: `src/events/projector.rs`, `src/ui/console.rs`, `tests/event_projector.rs`, `tests/console_ui.rs`.
   Verify: портированные сценарии из `tests/test_event_model.py` и `tests/test_console_ui.py` проходят.
 
-- `[ ]` Этап 7. Devcontainer, DX и документация.
+- `[x]` Этап 7. Devcontainer, DX и документация.
   Scope: стандартизировать окружение сборки/тестов и запуск в контейнере.
-  Артефакты: `.devcontainer/devcontainer.json`, документация запуска и тестирования.
-  Verify: проект открывается в devcontainer без ручной донастройки; smoke run воспроизводим.
+  Артефакты: `.devcontainer/devcontainer.json`, `README.md`.
+  Verify: проект открывается в devcontainer без ручной донастройки; воспроизводимы `cargo test`, `cargo run -- run-next --help`, `python3 scripts/acceptance_v1.py`.
 
-- `[ ]` Этап 8. Проверка паритета с Python-версией.
+- `[x]` Этап 8. Проверка паритета с Python-версией.
   Scope: выполнить acceptance-набор и smoke-сверку статусов, summary и event types.
-  Артефакты: отчёт `acceptance-v1` с pass/fail по кейсам, обновлённый раздел parity в документации.
-  Verify: Rust-версия проходит согласованный acceptance set и может использоваться как drop-in replacement для `run-next`.
+  Артефакты: `scripts/acceptance_v1.py`, `.github/workflows/acceptance-v1.yml`, `tests/acceptance/manifest.json`, обновлённый раздел parity в документации.
+  Verify: Rust-версия проходит согласованный acceptance set и может использоваться как drop-in replacement для `run-next`; политика `required status check` остаётся внешней GitHub-настройкой.
 
 ## 1. Цель
 
@@ -327,7 +327,7 @@ codex-worker-rs/
 Критерий готовности:
 
 - проект открывается в контейнере без ручной донастройки;
-- локально можно выполнить smoke run.
+- локально можно выполнить `cargo test`, `cargo run -- run-next --help`, `python3 scripts/acceptance_v1.py`.
 
 ### Этап 8. Проверка паритета с Python-версией
 
@@ -342,7 +342,7 @@ codex-worker-rs/
 Критерий готовности:
 
 - Rust-версия проходит agreed acceptance set;
-- job `acceptance-v1` является блокирующим для `v1`;
+- job `acceptance-v1` запускает runtime acceptance-набор автоматически;
 - можно использовать её как drop-in replacement для `run-next` в текущем workflow.
 
 Проверка:
@@ -404,6 +404,7 @@ codex-worker-rs/
 4. Subagent session import работает на реальных примерах.
 5. В devcontainer проект собирается и тестируется без ручных обходов.
 6. Пройдена блокирующая CI-проверка `acceptance-v1` с полным acceptance set из Этапа 0.
+   Политика required-check остаётся внешней GitHub-настройкой и не проверяется из workspace.
 7. Пройден воспроизводимый протокол конкурентной проверки для `claim/finalize` и `heartbeat/recovery`.
 
 ## 12. Следующий шаг

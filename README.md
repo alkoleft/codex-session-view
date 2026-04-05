@@ -1,28 +1,39 @@
 # codex-worker-rs
 
-Rust-порт `codex-worker` с поэтапным переносом поведения Python-версии.
+Rust-порт `codex-worker` с поведенческим паритетом для `run-next` относительно Python-версии.
 
-## Базовый эталон исходников (Шаг 1)
+## Что уже есть
+
+- file-based task engine с `claim/finalize`, heartbeat и stale recovery;
+- fail-closed runner для `codex exec --json` с layout артефактов `.codex-worker`;
+- нормализация root/subagent событий, импорт `CODEX_HOME/sessions`, event projector и console UI;
+- runtime gate `acceptance-v1`, который генерирует отчёт в `target/acceptance-v1/report.json`.
+
+## Быстрый старт
+
+```bash
+cargo test
+cargo run -- run-next --help
+python3 scripts/acceptance_v1.py
+```
+
+- `cargo test` прогоняет полный behavioural test suite.
+- `cargo run -- run-next --help` проверяет CLI-контракт.
+- `python3 scripts/acceptance_v1.py` валидирует `tests/acceptance/manifest.json`, сверяет ids с `docs/parity/acceptance-v1.md` и запускает runtime acceptance-кейсы.
+
+## Devcontainer
+
+- В `.devcontainer/devcontainer.json` зафиксировано воспроизводимое Rust-окружение с `CODEX_HOME=${containerWorkspaceFolder}/.codex-mount`.
+- После открытия контейнера доступны те же команды: `cargo test`, `cargo run -- run-next --help`, `python3 scripts/acceptance_v1.py`.
+- `@openai/codex` ставится в `postCreateCommand`; `auth.json` монтируется в `.codex-mount/auth.json`.
+
+## Acceptance и CI
+
+- Workflow `.github/workflows/acceptance-v1.yml` запускает тот же runtime harness, что и локальная команда `python3 scripts/acceptance_v1.py`.
+- Машиночитаемый источник правды для acceptance-набора: `tests/acceptance/manifest.json`.
+- На 2026-04-05 все 8 кейсов `acceptance-v1` проходят локально.
+- Настройка branch protection и назначение `acceptance-v1` как `required status check` остаются внешней конфигурацией GitHub и не верифицируются из этого workspace.
+
+## Базовый эталон исходников
 
 Процедура создания воспроизводимого baseline-артефакта из staged tree Python-репозитория описана в `docs/parity/source-baseline.md`.
-
-## CI-проверка `acceptance-v1` (Этап 0.3, временная репозиторная)
-
-В репозитории добавлен workflow `.github/workflows/acceptance-v1.yml` с job `acceptance-v1`.
-
-Текущий объём проверки (Этап 0.3):
-
-- валидность JSON в `tests/acceptance/manifest.json`;
-- непустой список кейсов и корректный формат id `ACPT-###`;
-- обязательные поля кейсов (`id`, `title`, `priority`, `covers`, `rust_stage`, `status`);
-- синхронизация id между `tests/acceptance/manifest.json` и `docs/parity/acceptance-v1.md`.
-
-Ограничение текущего этапа:
-
-- Полноценный запуск runtime acceptance-сценариев (выполнение самих кейсов) не реализуется в Этапе 0.3 и добавляется позже, на этапах реализации runtime и финальной parity-проверки.
-
-Важно:
-
-- Этап 0.3 фиксирует только репозиторную часть проверки (`.github/workflows/acceptance-v1.yml` + проверка артефактов).
-- Настройка branch protection и назначение `acceptance-v1` как `required status check` выполняются вне репозитория, в настройках GitHub.
-- Проверить required-check policy из этого workspace нельзя: нет доступа к remote/config GitHub.

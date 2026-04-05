@@ -22,91 +22,27 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Validate acceptance manifest and docs parity
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run acceptance-v1
         shell: bash
         run: |
           set -euo pipefail
+          python scripts/acceptance_v1.py \
+            --manifest tests/acceptance/manifest.json \
+            --doc docs/parity/acceptance-v1.md \
+            --report target/acceptance-v1/report.json
 
-          MANIFEST="tests/acceptance/manifest.json"
-          DOC="docs/parity/acceptance-v1.md"
+      - name: Upload acceptance-v1 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-v1-report
+          path: target/acceptance-v1/report.json
+          if-no-files-found: ignore
 
-          test -f "$MANIFEST"
-          test -f "$DOC"
-
-          python - <<'PY'
-          import json
-          import pathlib
-          import re
-          import sys
-
-          manifest_path = pathlib.Path("tests/acceptance/manifest.json")
-          doc_path = pathlib.Path("docs/parity/acceptance-v1.md")
-
-          try:
-              data = json.loads(manifest_path.read_text(encoding="utf-8"))
-          except Exception as exc:
-              print(f"manifest parse error: {exc}")
-              sys.exit(1)
-
-          cases = data.get("cases")
-          if not isinstance(cases, list) or not cases:
-              print("manifest.cases must be a non-empty array")
-              sys.exit(1)
-
-          required_fields = {"id", "title", "priority", "covers", "rust_stage", "status"}
-          manifest_ids = []
-          for idx, case in enumerate(cases):
-              if not isinstance(case, dict):
-                  print(f"case[{idx}] must be an object")
-                  sys.exit(1)
-              missing = sorted(required_fields - set(case.keys()))
-              if missing:
-                  print(f"case[{idx}] missing fields: {', '.join(missing)}")
-                  sys.exit(1)
-
-              case_id = case["id"]
-              if not isinstance(case_id, str) or not re.fullmatch(r"ACPT-\d{3}", case_id):
-                  print(f"invalid case id at index {idx}: {case_id!r}")
-                  sys.exit(1)
-              manifest_ids.append(case_id)
-
-              if case.get("priority") != "required-for-parity":
-                  print(f"case {case_id} must have priority=required-for-parity")
-                  sys.exit(1)
-
-              covers = case.get("covers")
-              if not isinstance(covers, list) or not covers:
-                  print(f"case {case_id} must have non-empty covers[]")
-                  sys.exit(1)
-
-          if len(set(manifest_ids)) != len(manifest_ids):
-              print("duplicate case ids found in manifest")
-              sys.exit(1)
-
-          doc_text = doc_path.read_text(encoding="utf-8")
-          doc_ids = re.findall(r"ACPT-\d{3}", doc_text)
-          if not doc_ids:
-              print("no ACPT-* ids found in acceptance-v1.md")
-              sys.exit(1)
-
-          doc_id_set = set(doc_ids)
-          manifest_id_set = set(manifest_ids)
-          missing_in_doc = sorted(manifest_id_set - doc_id_set)
-          extra_in_doc = sorted(doc_id_set - manifest_id_set)
-
-          if missing_in_doc:
-              print("ids missing in docs/parity/acceptance-v1.md:", ", ".join(missing_in_doc))
-              sys.exit(1)
-
-          if extra_in_doc:
-              print("ids present in docs but missing in manifest:", ", ".join(extra_in_doc))
-              sys.exit(1)
-
-          print(f"validated {len(manifest_ids)} acceptance cases")
-          PY
-
-      - name: Примечание об объёме проверки
+      - name: Примечание о branch protection
         run: |
-          echo "acceptance-v1 сейчас проверяет только согласованность acceptance-контракта (документация + manifest)."
-          echo "Полный запуск runtime acceptance-сценариев запланирован на более поздние этапы реализации (Этапы 4-8)."
+          echo "acceptance-v1 валидирует acceptance-контракт и выполняет runtime acceptance-набор."
           echo "Политика required-check задаётся во внешней branch protection GitHub и не может быть проверена из этого workspace (нет доступа к remote/config)."
