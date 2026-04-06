@@ -8,6 +8,7 @@ use codex_worker_rs::events::projector::{
     categorize_event, load_event_records, summarize_event_full, EventProjector,
     EventSummaryCategory,
 };
+use codex_worker_rs::events::readers::{JsonOutputEventReader, RunEventContext};
 use codex_worker_rs::events::replay::ReplayedRunStream;
 use codex_worker_rs::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_META, AGENT_REASONING, AGENT_SESSION,
@@ -19,7 +20,7 @@ use codex_worker_rs::events::types::{
     TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
 };
 use codex_worker_rs::models::EventRecord;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventEntry {
@@ -80,6 +81,13 @@ pub struct EventTree {
     pub root_thread_id: String,
     pub roots: Vec<ThreadNode>,
     pub orphan_events: Vec<EventEntry>,
+    pub standalone_startup_metadata: Option<Map<String, Value>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StandaloneRolloutLoad {
+    pub events: Vec<EventRecord>,
+    pub startup_metadata: Map<String, Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -217,6 +225,15 @@ pub fn validate_standalone_rollout_root(path: &Path) -> AppResult<String> {
 }
 
 pub fn build_event_tree(path: &Path, events: &[EventRecord], _text_limit: usize) -> EventTree {
+    build_event_tree_with_standalone_startup_metadata(path, events, None, _text_limit)
+}
+
+pub fn build_event_tree_with_standalone_startup_metadata(
+    path: &Path,
+    events: &[EventRecord],
+    standalone_startup_metadata: Option<Map<String, Value>>,
+    _text_limit: usize,
+) -> EventTree {
     let task_id = events
         .first()
         .map(|event| event.task_id.as_str())
@@ -296,7 +313,109 @@ pub fn build_event_tree(path: &Path, events: &[EventRecord], _text_limit: usize)
         root_thread_id,
         roots,
         orphan_events,
+        standalone_startup_metadata,
     }
+}
+
+pub fn load_records_from_standalone_rollout(
+    path: &Path,
+    session_id: &str,
+) -> AppResult<StandaloneRolloutLoad> {
+    let file = fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+
+    let synthetic_context = RunEventContext {
+        task_id: "standalone-rollout".to_string(),
+        run_id: "standalone-rollout".to_string(),
+    };
+    let mut parser = JsonOutputEventReader::new(synthetic_context, None);
+    let mut seq = 0u64;
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let mut current_parent_thread_id = "standalone-root".to_string();
+    let mut startup_metadata: Option<Map<String, Value>> = None;
+    let mut events = Vec::new();
+
+    for (line_idx, line) in reader.lines().enumerate() {
+        let raw_line = line?;
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let parsed = serde_json::from_str::<Value>(trimmed).map_err(|err| {
+            AppError::Runner(format!(
+                "standalone rollout: строка {} должна быть JSON-object ({}): {err}",
+                line_idx + 1,
+                path.display()
+            ))
+        })?;
+        let parsed = parsed.as_object().ok_or_else(|| {
+            AppError::Runner(format!(
+                "standalone rollout: строка {} должна быть JSON-object ({})",
+                line_idx + 1,
+                path.display()
+            ))
+        })?;
+
+        if line_idx == 0 {
+            let startup = parsed
+                .get("payload")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    AppError::Runner(format!(
+                        "standalone rollout: первая строка должна содержать payload-object ({})",
+                        path.display()
+                    ))
+                })?;
+            startup_metadata = Some(startup.clone());
+            let canonical_parent_thread_id = startup
+                .get("source")
+                .and_then(Value::as_object)
+                .and_then(|source| source.get("subagent"))
+                .and_then(Value::as_object)
+                .and_then(|subagent| subagent.get("thread_spawn"))
+                .and_then(Value::as_object)
+                .and_then(|thread_spawn| thread_spawn.get("parent_thread_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let flat_parent_thread_id = startup
+                .get("parent_thread_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if let Some(parent_thread_id) = canonical_parent_thread_id.or(flat_parent_thread_id) {
+                current_parent_thread_id = parent_thread_id.to_string();
+            }
+        }
+
+        seq += 1;
+        if let Some(event) = parser.parse_subagent_session_payload(
+            seq,
+            parsed,
+            path,
+            &current_parent_thread_id,
+            session_id,
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        ) {
+            events.push(event.to_record());
+        }
+    }
+
+    let startup_metadata = startup_metadata.ok_or_else(|| {
+        AppError::Runner(format!(
+            "standalone rollout: отсутствует startup metadata в {}",
+            path.display()
+        ))
+    })?;
+    Ok(StandaloneRolloutLoad {
+        events,
+        startup_metadata,
+    })
 }
 
 #[allow(dead_code)]
@@ -975,7 +1094,10 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
-    use super::{build_event_tree, load_records_any, load_records_from_run_input, TimelineItem};
+    use super::{
+        build_event_tree, load_records_any, load_records_from_run_input,
+        load_records_from_standalone_rollout, TimelineItem,
+    };
     use codex_worker_rs::models::EventRecord;
 
     fn make_event(event_type: &str, payload: serde_json::Value, seq: u64) -> EventRecord {
@@ -1028,6 +1150,49 @@ mod tests {
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].payload["thread_id"], "root-thread");
+    }
+
+    #[test]
+    fn load_records_from_standalone_rollout_parses_session_jsonl_and_startup_metadata() {
+        let tmp = tempdir().expect("temp dir should be created");
+        let path = tmp.path().join("rollout-smoke-sub1.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sub1\",\"parent_thread_id\":\"root-thread\",\"approval_policy\":\"never\",\"sandbox_policy\":\"danger-full-access\"}}\n",
+        )
+        .expect("rollout jsonl should be written");
+
+        let loaded =
+            load_records_from_standalone_rollout(&path, "sub1").expect("standalone should load");
+
+        assert_eq!(loaded.events.len(), 1);
+        assert_eq!(loaded.events[0].event_type, "agent.session");
+        assert_eq!(loaded.events[0].task_id, "standalone-rollout");
+        assert_eq!(loaded.events[0].run_id, "standalone-rollout");
+        assert_eq!(loaded.startup_metadata["id"], "sub1");
+        assert_eq!(loaded.startup_metadata["approval_policy"], "never");
+        assert_eq!(loaded.startup_metadata["sandbox_policy"], "danger-full-access");
+    }
+
+    #[test]
+    fn load_records_from_standalone_rollout_uses_nested_parent_thread_id_from_session_meta() {
+        let tmp = tempdir().expect("temp dir should be created");
+        let path = tmp.path().join("rollout-smoke-sub1.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sub1\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"root-thread\"}}}}}\n",
+        )
+        .expect("rollout jsonl should be written");
+
+        let loaded =
+            load_records_from_standalone_rollout(&path, "sub1").expect("standalone should load");
+
+        assert_eq!(loaded.events.len(), 1);
+        assert_eq!(loaded.events[0].event_type, "agent.session");
+        assert_eq!(
+            loaded.events[0].payload["parent_thread_id"].as_str(),
+            Some("root-thread")
+        );
     }
 
     #[test]

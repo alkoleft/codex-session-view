@@ -11,8 +11,9 @@ use codex_worker_rs::events::projector::EventSummaryCategory;
 mod events_tree_shared;
 
 use events_tree_shared::{
-    build_event_tree, is_run_input, load_records_any, load_records_from_run_input, EventEntry,
-    EventNode, EventTree, ThreadNode, TimelineItem, validate_standalone_rollout_root,
+    build_event_tree, build_event_tree_with_standalone_startup_metadata, is_run_input,
+    load_records_from_run_input, load_records_from_standalone_rollout, EventEntry, EventNode,
+    EventTree, ThreadNode, TimelineItem, validate_standalone_rollout_root,
 };
 
 #[derive(Debug, Parser)]
@@ -47,19 +48,33 @@ fn run(cli: Cli) -> AppResult<()> {
         return Err(AppError::EmptyPath(cli.input_path));
     }
 
-    let (source_path, events) = if is_run_input(&cli.input_path) {
-        load_records_from_run_input(&cli.input_path)?
+    let (source_path, events, standalone_startup_metadata) = if is_run_input(&cli.input_path) {
+        let (source_path, events) = load_records_from_run_input(&cli.input_path)?;
+        (source_path, events, None)
     } else if is_rollout_jsonl_candidate(&cli.input_path) {
-        validate_standalone_rollout_root(&cli.input_path)?;
-        let events = load_records_any(&cli.input_path)?;
-        (cli.input_path.clone(), events)
+        let session_id = validate_standalone_rollout_root(&cli.input_path)?;
+        let loaded = load_records_from_standalone_rollout(&cli.input_path, &session_id)?;
+        (
+            cli.input_path.clone(),
+            loaded.events,
+            Some(loaded.startup_metadata),
+        )
     } else {
         return Err(AppError::Runner(format!(
             "invalid input: ожидалась run-директория/артефакт или rollout-*.jsonl, получено {}",
             cli.input_path.display()
         )));
     };
-    let tree = build_event_tree(&source_path, &events, cli.text_limit);
+    let tree = if let Some(startup_metadata) = standalone_startup_metadata {
+        build_event_tree_with_standalone_startup_metadata(
+            &source_path,
+            &events,
+            Some(startup_metadata),
+            cli.text_limit,
+        )
+    } else {
+        build_event_tree(&source_path, &events, cli.text_limit)
+    };
     let output_file = cli
         .output_file
         .unwrap_or_else(|| default_output_path(&source_path));
@@ -192,8 +207,7 @@ fn render_html(tree: &EventTree) -> String {
          <span class=\"pill\">run_id <code>{}</code></span>\
          <span class=\"pill\">events <strong>{}</strong></span>\
          <span class=\"pill\">threads <strong>{}</strong></span>\
-         <span class=\"pill\">root <code>{}</code></span>\
-         </div></section>",
+         <span class=\"pill\">root <code>{}</code></span>",
         escape_html(&tree.source_path.display().to_string()),
         escape_html(&tree.task_id),
         escape_html(&tree.run_id),
@@ -201,6 +215,19 @@ fn render_html(tree: &EventTree) -> String {
         tree.thread_count,
         escape_html(&tree.root_thread_id),
     );
+    if let Some(startup) = tree.standalone_startup_metadata.as_ref() {
+        for (key, value) in startup {
+            let rendered_value =
+                serde_json::to_string(value).unwrap_or_else(|_| "\"<invalid-json>\"".to_string());
+            let _ = write!(
+                out,
+                "<span class=\"pill\">startup:{} <code>{}</code></span>",
+                escape_html(key),
+                escape_html(&rendered_value),
+            );
+        }
+    }
+    out.push_str("</div></section>");
     out.push_str("<section class=\"tree\">");
     for node in &tree.roots {
         render_thread_html(&mut out, node, 0);
@@ -441,7 +468,8 @@ mod tests {
 
     use super::{default_output_path, render_html, run, Cli};
     use crate::events_tree_shared::{
-        build_event_tree, is_run_input, load_records_from_run_input, TimelineItem,
+        build_event_tree, build_event_tree_with_standalone_startup_metadata, is_run_input,
+        load_records_from_run_input, TimelineItem,
     };
 
     fn make_event(event_type: &str, payload: serde_json::Value, seq: u64) -> EventRecord {
@@ -497,6 +525,29 @@ mod tests {
         assert!(html.contains("thread-flow"));
         assert!(html.contains("cat-subagent"));
         assert!(html.contains("data-event-id=\"run-1:2\""));
+    }
+
+    #[test]
+    fn render_html_includes_standalone_startup_metadata_pills() {
+        let events = vec![make_event("thread.started", json!({"thread_id":"root-thread"}), 1)];
+        let startup = serde_json::Map::from_iter([
+            ("id".to_string(), json!("sub1")),
+            ("approval_policy".to_string(), json!("never")),
+            ("model".to_string(), json!("gpt-5")),
+        ]);
+        let tree = build_event_tree_with_standalone_startup_metadata(
+            Path::new("/tmp/rollout-smoke-sub1.jsonl"),
+            &events,
+            Some(startup),
+            120,
+        );
+
+        let html = render_html(&tree);
+
+        assert!(html.contains("startup:id"));
+        assert!(html.contains("startup:approval_policy"));
+        assert!(html.contains("startup:model"));
+        assert!(html.contains("&quot;never&quot;"));
     }
 
     #[test]
