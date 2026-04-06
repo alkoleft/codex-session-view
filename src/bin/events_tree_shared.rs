@@ -141,6 +141,13 @@ pub fn is_run_input(path: &Path) -> bool {
     resolve_run_dir(path).is_some()
 }
 
+pub fn is_rollout_jsonl_family(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(|file_name| file_name.starts_with("rollout-") && file_name.ends_with(".jsonl"))
+        .unwrap_or(false)
+}
+
 pub fn validate_standalone_rollout_root(path: &Path) -> AppResult<String> {
     let file_name = path
         .file_name()
@@ -151,34 +158,7 @@ pub fn validate_standalone_rollout_root(path: &Path) -> AppResult<String> {
                 path.display()
             ))
         })?;
-    if !file_name.starts_with("rollout-") || !file_name.ends_with(".jsonl") {
-        return Err(AppError::Runner(format!(
-            "standalone rollout: ожидался файл rollout-*.jsonl, получено {}",
-            path.display()
-        )));
-    }
-
-    let stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .ok_or_else(|| {
-            AppError::Runner(format!(
-                "standalone rollout: не удалось определить stem файла {}",
-                path.display()
-            ))
-        })?;
-    let session_id = stem
-        .rsplit('-')
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            AppError::Runner(format!(
-                "standalone rollout: session-id в имени файла пустой: {}",
-                path.display()
-            ))
-        })?
-        .to_string();
+    let session_id = extract_standalone_rollout_session_id(file_name, path)?;
 
     let file = fs::File::open(path)?;
     let mut reader = std::io::BufReader::new(file);
@@ -222,6 +202,54 @@ pub fn validate_standalone_rollout_root(path: &Path) -> AppResult<String> {
     }
 
     Ok(session_id)
+}
+
+fn extract_standalone_rollout_session_id(file_name: &str, path: &Path) -> AppResult<String> {
+    match parse_standalone_rollout_session_id_from_file_name(file_name) {
+        Some(session_id) => Ok(session_id.to_string()),
+        None if !file_name.starts_with("rollout-") || !file_name.ends_with(".jsonl") => {
+            Err(AppError::Runner(format!(
+                "standalone rollout: ожидался файл rollout-*.jsonl, получено {}",
+                path.display()
+            )))
+        }
+        None => Err(AppError::Runner(format!(
+            "standalone rollout: ожидался формат rollout-<timestamp>-<session-id>.jsonl, получено {}",
+            path.display()
+        ))),
+    }
+}
+
+fn parse_standalone_rollout_session_id_from_file_name(file_name: &str) -> Option<&str> {
+    const PREFIX: &str = "rollout-";
+    const SUFFIX: &str = ".jsonl";
+    const TIMESTAMP_LEN: usize = 19;
+
+    let remainder = file_name.strip_prefix(PREFIX)?.strip_suffix(SUFFIX)?;
+    if remainder.len() <= TIMESTAMP_LEN {
+        return None;
+    }
+
+    let (timestamp, suffix) = remainder.split_at(TIMESTAMP_LEN);
+    if !is_rollout_timestamp_prefix(timestamp) || !suffix.starts_with('-') {
+        return None;
+    }
+
+    let session_id = suffix[1..].trim();
+    if session_id.is_empty() {
+        return None;
+    }
+
+    Some(session_id)
+}
+
+fn is_rollout_timestamp_prefix(value: &str) -> bool {
+    value.len() == 19
+        && value.bytes().enumerate().all(|(idx, byte)| match idx {
+            4 | 7 | 13 | 16 => byte == b'-',
+            10 => byte == b'T',
+            _ => byte.is_ascii_digit(),
+        })
 }
 
 pub fn build_event_tree(path: &Path, events: &[EventRecord], _text_limit: usize) -> EventTree {
@@ -321,6 +349,29 @@ pub fn load_records_from_standalone_rollout(
     path: &Path,
     session_id: &str,
 ) -> AppResult<StandaloneRolloutLoad> {
+    let root_canonical = fs::canonicalize(path)?;
+    let mut visited = BTreeSet::new();
+    let mut events = Vec::new();
+    let startup_metadata = load_records_from_standalone_rollout_recursive(
+        path,
+        &root_canonical,
+        session_id,
+        &mut visited,
+        &mut events,
+    )?;
+    for (index, event) in events.iter_mut().enumerate() {
+        event.seq = (index + 1) as u64;
+    }
+    Ok(StandaloneRolloutLoad {
+        events,
+        startup_metadata,
+    })
+}
+
+fn load_records_from_single_standalone_rollout(
+    path: &Path,
+    session_id: &str,
+) -> AppResult<StandaloneRolloutLoad> {
     let file = fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
 
@@ -360,6 +411,12 @@ pub fn load_records_from_standalone_rollout(
         })?;
 
         if line_idx == 0 {
+            if parsed.get("type").and_then(Value::as_str) != Some("session_meta") {
+                return Err(AppError::Runner(format!(
+                    "standalone rollout: первая строка должна иметь type=session_meta ({})",
+                    path.display()
+                )));
+            }
             let startup = parsed
                 .get("payload")
                 .and_then(Value::as_object)
@@ -369,6 +426,23 @@ pub fn load_records_from_standalone_rollout(
                         path.display()
                     ))
                 })?;
+            let startup_session_id = startup
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    AppError::Runner(format!(
+                        "standalone rollout: session_meta.payload.id отсутствует или не строка ({})",
+                        path.display()
+                    ))
+                })?;
+            if startup_session_id != session_id {
+                return Err(AppError::Runner(format!(
+                    "standalone rollout: session_meta.payload.id ({startup_session_id}) не совпадает с ожидаемым session-id ({session_id}) в {}",
+                    path.display()
+                )));
+            }
             startup_metadata = Some(startup.clone());
             let canonical_parent_thread_id = startup
                 .get("source")
@@ -416,6 +490,130 @@ pub fn load_records_from_standalone_rollout(
         events,
         startup_metadata,
     })
+}
+
+fn load_records_from_standalone_rollout_recursive(
+    path: &Path,
+    canonical_path: &Path,
+    session_id: &str,
+    visited: &mut BTreeSet<PathBuf>,
+    out_events: &mut Vec<EventRecord>,
+) -> AppResult<Map<String, Value>> {
+    if !visited.insert(canonical_path.to_path_buf()) {
+        return Ok(Map::new());
+    }
+
+    let loaded = load_records_from_single_standalone_rollout(path, session_id)?;
+    let startup_metadata = loaded.startup_metadata.clone();
+    let parent_events = loaded.events;
+    out_events.extend(parent_events.iter().cloned());
+
+    let child_ids = collect_receiver_thread_ids_from_events(&parent_events);
+    for child_id in child_ids {
+        let Some((child_path, child_canonical)) = resolve_child_rollout_path(path, &child_id)?
+        else {
+            continue;
+        };
+        let _ = load_records_from_standalone_rollout_recursive(
+            &child_path,
+            &child_canonical,
+            &child_id,
+            visited,
+            out_events,
+        )?;
+    }
+
+    Ok(startup_metadata)
+}
+
+fn collect_receiver_thread_ids_from_events(events: &[EventRecord]) -> Vec<String> {
+    let mut ids = BTreeSet::new();
+    for event in events {
+        if let Some(payload) = event.payload.as_object() {
+            collect_receiver_thread_ids_from_payload(payload, &mut ids);
+        }
+    }
+    ids.into_iter().collect()
+}
+
+fn collect_receiver_thread_ids_from_payload(
+    payload: &serde_json::Map<String, Value>,
+    out: &mut BTreeSet<String>,
+) {
+    collect_receiver_thread_ids_from_value(&Value::Object(payload.clone()), out);
+}
+
+fn collect_receiver_thread_ids_from_value(value: &Value, out: &mut BTreeSet<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::Array(ids)) = map.get("receiver_thread_ids") {
+                for thread_id in ids
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                {
+                    out.insert(thread_id.to_string());
+                }
+            }
+            for nested in map.values() {
+                collect_receiver_thread_ids_from_value(nested, out);
+            }
+        }
+        Value::Array(items) => {
+            for nested in items {
+                collect_receiver_thread_ids_from_value(nested, out);
+            }
+        }
+        Value::String(text) => {
+            if let Ok(parsed) = serde_json::from_str::<Value>(text) {
+                collect_receiver_thread_ids_from_value(&parsed, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn resolve_child_rollout_path(
+    parent_path: &Path,
+    child_session_id: &str,
+) -> AppResult<Option<(PathBuf, PathBuf)>> {
+    let parent_dir = parent_path.parent().ok_or_else(|| {
+        AppError::Runner(format!(
+            "standalone rollout: у файла нет родительской директории {}",
+            parent_path.display()
+        ))
+    })?;
+    let suffix = format!("-{child_session_id}.jsonl");
+    let mut matches = Vec::new();
+    for entry in fs::read_dir(parent_dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if !file_type.is_file() {
+            continue;
+        }
+        let file_name = entry.file_name();
+        let Some(basename) = file_name.to_str() else {
+            continue;
+        };
+        if basename.starts_with("rollout-") && basename.ends_with(&suffix) {
+            let path = entry.path();
+            let canonical = fs::canonicalize(&path)?;
+            matches.push((basename.to_string(), path, canonical));
+        }
+    }
+    matches.sort_by(|left, right| left.0.cmp(&right.0));
+
+    if matches.len() > 1 {
+        return Err(AppError::Runner(format!(
+            "standalone rollout: ambiguous child match for {child_session_id} in {}",
+            parent_dir.display()
+        )));
+    }
+    Ok(matches
+        .into_iter()
+        .next()
+        .map(|(_, path, canonical)| (path, canonical)))
 }
 
 #[allow(dead_code)]
@@ -865,17 +1063,13 @@ fn format_event_entry(
             .and_then(|obj| obj.get("tool_name").or_else(|| obj.get("tool")))
             .and_then(Value::as_str)
             .map(str::to_string),
-        receiver_thread_ids: payload
-            .and_then(|obj| obj.get("receiver_thread_ids"))
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        receiver_thread_ids: {
+            let mut ids = BTreeSet::new();
+            if let Some(payload) = payload {
+                collect_receiver_thread_ids_from_payload(payload, &mut ids);
+            }
+            ids.into_iter().collect()
+        },
         operation_id: payload
             .and_then(|obj| obj.get("tool_use_id"))
             .and_then(Value::as_str)
@@ -1095,8 +1289,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        build_event_tree, load_records_any, load_records_from_run_input,
-        load_records_from_standalone_rollout, TimelineItem,
+        build_event_tree, is_rollout_jsonl_family, load_records_any, load_records_from_run_input,
+        load_records_from_standalone_rollout, validate_standalone_rollout_root, TimelineItem,
     };
     use codex_worker_rs::models::EventRecord;
 
@@ -1112,6 +1306,24 @@ mod tests {
             parse_status: "parsed".to_string(),
             payload,
         }
+    }
+
+    fn rollout_root_name(session_id: &str) -> String {
+        format!("rollout-2026-04-06T22-54-37-{session_id}.jsonl")
+    }
+
+    fn write_rollout_file(
+        tmp: &tempfile::TempDir,
+        basename: &str,
+        session_id: &str,
+        body: &str,
+    ) -> PathBuf {
+        let path = tmp.path().join(basename);
+        let content = format!(
+            "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{session_id}\",\"parent_thread_id\":\"root-thread\"}}}}\n{body}"
+        );
+        fs::write(&path, content).expect("rollout jsonl should be written");
+        path
     }
 
     #[test]
@@ -1153,9 +1365,39 @@ mod tests {
     }
 
     #[test]
+    fn validate_standalone_rollout_root_extracts_hyphenated_session_id_after_timestamp_prefix() {
+        let tmp = tempdir().expect("temp dir should be created");
+        let session_id = "019d645c-816c-7761-a34e-9db1ca764618";
+        let path = tmp.path().join(rollout_root_name(session_id));
+        fs::write(
+            &path,
+            format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{session_id}\"}}}}\n"),
+        )
+        .expect("rollout jsonl should be written");
+
+        let validated =
+            validate_standalone_rollout_root(&path).expect("standalone rollout root should pass");
+
+        assert_eq!(validated, session_id);
+    }
+
+    #[test]
+    fn is_rollout_jsonl_family_recognizes_rollout_prefixed_jsonl_paths() {
+        assert!(is_rollout_jsonl_family(Path::new(
+            "/tmp/rollout-2026-04-06T22-54-37-sub1.jsonl"
+        )));
+        assert!(is_rollout_jsonl_family(Path::new(
+            "/tmp/rollout-shadow.jsonl"
+        )));
+        assert!(!is_rollout_jsonl_family(Path::new(
+            "/tmp/events-shadow.jsonl"
+        )));
+    }
+
+    #[test]
     fn load_records_from_standalone_rollout_parses_session_jsonl_and_startup_metadata() {
         let tmp = tempdir().expect("temp dir should be created");
-        let path = tmp.path().join("rollout-smoke-sub1.jsonl");
+        let path = tmp.path().join(rollout_root_name("sub1"));
         fs::write(
             &path,
             "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sub1\",\"parent_thread_id\":\"root-thread\",\"approval_policy\":\"never\",\"sandbox_policy\":\"danger-full-access\"}}\n",
@@ -1171,13 +1413,16 @@ mod tests {
         assert_eq!(loaded.events[0].run_id, "standalone-rollout");
         assert_eq!(loaded.startup_metadata["id"], "sub1");
         assert_eq!(loaded.startup_metadata["approval_policy"], "never");
-        assert_eq!(loaded.startup_metadata["sandbox_policy"], "danger-full-access");
+        assert_eq!(
+            loaded.startup_metadata["sandbox_policy"],
+            "danger-full-access"
+        );
     }
 
     #[test]
     fn load_records_from_standalone_rollout_uses_nested_parent_thread_id_from_session_meta() {
         let tmp = tempdir().expect("temp dir should be created");
-        let path = tmp.path().join("rollout-smoke-sub1.jsonl");
+        let path = tmp.path().join(rollout_root_name("sub1"));
         fs::write(
             &path,
             "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sub1\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"root-thread\"}}}}}\n",
@@ -1193,6 +1438,184 @@ mod tests {
             loaded.events[0].payload["parent_thread_id"].as_str(),
             Some("root-thread")
         );
+    }
+
+    #[test]
+    fn load_records_from_standalone_rollout_loads_only_linked_child_sessions() {
+        let tmp = tempdir().expect("temp dir should be created");
+        let root = write_rollout_file(
+            &tmp,
+            "rollout-main-root.jsonl",
+            "root",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"collab_tool_call\",\"id\":\"ct-1\",\"tool\":\"spawn_agent\",\"status\":\"completed\",\"sender_thread_id\":\"root\",\"receiver_thread_ids\":[\"sub-1\"],\"prompt\":\"go\",\"agents_states\":{\"sub-1\":{\"status\":\"ok\"}}}}\n",
+        );
+        write_rollout_file(&tmp, "rollout-main-sub-1.jsonl", "sub-1", "");
+        write_rollout_file(&tmp, "rollout-main-sub-2.jsonl", "sub-2", "");
+
+        let loaded =
+            load_records_from_standalone_rollout(&root, "root").expect("standalone should load");
+        let sessions: Vec<String> = loaded
+            .events
+            .iter()
+            .filter(|event| event.event_type == "agent.session")
+            .filter_map(|event| event.payload["thread_id"].as_str().map(str::to_string))
+            .collect();
+
+        assert!(sessions.contains(&"root".to_string()));
+        assert!(sessions.contains(&"sub-1".to_string()));
+        assert!(!sessions.contains(&"sub-2".to_string()));
+    }
+
+    #[test]
+    fn load_records_from_standalone_rollout_deduplicates_repeated_child_ids() {
+        let tmp = tempdir().expect("temp dir should be created");
+        let root = write_rollout_file(
+            &tmp,
+            "rollout-main-root.jsonl",
+            "root",
+            concat!(
+                "{\"type\":\"item.completed\",\"item\":{\"type\":\"collab_tool_call\",\"id\":\"ct-1\",\"tool\":\"spawn_agent\",\"status\":\"completed\",\"sender_thread_id\":\"root\",\"receiver_thread_ids\":[\"sub-1\",\"sub-1\"],\"prompt\":\"go\",\"agents_states\":{\"sub-1\":{\"status\":\"ok\"}}}}\n",
+                "{\"type\":\"item.completed\",\"item\":{\"type\":\"collab_tool_call\",\"id\":\"ct-2\",\"tool\":\"spawn_agent\",\"status\":\"completed\",\"sender_thread_id\":\"root\",\"receiver_thread_ids\":[\"sub-1\"],\"prompt\":\"go2\",\"agents_states\":{\"sub-1\":{\"status\":\"ok\"}}}}\n"
+            ),
+        );
+        write_rollout_file(&tmp, "rollout-main-sub-1.jsonl", "sub-1", "");
+
+        let loaded =
+            load_records_from_standalone_rollout(&root, "root").expect("standalone should load");
+        let sub_1_sessions = loaded
+            .events
+            .iter()
+            .filter(|event| event.event_type == "agent.session")
+            .filter(|event| event.payload["thread_id"].as_str() == Some("sub-1"))
+            .count();
+
+        assert_eq!(sub_1_sessions, 1);
+    }
+
+    #[test]
+    fn load_records_from_standalone_rollout_skips_missing_child_match() {
+        let tmp = tempdir().expect("temp dir should be created");
+        let root = write_rollout_file(
+            &tmp,
+            "rollout-main-root.jsonl",
+            "root",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"collab_tool_call\",\"id\":\"ct-1\",\"tool\":\"spawn_agent\",\"status\":\"completed\",\"sender_thread_id\":\"root\",\"receiver_thread_ids\":[\"sub-missing\"],\"prompt\":\"go\",\"agents_states\":{\"sub-missing\":{\"status\":\"ok\"}}}}\n",
+        );
+
+        let loaded =
+            load_records_from_standalone_rollout(&root, "root").expect("standalone should load");
+
+        assert_eq!(
+            loaded
+                .events
+                .iter()
+                .filter(|event| event.event_type == "agent.session")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn load_records_from_standalone_rollout_fails_on_ambiguous_child_match() {
+        let tmp = tempdir().expect("temp dir should be created");
+        let root = write_rollout_file(
+            &tmp,
+            "rollout-main-root.jsonl",
+            "root",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"collab_tool_call\",\"id\":\"ct-1\",\"tool\":\"spawn_agent\",\"status\":\"completed\",\"sender_thread_id\":\"root\",\"receiver_thread_ids\":[\"sub-1\"],\"prompt\":\"go\",\"agents_states\":{\"sub-1\":{\"status\":\"ok\"}}}}\n",
+        );
+        write_rollout_file(&tmp, "rollout-a-sub-1.jsonl", "sub-1", "");
+        write_rollout_file(&tmp, "rollout-b-sub-1.jsonl", "sub-1", "");
+
+        let err = load_records_from_standalone_rollout(&root, "root")
+            .expect_err("ambiguous child lookup should fail");
+        assert!(err.to_string().contains("ambiguous child match"));
+    }
+
+    #[test]
+    fn load_records_from_standalone_rollout_fails_when_child_identity_mismatches_file_suffix() {
+        let tmp = tempdir().expect("temp dir should be created");
+        let root = write_rollout_file(
+            &tmp,
+            "rollout-main-root.jsonl",
+            "root",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"collab_tool_call\",\"id\":\"ct-1\",\"tool\":\"spawn_agent\",\"status\":\"completed\",\"sender_thread_id\":\"root\",\"receiver_thread_ids\":[\"sub-1\"],\"prompt\":\"go\",\"agents_states\":{\"sub-1\":{\"status\":\"ok\"}}}}\n",
+        );
+        write_rollout_file(&tmp, "rollout-main-sub-1.jsonl", "foreign-sub", "");
+
+        let err = load_records_from_standalone_rollout(&root, "root")
+            .expect_err("child identity mismatch should fail");
+
+        assert!(err
+            .to_string()
+            .contains("не совпадает с ожидаемым session-id"));
+        assert!(err.to_string().contains("rollout-main-sub-1.jsonl"));
+    }
+
+    #[test]
+    fn load_records_from_standalone_rollout_handles_cycle_without_duplicate_loads() {
+        let tmp = tempdir().expect("temp dir should be created");
+        let root = write_rollout_file(
+            &tmp,
+            "rollout-main-root.jsonl",
+            "root",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"collab_tool_call\",\"id\":\"ct-1\",\"tool\":\"spawn_agent\",\"status\":\"completed\",\"sender_thread_id\":\"root\",\"receiver_thread_ids\":[\"sub-1\"],\"prompt\":\"go\",\"agents_states\":{\"sub-1\":{\"status\":\"ok\"}}}}\n",
+        );
+        write_rollout_file(
+            &tmp,
+            "rollout-main-sub-1.jsonl",
+            "sub-1",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"collab_tool_call\",\"id\":\"ct-2\",\"tool\":\"spawn_agent\",\"status\":\"completed\",\"sender_thread_id\":\"sub-1\",\"receiver_thread_ids\":[\"root\"],\"prompt\":\"loop\",\"agents_states\":{\"root\":{\"status\":\"ok\"}}}}\n",
+        );
+
+        let loaded =
+            load_records_from_standalone_rollout(&root, "root").expect("standalone should load");
+        let sessions: Vec<String> = loaded
+            .events
+            .iter()
+            .filter(|event| event.event_type == "agent.session")
+            .filter_map(|event| event.payload["thread_id"].as_str().map(str::to_string))
+            .collect();
+
+        assert_eq!(
+            sessions
+                .iter()
+                .filter(|thread_id| thread_id.as_str() == "root")
+                .count(),
+            1
+        );
+        assert_eq!(
+            sessions
+                .iter()
+                .filter(|thread_id| thread_id.as_str() == "sub-1")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn load_records_from_standalone_rollout_traverses_children_deterministically() {
+        let tmp = tempdir().expect("temp dir should be created");
+        let root = write_rollout_file(
+            &tmp,
+            "rollout-main-root.jsonl",
+            "root",
+            "{\"type\":\"item.completed\",\"item\":{\"type\":\"collab_tool_call\",\"id\":\"ct-1\",\"tool\":\"spawn_agent\",\"status\":\"completed\",\"sender_thread_id\":\"root\",\"receiver_thread_ids\":[\"sub-2\",\"sub-1\"],\"prompt\":\"go\",\"agents_states\":{\"sub-1\":{\"status\":\"ok\"},\"sub-2\":{\"status\":\"ok\"}}}}\n",
+        );
+        write_rollout_file(&tmp, "rollout-z-sub-2.jsonl", "sub-2", "");
+        write_rollout_file(&tmp, "rollout-a-sub-1.jsonl", "sub-1", "");
+
+        let loaded =
+            load_records_from_standalone_rollout(&root, "root").expect("standalone should load");
+        let sessions: Vec<String> = loaded
+            .events
+            .iter()
+            .filter(|event| event.event_type == "agent.session")
+            .filter_map(|event| event.payload["thread_id"].as_str().map(str::to_string))
+            .filter(|thread_id| thread_id != "root")
+            .collect();
+
+        assert_eq!(sessions, vec!["sub-1".to_string(), "sub-2".to_string()]);
     }
 
     #[test]
@@ -1770,6 +2193,50 @@ mod tests {
             spawn_result.event.parent_event_id.as_deref(),
             Some("run-1:2")
         );
+        assert_eq!(child_thread.thread_id, "sub-1");
+        assert_eq!(child_thread.parent_event_id.as_deref(), Some("run-1:2"));
+    }
+
+    #[test]
+    fn build_event_tree_extracts_receiver_ids_from_nested_input_for_child_anchor() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "collab.spawn_agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"spawn_agent",
+                    "tool_use_id":"ct-1",
+                    "phase":"completed",
+                    "status":"completed",
+                    "input":{"receiver_thread_ids":["sub-1"]},
+                    "agents_states":{"sub-1":{"status":"pending_init"}}
+                }),
+                2,
+            ),
+            make_event(
+                "agent.session",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread"
+                }),
+                3,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let root = &tree.roots[0];
+        let spawn_call = match &root.items[1] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected spawn event"),
+        };
+        let child_thread = match &spawn_call.children[0] {
+            TimelineItem::Thread(thread) => thread,
+            TimelineItem::Event(_) => panic!("expected child thread under spawn event"),
+        };
+
         assert_eq!(child_thread.thread_id, "sub-1");
         assert_eq!(child_thread.parent_event_id.as_deref(), Some("run-1:2"));
     }

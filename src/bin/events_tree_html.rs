@@ -11,9 +11,9 @@ use codex_worker_rs::events::projector::EventSummaryCategory;
 mod events_tree_shared;
 
 use events_tree_shared::{
-    build_event_tree, build_event_tree_with_standalone_startup_metadata, is_run_input,
-    load_records_from_run_input, load_records_from_standalone_rollout, EventEntry, EventNode,
-    EventTree, ThreadNode, TimelineItem, validate_standalone_rollout_root,
+    build_event_tree, build_event_tree_with_standalone_startup_metadata, is_rollout_jsonl_family,
+    is_run_input, load_records_from_run_input, load_records_from_standalone_rollout,
+    validate_standalone_rollout_root, EventEntry, EventNode, EventTree, ThreadNode, TimelineItem,
 };
 
 #[derive(Debug, Parser)]
@@ -51,7 +51,7 @@ fn run(cli: Cli) -> AppResult<()> {
     let (source_path, events, standalone_startup_metadata) = if is_run_input(&cli.input_path) {
         let (source_path, events) = load_records_from_run_input(&cli.input_path)?;
         (source_path, events, None)
-    } else if is_rollout_jsonl_candidate(&cli.input_path) {
+    } else if is_rollout_jsonl_family(&cli.input_path) {
         let session_id = validate_standalone_rollout_root(&cli.input_path)?;
         let loaded = load_records_from_standalone_rollout(&cli.input_path, &session_id)?;
         (
@@ -90,13 +90,6 @@ fn run(cli: Cli) -> AppResult<()> {
     }
 
     Ok(())
-}
-
-fn is_rollout_jsonl_candidate(path: &Path) -> bool {
-    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
-        return false;
-    };
-    file_name.starts_with("rollout-") && file_name.ends_with(".jsonl")
 }
 
 fn default_output_path(source_path: &Path) -> PathBuf {
@@ -468,8 +461,8 @@ mod tests {
 
     use super::{default_output_path, render_html, run, Cli};
     use crate::events_tree_shared::{
-        build_event_tree, build_event_tree_with_standalone_startup_metadata, is_run_input,
-        load_records_from_run_input, TimelineItem,
+        build_event_tree, build_event_tree_with_standalone_startup_metadata,
+        is_rollout_jsonl_family, is_run_input, load_records_from_run_input, TimelineItem,
     };
 
     fn make_event(event_type: &str, payload: serde_json::Value, seq: u64) -> EventRecord {
@@ -484,6 +477,10 @@ mod tests {
             parse_status: "parsed".to_string(),
             payload,
         }
+    }
+
+    fn rollout_root_name(session_id: &str) -> String {
+        format!("rollout-2026-04-06T22-54-37-{session_id}.jsonl")
     }
 
     #[test]
@@ -529,7 +526,11 @@ mod tests {
 
     #[test]
     fn render_html_includes_standalone_startup_metadata_pills() {
-        let events = vec![make_event("thread.started", json!({"thread_id":"root-thread"}), 1)];
+        let events = vec![make_event(
+            "thread.started",
+            json!({"thread_id":"root-thread"}),
+            1,
+        )];
         let startup = serde_json::Map::from_iter([
             ("id".to_string(), json!("sub1")),
             ("approval_policy".to_string(), json!("never")),
@@ -838,7 +839,7 @@ mod tests {
     #[test]
     fn run_accepts_rollout_jsonl_as_standalone_candidate() {
         let tmp = tempdir().expect("temp dir should exist");
-        let input = tmp.path().join("rollout-smoke-sub1.jsonl");
+        let input = tmp.path().join(rollout_root_name("sub1"));
         fs::write(
             &input,
             "{\"type\":\"session_meta\",\"schema_version\":1,\"ts\":\"2026-04-06T08:47:59Z\",\"task_id\":\"smoke-run\",\"run_id\":\"run-1\",\"seq\":1,\"event_type\":\"thread.started\",\"raw_type\":\"thread.started\",\"parse_status\":\"parsed\",\"payload\":{\"id\":\"sub1\",\"thread_id\":\"root-thread\"}}\n",
@@ -859,7 +860,7 @@ mod tests {
     #[test]
     fn run_rejects_standalone_rollout_when_first_line_is_not_session_meta() {
         let tmp = tempdir().expect("temp dir should exist");
-        let input = tmp.path().join("rollout-smoke-sub1.jsonl");
+        let input = tmp.path().join(rollout_root_name("sub1"));
         fs::write(
             &input,
             "{\"schema_version\":1,\"ts\":\"2026-04-06T08:47:59Z\",\"task_id\":\"smoke-run\",\"run_id\":\"run-1\",\"seq\":1,\"event_type\":\"thread.started\",\"raw_type\":\"thread.started\",\"parse_status\":\"parsed\",\"payload\":{\"thread_id\":\"root-thread\"}}\n",
@@ -881,7 +882,9 @@ mod tests {
     #[test]
     fn run_rejects_standalone_rollout_when_session_id_mismatches_filename_suffix() {
         let tmp = tempdir().expect("temp dir should exist");
-        let input = tmp.path().join("rollout-smoke-sub1.jsonl");
+        let input = tmp
+            .path()
+            .join(rollout_root_name("019d645c-816c-7761-a34e-9db1ca764618"));
         fs::write(
             &input,
             "{\"type\":\"session_meta\",\"schema_version\":1,\"ts\":\"2026-04-06T08:47:59Z\",\"task_id\":\"smoke-run\",\"run_id\":\"run-1\",\"seq\":1,\"event_type\":\"thread.started\",\"raw_type\":\"thread.started\",\"parse_status\":\"parsed\",\"payload\":{\"id\":\"sub2\",\"thread_id\":\"root-thread\"}}\n",
@@ -903,7 +906,7 @@ mod tests {
     #[test]
     fn run_rejects_standalone_rollout_with_empty_filename_session_id_suffix() {
         let tmp = tempdir().expect("temp dir should exist");
-        let input = tmp.path().join("rollout-smoke-.jsonl");
+        let input = tmp.path().join("rollout-2026-04-06T22-54-37-.jsonl");
         fs::write(
             &input,
             "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sub1\"}}\n",
@@ -923,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn run_prefers_run_input_over_rollout_candidate_when_both_match() {
+    fn run_prefers_run_input_for_run_subagent_path_even_when_name_looks_like_rollout() {
         let run_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
             "target/manual-smoke/.codex-worker/tasks/all-operation-emulation--07f4203b/runs/20260406T145552Z--18a3cc56f6037e36-1",
         );
@@ -932,7 +935,7 @@ mod tests {
         let output = tmp.path().join("out.html");
 
         assert!(is_run_input(&input));
-        assert!(super::is_rollout_jsonl_candidate(&input));
+        assert!(is_rollout_jsonl_family(&input));
 
         let cli = Cli {
             input_path: input.clone(),
