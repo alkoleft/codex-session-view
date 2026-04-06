@@ -441,10 +441,10 @@ mod tests {
                 ("agent.session", 1),
                 ("agent.started", 1),
                 ("file.change", 4),
-                ("raw.unparsed", 6),
                 ("thread.started", 1),
                 ("todo.update", 3),
-                ("web.search", 24),
+                ("web.search", 28),
+                ("web.open", 2),
                 ("mcp.call", 4),
                 ("mcp.result", 4),
             ],
@@ -463,7 +463,7 @@ mod tests {
         assert!(replayed
             .subagent_threads
             .contains("019d634f-b421-7611-832a-1a3b8070d0d3"));
-        assert_eq!(replayed.event_counts.get("raw.unparsed").copied(), Some(6));
+        assert_eq!(replayed.event_counts.get("raw.unparsed").copied(), None);
     }
 
     #[test]

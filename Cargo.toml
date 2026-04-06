@@ -9,10 +9,6 @@ name = "codex-worker"
 path = "src/main.rs"
 
 [[bin]]
-name = "events_tree"
-path = "src/bin/events_tree.rs"
-
-[[bin]]
 name = "events_tree_html"
 path = "src/bin/events_tree_html.rs"
 
