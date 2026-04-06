@@ -2,10 +2,19 @@
 name = "codex-worker-rs"
 version = "0.1.0"
 edition = "2021"
+autobins = false
 
 [[bin]]
 name = "codex-worker"
 path = "src/main.rs"
+
+[[bin]]
+name = "events_tree"
+path = "src/bin/events_tree.rs"
+
+[[bin]]
+name = "events_tree_html"
+path = "src/bin/events_tree_html.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }

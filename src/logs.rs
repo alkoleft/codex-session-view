@@ -89,7 +89,11 @@ pub fn write_summary(path: &Path, summary: &RunSummary) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn update_task_snapshot(path: &Path, task: &TaskBlock, last_run_path: &str) -> std::io::Result<()> {
+pub fn update_task_snapshot(
+    path: &Path,
+    task: &TaskBlock,
+    last_run_path: &str,
+) -> std::io::Result<()> {
     ensure_parent(path)?;
     let mut payload = serde_json::Map::new();
     payload.insert(
@@ -100,10 +104,17 @@ pub fn update_task_snapshot(path: &Path, task: &TaskBlock, last_run_path: &str) 
     payload.insert("status".to_string(), Value::from(task.status.clone()));
     payload.insert(
         "metadata".to_string(),
-        serde_json::to_value(&task.metadata).unwrap_or_else(|_| Value::Object(serde_json::Map::new())),
+        serde_json::to_value(&task.metadata)
+            .unwrap_or_else(|_| Value::Object(serde_json::Map::new())),
     );
-    payload.insert("last_run_path".to_string(), Value::from(last_run_path.to_string()));
-    std::fs::write(path, serde_json::to_string_pretty(&Value::Object(payload))? + "\n")?;
+    payload.insert(
+        "last_run_path".to_string(),
+        Value::from(last_run_path.to_string()),
+    );
+    std::fs::write(
+        path,
+        serde_json::to_string_pretty(&Value::Object(payload))? + "\n",
+    )?;
     Ok(())
 }
 

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::events::payloads::{parse_payload, PayloadObject};
+use crate::events::types::RAW_UNPARSED;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventRecord {
@@ -23,14 +24,23 @@ impl EventRecord {
 
     pub fn to_dict(&self) -> Value {
         Value::Object(Map::from_iter([
-            ("schema_version".to_string(), Value::from(self.schema_version)),
+            (
+                "schema_version".to_string(),
+                Value::from(self.schema_version),
+            ),
             ("ts".to_string(), Value::from(self.ts.clone())),
             ("task_id".to_string(), Value::from(self.task_id.clone())),
             ("run_id".to_string(), Value::from(self.run_id.clone())),
             ("seq".to_string(), Value::from(self.seq)),
-            ("event_type".to_string(), Value::from(self.event_type.clone())),
+            (
+                "event_type".to_string(),
+                Value::from(self.event_type.clone()),
+            ),
             ("raw_type".to_string(), Value::from(self.raw_type.clone())),
-            ("parse_status".to_string(), Value::from(self.parse_status.clone())),
+            (
+                "parse_status".to_string(),
+                Value::from(self.parse_status.clone()),
+            ),
             ("payload".to_string(), self.payload.clone()),
         ]))
     }
@@ -41,13 +51,7 @@ impl EventRecord {
             .and_then(Value::as_str)
             .map(str::to_string)
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| {
-                let kind = payload
-                    .get("kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or("raw_unparsed");
-                legacy_event_type_by_kind(kind)
-            });
+            .unwrap_or_else(|| RAW_UNPARSED.to_string());
 
         Self {
             schema_version: payload
@@ -138,31 +142,4 @@ impl CodexEvent {
             source: source.to_string(),
         }
     }
-}
-
-fn legacy_event_type_by_kind(kind: &str) -> String {
-    match kind {
-        "thread_started" => "thread.started",
-        "turn_started" => "agent.turn.started",
-        "turn_completed" => "agent.turn.completed",
-        "turn_failed" => "agent.turn.failed",
-        "assistant_message" => "agent.message",
-        "reasoning" => "agent.reasoning",
-        "tool_call" => "tool.call",
-        "tool_result" => "tool.result",
-        "file_change" => "file.change",
-        "todo_list" => "todo.update",
-        "error_event" => "error",
-        "raw_unparsed" => "raw.unparsed",
-        "stderr_line" => "stderr.line",
-        "subagent_event" => "tool.result",
-        "subagent_session" => "agent.session",
-        "subagent_tool_call" => "tool.call",
-        "subagent_tool_result" => "tool.result",
-        "subagent_message" => "agent.message",
-        "subagent_meta" => "agent.meta",
-        "subagent_raw_unparsed" => "raw.unparsed",
-        _ => return kind.replace('_', "."),
-    }
-    .to_string()
 }

@@ -9,14 +9,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{Datelike, Utc};
+use codex_worker_rs::events::readers::EventLogFileReader;
 use codex_worker_rs::models::WorkerConfig;
 use codex_worker_rs::runner::CodexWorker;
 use serde_json::Value;
 
 fn write_fake_codex(path: &Path, body: &str) {
-    let script = format!(
-        "#!/usr/bin/env bash\nset -eu\ncat >/dev/null\n{body}\n"
-    );
+    let script = format!("#!/usr/bin/env bash\nset -eu\ncat >/dev/null\n{body}\n");
     fs::write(path, script).expect("fake codex should be written");
     let mut perms = fs::metadata(path)
         .expect("fake codex should exist")
@@ -124,7 +123,10 @@ fn successful_run_completes_task_and_writes_logs() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -151,13 +153,65 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"d
         find_named_file(&logs_root, "events.jsonl").expect("events.jsonl should exist"),
     )
     .expect("events should be readable");
-    assert!(events.contains("\"event_type\":\"tool.call\""));
+    assert!(events.contains("\"event_type\":\"collab.spawn_agent\""));
 
     let summary = fs::read_to_string(
         find_named_file(&logs_root, "summary.json").expect("summary.json should exist"),
     )
     .expect("summary should be readable");
     assert!(summary.contains("\"spawn_agent\": 1"));
+}
+
+#[test]
+fn pending_follow_up_requeues_task_and_stops_run_next() {
+    let tmp = tempfile::tempdir().expect("tmpdir should be created");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).expect("repo dir should be created");
+    let task_file = tmp.path().join("task.md");
+    fs::write(
+        &task_file,
+        format!(
+            "# [ ] First\nid: first\ncwd: {}\n\nNeed a follow-up run\n\n# [ ] Second\nid: second\ncwd: {}\n\nShould stay untouched\n",
+            repo.display(),
+            repo.display()
+        ),
+    )
+    .expect("task file should be written");
+
+    let fake = tmp.path().join("fake-codex");
+    let marker = tmp.path().join("run-count.log");
+    write_fake_codex(
+        &fake,
+        &format!(
+            "printf 'run\\n' >> \"{}\"\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"t1\"}}'\nprintf '%s\\n' '{{\"type\":\"turn.started\"}}'\nprintf '%s\\n' '{{\"type\":\"item.completed\",\"item\":{{\"type\":\"agent_message\",\"text\":\"TASK_STATUS: pending\\\\nNeed follow-up\"}}}}'\nprintf '%s\\n' '{{\"type\":\"turn.completed\"}}'",
+            marker.display()
+        ),
+    );
+
+    let mut worker = CodexWorker::new(worker_config(&task_file, &fake));
+    let exit = worker.run_next().expect("run should succeed");
+    assert_eq!(exit, 0);
+
+    let content = read_task_content(&worker, &task_file);
+    assert!(content.contains("## [ ] First"), "content was:\n{content}");
+    assert!(
+        content.contains("last_result: requeued"),
+        "content was:\n{content}"
+    );
+    assert!(content.contains("# [ ] Second"), "content was:\n{content}");
+
+    let run_count = fs::read_to_string(&marker)
+        .expect("marker should be readable")
+        .lines()
+        .count();
+    assert_eq!(run_count, 1, "run-next must stop after requeue");
+
+    let logs_root = tmp.path().join(".codex-worker");
+    let summary = fs::read_to_string(
+        find_named_file(&logs_root, "summary.json").expect("summary.json should exist"),
+    )
+    .expect("summary should be readable");
+    assert!(summary.contains("\"status\": \"requeued\""));
 }
 
 #[test]
@@ -168,7 +222,10 @@ fn invalid_json_fails_closed() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -204,7 +261,10 @@ fn connection_failure_is_classified_in_summary() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -228,7 +288,10 @@ exit 1"#,
         &fs::read_to_string(summary_path).expect("summary should be readable"),
     )
     .expect("summary should be valid json");
-    assert_eq!(summary.get("failure_reason").and_then(Value::as_str), Some("connection_error"));
+    assert_eq!(
+        summary.get("failure_reason").and_then(Value::as_str),
+        Some("connection_error")
+    );
     assert_eq!(
         summary
             .get("failure_analysis")
@@ -247,7 +310,10 @@ fn connection_failure_401_is_classified_as_authn_required() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -296,7 +362,10 @@ fn successful_run_archives_task_file_when_all_tasks_completed() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -327,7 +396,10 @@ fn stream_read_error_finalizes_task_as_failed_and_writes_summary() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -362,7 +434,10 @@ fn child_terminated_by_signal_is_failed_closed() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -405,7 +480,10 @@ fn heartbeat_updates_lease_during_long_running_child() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -458,7 +536,10 @@ fn heartbeat_interval_tracks_small_stale_after() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -529,15 +610,15 @@ fn dry_run_does_not_execute_or_mutate_task_or_create_artifacts() {
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).expect("repo dir should be created");
     let task_file = tmp.path().join("task.md");
-    let original = format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display());
+    let original = format!(
+        "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+        repo.display()
+    );
     fs::write(&task_file, &original).expect("task file should be written");
 
     let fake = tmp.path().join("fake-codex");
     let marker = tmp.path().join("codex-ran.marker");
-    write_fake_codex(
-        &fake,
-        &format!("touch \"{}\"", marker.display()),
-    );
+    write_fake_codex(&fake, &format!("touch \"{}\"", marker.display()));
 
     let mut config = worker_config(&task_file, &fake);
     config.dry_run = true;
@@ -549,7 +630,10 @@ fn dry_run_does_not_execute_or_mutate_task_or_create_artifacts() {
         fs::read_to_string(&task_file).expect("task file should remain readable"),
         original
     );
-    assert!(!marker.exists(), "codex binary must not be executed in dry_run");
+    assert!(
+        !marker.exists(),
+        "codex binary must not be executed in dry_run"
+    );
     assert!(
         !tmp.path().join(".codex-worker").exists(),
         "dry_run must not create run artifacts"
@@ -564,7 +648,10 @@ fn spawn_failure_finalizes_task_and_writes_summary() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -573,7 +660,9 @@ fn spawn_failure_finalizes_task_and_writes_summary() {
     config.codex_bin = missing_codex.display().to_string();
 
     let mut worker = CodexWorker::new(config);
-    let exit = worker.run_next().expect("spawn failure should be fail-closed");
+    let exit = worker
+        .run_next()
+        .expect("spawn failure should be fail-closed");
     assert_eq!(exit, 1);
 
     let content = read_task_content(&worker, &task_file);
@@ -600,12 +689,19 @@ fn subagent_sessions_are_imported_from_codex_home() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
     let codex_home = tmp.path().join("codex-home");
-    let session_dir = codex_home.join("sessions").join("2026").join("03").join("24");
+    let session_dir = codex_home
+        .join("sessions")
+        .join("2026")
+        .join("03")
+        .join("24");
     fs::create_dir_all(&session_dir).expect("session dir should be created");
     fs::write(
         session_dir.join("sub-1-session.jsonl"),
@@ -639,7 +735,7 @@ printf '%s\n' '{"type":"turn.completed"}'"#,
     )
     .expect("events should be readable");
     assert!(events.contains("\"event_type\":\"agent.session\""));
-    assert!(events.contains("\"event_type\":\"agent.message\""));
+    assert!(events.contains("\"event_type\":\"message.agent\""));
     assert!(events.contains("\"actor_type\":\"subagent\""));
     assert!(events.contains("\"thread_id\":\"sub-1\""));
 
@@ -668,6 +764,95 @@ printf '%s\n' '{"type":"turn.completed"}'"#,
 }
 
 #[test]
+fn nested_subagent_session_events_keep_immediate_parent() {
+    let tmp = tempfile::tempdir().expect("tmpdir should be created");
+    let repo = tmp.path().join("repo");
+    fs::create_dir_all(&repo).expect("repo dir should be created");
+    let task_file = tmp.path().join("task.md");
+    fs::write(
+        &task_file,
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
+    )
+    .expect("task file should be written");
+
+    let codex_home = tmp.path().join("codex-home");
+    let today = Utc::now().date_naive();
+    let session_dir = codex_home
+        .join("sessions")
+        .join(format!("{:04}", today.year()))
+        .join(format!("{:02}", today.month()))
+        .join(format!("{:02}", today.day()));
+    fs::create_dir_all(&session_dir).expect("session dir should be created");
+    fs::write(
+        session_dir.join("sub-1-session.jsonl"),
+        concat!(
+            "{\"timestamp\":\"2026-03-24T09:41:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sub-1\",\"cwd\":\"/repo\",\"agent_nickname\":\"Parent\",\"agent_role\":\"worker\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"root-1\"}}}}}\n",
+            "{\"timestamp\":\"2026-03-24T09:41:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"parent ready\"}]}}\n"
+        ),
+    )
+    .expect("sub-1 session file should be written");
+    fs::write(
+        session_dir.join("sub-2-session.jsonl"),
+        concat!(
+            "{\"timestamp\":\"2026-03-24T09:42:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sub-2\",\"forked_from_id\":\"sub-1\",\"cwd\":\"/repo\",\"agent_nickname\":\"Nested\",\"agent_role\":\"reviewer\",\"source\":{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"sub-1\"}}}}}\n",
+            "{\"timestamp\":\"2026-03-24T09:42:01Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call\",\"name\":\"exec_command\",\"call_id\":\"call-1\",\"arguments\":\"{\\\"cmd\\\":\\\"pwd\\\"}\"}}\n",
+            "{\"timestamp\":\"2026-03-24T09:42:02Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"call-1\",\"output\":\"/repo\\n\"}}\n",
+            "{\"timestamp\":\"2026-03-24T09:42:03Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"nested ready\"}]}}\n"
+        ),
+    )
+    .expect("sub-2 session file should be written");
+
+    let fake = tmp.path().join("fake-codex");
+    write_fake_codex(
+        &fake,
+        r#"printf '%s\n' '{"type":"thread.started","thread_id":"root-1"}'
+printf '%s\n' '{"type":"turn.started"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"collab_tool_call","id":"ct-1","tool":"spawn_agent","status":"completed","sender_thread_id":"root-1","receiver_thread_ids":["sub-1"],"prompt":"go","agents_states":{"sub-1":{"status":"ok","message":"done"}}}}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"collab_tool_call","id":"ct-2","tool":"spawn_agent","status":"completed","sender_thread_id":"sub-1","receiver_thread_ids":["sub-2"],"prompt":"nested","agents_states":{"sub-2":{"status":"ok","message":"nested done"}}}}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}'
+printf '%s\n' '{"type":"turn.completed"}'"#,
+    );
+
+    let mut config = worker_config(&task_file, &fake);
+    config.codex_home = Some(codex_home);
+    let mut worker = CodexWorker::new(config);
+    let exit = worker.run_next().expect("run should finish");
+    assert_eq!(exit, 0);
+
+    let logs_root = tmp.path().join(".codex-worker");
+    let events_path =
+        find_named_file(&logs_root, "events.jsonl").expect("events.jsonl should exist");
+    let events = EventLogFileReader::load_records(&events_path).expect("events should load");
+
+    let nested_events: Vec<_> = events
+        .iter()
+        .filter(|event| event.payload["thread_id"].as_str() == Some("sub-2"))
+        .collect();
+    assert!(
+        !nested_events.is_empty(),
+        "nested subagent events should exist"
+    );
+    assert!(nested_events
+        .iter()
+        .all(|event| { event.payload["parent_thread_id"].as_str() == Some("sub-1") }));
+    assert!(nested_events
+        .iter()
+        .any(|event| event.event_type == "agent.session"));
+    assert!(nested_events
+        .iter()
+        .any(|event| event.event_type == "shell.call"));
+    assert!(nested_events
+        .iter()
+        .any(|event| event.event_type == "shell.result"));
+    assert!(nested_events
+        .iter()
+        .any(|event| event.event_type == "message.agent"));
+}
+
+#[test]
 fn subagent_session_partial_utf8_does_not_fail_run() {
     let tmp = tempfile::tempdir().expect("tmpdir should be created");
     let repo = tmp.path().join("repo");
@@ -675,7 +860,10 @@ fn subagent_session_partial_utf8_does_not_fail_run() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 
@@ -736,7 +924,7 @@ printf '%s\n' '{"type":"turn.completed"}'"#,
     )
     .expect("events should be readable");
     assert!(events.contains("\"event_type\":\"agent.session\""));
-    assert!(events.contains("\"event_type\":\"agent.message\""));
+    assert!(events.contains("\"event_type\":\"message.agent\""));
     assert!(events.contains("\"thread_id\":\"sub-1\""));
     assert!(!events.contains("\"raw_type\":\"invalid_utf8\""));
 }
@@ -749,7 +937,10 @@ fn unreadable_subagent_session_is_best_effort() {
     let task_file = tmp.path().join("task.md");
     fs::write(
         &task_file,
-        format!("# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n", repo.display()),
+        format!(
+            "# [ ] Demo\nid: demo\ncwd: {}\n\nImplement\n",
+            repo.display()
+        ),
     )
     .expect("task file should be written");
 

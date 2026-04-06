@@ -22,13 +22,14 @@ fn projector_builds_agent_tree_and_timeline() {
     projector.reset_run("demo", "Demo", "run-1", Some("/repo".to_string()));
     projector.apply_event(&make_event("thread.started", json!({"thread_id":"parent"})));
     projector.apply_event(&make_event(
-        "tool.result",
+        "collab.spawn_agent",
         json!({
             "tool_name": "spawn_agent",
             "phase": "completed",
             "status": "completed",
             "thread_id": "parent",
             "sender_thread_id": "parent",
+            "prompt": "check repo",
             "receiver_thread_ids": ["sub-1"],
             "agents_states": {"sub-1": {"status": "pending_init", "message": "warming up"}}
         }),
@@ -45,7 +46,7 @@ fn projector_builds_agent_tree_and_timeline() {
         }),
     ));
     projector.apply_event(&make_event(
-        "agent.message",
+        "message.agent",
         json!({
             "actor_type": "subagent",
             "thread_id": "sub-1",
@@ -54,7 +55,7 @@ fn projector_builds_agent_tree_and_timeline() {
         }),
     ));
     projector.apply_event(&make_event(
-        "tool.call",
+        "shell.call",
         json!({
             "actor_type": "subagent",
             "thread_id": "sub-1",
@@ -62,7 +63,7 @@ fn projector_builds_agent_tree_and_timeline() {
         }),
     ));
     projector.apply_event(&make_event(
-        "tool.result",
+        "shell.result",
         json!({
             "actor_type": "subagent",
             "thread_id": "sub-1",
@@ -77,15 +78,24 @@ fn projector_builds_agent_tree_and_timeline() {
     assert!(snapshot.agents.contains_key("parent"));
     assert!(snapshot.agents.contains_key("sub-1"));
     assert_eq!(
-        snapshot.agents.get("sub-1").and_then(|agent| agent.parent_thread_id.as_deref()),
+        snapshot
+            .agents
+            .get("sub-1")
+            .and_then(|agent| agent.parent_thread_id.as_deref()),
         Some("parent")
     );
     assert_eq!(
-        snapshot.agents.get("sub-1").and_then(|agent| agent.nickname.as_deref()),
+        snapshot
+            .agents
+            .get("sub-1")
+            .and_then(|agent| agent.nickname.as_deref()),
         Some("Lovelace")
     );
     assert_eq!(
-        snapshot.agents.get("sub-1").and_then(|agent| agent.role.as_deref()),
+        snapshot
+            .agents
+            .get("sub-1")
+            .and_then(|agent| agent.role.as_deref()),
         Some("reviewer")
     );
     assert!(snapshot
@@ -108,7 +118,7 @@ fn projector_builds_agent_tree_and_timeline() {
     assert!(snapshot
         .timeline
         .iter()
-        .any(|entry| entry.label.starts_with("subagent: spawn_agent")));
+        .any(|entry| entry.label.starts_with("subagent launch [spawn_agent]")));
 }
 
 #[test]
@@ -169,9 +179,78 @@ fn projector_releases_subagent_color_after_completion() {
 }
 
 #[test]
+fn projector_prefers_agent_session_parent_for_nested_subagent() {
+    let mut projector = EventProjector::new(10, 4);
+    projector.apply_event(&make_event("thread.started", json!({"thread_id":"root"})));
+    projector.apply_event(&make_event(
+        "message.agent",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-2",
+            "parent_thread_id": "root",
+            "text": "fallback parent"
+        }),
+    ));
+    projector.apply_event(&make_event(
+        "agent.session",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-2",
+            "parent_thread_id": "sub-1",
+            "agent_nickname": "Nested"
+        }),
+    ));
+
+    assert_eq!(
+        projector
+            .snapshot
+            .agents
+            .get("sub-2")
+            .and_then(|agent| agent.parent_thread_id.as_deref()),
+        Some("sub-1")
+    );
+}
+
+#[test]
+fn projector_does_not_downgrade_terminal_status_after_agent_session() {
+    let mut projector = EventProjector::new(10, 4);
+    projector.apply_event(&make_event("thread.started", json!({"thread_id":"parent"})));
+    projector.apply_event(&make_event(
+        "collab.wait",
+        json!({
+            "tool_name": "wait",
+            "phase": "completed",
+            "status": "completed",
+            "thread_id": "parent",
+            "sender_thread_id": "parent",
+            "receiver_thread_ids": ["sub-1"],
+            "agents_states": {"sub-1": {"status": "completed", "message": "done"}}
+        }),
+    ));
+    projector.apply_event(&make_event(
+        "agent.session",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "parent_thread_id": "parent",
+            "agent_nickname": "Lovelace"
+        }),
+    ));
+
+    assert_eq!(
+        projector
+            .snapshot
+            .agents
+            .get("sub-1")
+            .map(|agent| agent.status.as_str()),
+        Some("completed")
+    );
+}
+
+#[test]
 fn summarize_event_formats_subagent_state() {
     let summary = summarize_event(&make_event(
-        "tool.result",
+        "collab.wait",
         json!({
             "tool_name": "wait",
             "phase": "completed",
@@ -180,7 +259,7 @@ fn summarize_event_formats_subagent_state() {
             "agents_states": {"sub-1": {"status": "completed", "message": "ok"}}
         }),
     ));
-    assert!(summary.contains("subagent: wait"));
+    assert!(summary.contains("subagent wait [wait]"));
     assert!(summary.contains("agents=sub-1"));
     assert!(summary.contains("states=sub-1:completed"));
 }
@@ -204,31 +283,34 @@ fn summarize_event_formats_file_change() {
 #[test]
 fn summarize_event_formats_command_execution_with_command() {
     let call_summary = summarize_event(&make_event(
-        "tool.call",
+        "shell.call",
         json!({
             "tool_name": "command_execution",
             "input": {"command": "git status --short"}
         }),
     ));
     let result_summary = summarize_event(&make_event(
-        "tool.result",
+        "shell.result",
         json!({
             "tool_name": "command_execution",
             "input": {"command": "git status --short"},
             "exit_code": 0
         }),
     ));
-    assert_eq!(call_summary, "tool: command_execution git status --short");
+    assert_eq!(
+        call_summary,
+        "command [command_execution]: git status --short"
+    );
     assert_eq!(
         result_summary,
-        "tool result: command_execution git status --short exit=0"
+        "command ok [command_execution]: git status --short exit=0"
     );
 }
 
 #[test]
 fn summarize_event_truncates_overlong_command_lines() {
     let summary = summarize_event(&make_event(
-        "tool.call",
+        "shell.call",
         json!({
             "tool_name": "command_execution",
             "input": {"command": format!("python -c '{}'", "x".repeat(200))}
@@ -241,9 +323,10 @@ fn summarize_event_truncates_overlong_command_lines() {
 #[test]
 fn summarize_event_formats_web_search_result_with_query() {
     let summary = summarize_event(&make_event(
-        "tool.result",
+        "web.search",
         json!({
             "tool_name": "web_search",
+            "phase": "completed",
             "output": {
                 "query": "https://developers.openai.com/codex/cli",
                 "action": {
@@ -253,7 +336,7 @@ fn summarize_event_formats_web_search_result_with_query() {
             }
         }),
     ));
-    assert!(summary.contains("tool result: web_search"));
+    assert!(summary.contains("search result [web_search]"));
     assert!(summary.contains("query=https://developers.openai.com/codex/cli"));
     assert!(summary.contains("action=open_page"));
     assert!(summary.contains("url=https://developers.openai.com/codex/cli"));
@@ -262,16 +345,202 @@ fn summarize_event_formats_web_search_result_with_query() {
 #[test]
 fn summarize_event_formats_web_search_call_without_query() {
     let summary = summarize_event(&make_event(
-        "tool.call",
+        "web.search",
         json!({
             "tool_name": "web_search",
+            "phase": "started",
             "input": {
                 "query": "",
                 "action": {"type": "other"}
             }
         }),
     ));
-    assert_eq!(summary, "tool: web_search query=<pending> action=other");
+    assert_eq!(summary, "search [web_search]: query=<pending> action=other");
+}
+
+#[test]
+fn summarize_event_formats_stdin_write() {
+    let summary = summarize_event(&make_event(
+        "stdin.write",
+        json!({
+            "phase": "completed",
+            "status": "completed",
+            "input": {
+                "session_id": 42,
+                "chars": "ls\n"
+            },
+            "output": {
+                "stdout": "ok"
+            }
+        }),
+    ));
+    assert_eq!(
+        summary,
+        "stdin write: phase=completed status=completed session_id=42 chars=ls output=ok"
+    );
+}
+
+#[test]
+fn summarize_event_formats_mcp_result_with_ordered_details() {
+    let summary = summarize_event(&make_event(
+        "mcp.result",
+        json!({
+            "phase": "completed",
+            "status": "completed",
+            "arguments": {"q": "a"},
+            "result": {"ok": true},
+            "server": "docs",
+            "tool": "fetch_docs"
+        }),
+    ));
+    assert_eq!(
+        summary,
+        "mcp result: phase=completed status=completed arguments={\"q\":\"a\"} result={\"ok\":true} server=docs tool=fetch_docs"
+    );
+}
+
+#[test]
+fn summarize_event_formats_subagent_launch_and_session() {
+    let launch_summary = summarize_event(&make_event(
+        "collab.spawn_agent",
+        json!({
+            "tool_name": "spawn_agent",
+            "phase": "completed",
+            "status": "completed",
+            "prompt": "review tree",
+            "receiver_thread_ids": ["sub-1"],
+            "agents_states": {"sub-1": {"status": "pending_init"}}
+        }),
+    ));
+    let session_summary = summarize_event(&make_event(
+        "agent.session",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "agent_nickname": "Lovelace",
+            "agent_role": "reviewer",
+            "cwd": "/repo"
+        }),
+    ));
+
+    assert_eq!(
+        launch_summary,
+        "subagent launch [spawn_agent]: phase=completed status=completed prompt=review tree agents=sub-1 states=sub-1:pending_init"
+    );
+    assert_eq!(
+        session_summary,
+        "ready: role=reviewer nickname=Lovelace cwd=/repo"
+    );
+}
+
+#[test]
+fn summarize_event_formats_subagent_task_started() {
+    let summary = summarize_event(&make_event(
+        "agent.meta",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "meta_type": "task_started",
+            "collaboration_mode_kind": "default"
+        }),
+    ));
+
+    assert_eq!(summary, "started: mode=default");
+}
+
+#[test]
+fn summarize_event_formats_subagent_command_call() {
+    let summary = summarize_event(&make_event(
+        "shell.call",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "tool_name": "exec_command",
+            "input": {"cmd": "ping -c 1 1.1.1.1"}
+        }),
+    ));
+
+    assert_eq!(summary, "tool exec_command: ping -c 1 1.1.1.1");
+}
+
+#[test]
+fn summarize_event_formats_subagent_plan_update() {
+    let summary = summarize_event(&make_event(
+        "plan.update",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "phase": "started",
+            "tool_name": "update_plan",
+            "input": {
+                "explanation": "sync state",
+                "plan": [
+                    {"step": "Inspect", "status": "completed"},
+                    {"step": "Patch", "status": "in_progress"}
+                ]
+            }
+        }),
+    ));
+
+    assert_eq!(
+        summary,
+        "plan update: phase=started explanation=sync state steps=2"
+    );
+}
+
+#[test]
+fn summarize_event_formats_commentary_patch_and_context_events() {
+    let commentary = summarize_event(&make_event(
+        "message.commentary",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "text": "Проверяю структуру дерева"
+        }),
+    ));
+    let patch = summarize_event(&make_event(
+        "patch.apply",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "phase": "completed",
+            "status": "completed",
+            "input": "*** Begin Patch\n*** Update File: src/events/readers.rs\n*** End Patch\n",
+            "changes": {
+                "src/events/readers.rs": {"type":"update"}
+            }
+        }),
+    ));
+    let runtime_context = summarize_event(&make_event(
+        "runtime.context",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "cwd": "/repo",
+            "model": "gpt-5.4",
+            "collaboration_mode_kind": "default"
+        }),
+    ));
+    let compacted = summarize_event(&make_event(
+        "context.compacted",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "message": "trimmed",
+            "replacement_history": [{"type":"message"}, {"type":"message"}]
+        }),
+    ));
+
+    assert_eq!(commentary, "commentary: Проверяю структуру дерева");
+    assert_eq!(
+        patch,
+        "patch apply: phase=completed status=completed file=src/events/readers.rs"
+    );
+    assert_eq!(
+        runtime_context,
+        "context: cwd=/repo model=gpt-5.4 mode=default"
+    );
+    assert_eq!(compacted, "context compacted: items=2 message=trimmed");
 }
 
 #[test]
@@ -286,20 +555,26 @@ fn summarize_event_formats_subagent_meta_variants() {
         }),
     ));
     let token_summary = summarize_event(&make_event(
-        "agent.meta",
+        "info.tokens",
         json!({
             "actor_type": "subagent",
             "thread_id": "sub-1",
-            "meta_type": "token_count",
+            "input_tokens": 700,
+            "cached_input_tokens": 120,
+            "output_tokens": 340,
+            "reasoning_output_tokens": 74,
             "total_tokens": 1234,
             "rate_limits": {"primary": {"used_percent": 4.0}}
         }),
     ));
     assert_eq!(
         user_summary,
-        "subagent[sub-1] user: Inspect docs/technical-documentation.md"
+        "user: Inspect docs/technical-documentation.md"
     );
-    assert_eq!(token_summary, "subagent[sub-1] tokens total=1234 primary=4.0%");
+    assert_eq!(
+        token_summary,
+        "tokens: input: 700, cached input: 120, output: 340, reasoning output: 74, total: 1 234"
+    );
 }
 
 #[test]
@@ -310,7 +585,10 @@ fn summarize_event_formats_error_event() {
             "message": "Falling back from WebSockets to HTTPS transport."
         }),
     ));
-    assert_eq!(summary, "error: Falling back from WebSockets to HTTPS transport.");
+    assert_eq!(
+        summary,
+        "error: Falling back from WebSockets to HTTPS transport."
+    );
 }
 
 #[test]
@@ -336,7 +614,7 @@ fn summarize_event_includes_text_link_context() {
 #[test]
 fn summarize_event_formats_turn_failed_with_text_links() {
     let summary = summarize_event(&make_event(
-        "agent.turn.failed",
+        "agent.failed",
         json!({
             "error": {"message": "stream disconnected before completion"},
             "text_links": {
@@ -345,7 +623,7 @@ fn summarize_event_formats_turn_failed_with_text_links() {
             }
         }),
     ));
-    assert!(summary.contains("agent turn failed"));
+    assert!(summary.contains("agent failed"));
     assert!(summary.contains("stream disconnected before completion"));
     assert!(summary.contains("request_id=e5bb5dbd-7494-4d6b-b105-f00335db8b6f"));
 }

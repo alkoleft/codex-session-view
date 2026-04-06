@@ -12,18 +12,20 @@ use chrono::{Datelike, Duration as ChronoDuration, Utc};
 use regex::Regex;
 use serde_json::{Map, Value};
 
-use crate::events::readers::{JsonOutputEventReader, RunEventContext};
-use crate::events::record::EventRecord;
 use crate::error::{AppError, AppResult};
+use crate::events::readers::{
+    imported_subagent_session_meta, JsonOutputEventReader, RunEventContext,
+};
+use crate::events::record::EventRecord;
 use crate::lockfile::TaskFileLock;
 use crate::logs::{append_task_run, update_task_snapshot, write_event, write_summary, RunPaths};
 use crate::models::{ClaimedTask, RunSummary, TaskBlock, WorkerConfig};
 use crate::task_file::{
-    archive_snapshot_if_completed, claim_next_task, finalize_task, load_snapshot, recover_stale_tasks,
-    refresh_heartbeat, write_snapshot_atomic, TaskFileError,
+    archive_snapshot_if_completed, claim_next_task, finalize_task, load_snapshot,
+    recover_stale_tasks, refresh_heartbeat, write_snapshot_atomic, TaskFileError,
 };
-use crate::util::normalize_path;
 use crate::ui::console::WorkerConsole;
+use crate::util::normalize_path;
 use crate::util::utc_now_iso;
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -39,11 +41,19 @@ enum StreamEvent {
     StderrError(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TaskExecutionOutcome {
+    exit_code: i32,
+    continue_processing: bool,
+}
+
 #[derive(Debug, Default)]
 struct SubagentSessionTail {
     thread_id: String,
     imported_path: PathBuf,
     session_path: Option<PathBuf>,
+    resolved_parent_thread_id: Option<String>,
+    forked_from_id: Option<String>,
     read_cursor: u64,
     partial_bytes: Vec<u8>,
     announced: bool,
@@ -75,7 +85,11 @@ impl CodexWorker {
         } else {
             None
         };
-        Self { config, worker_id, ui }
+        Self {
+            config,
+            worker_id,
+            ui,
+        }
     }
 
     pub fn run_next(&mut self) -> AppResult<i32> {
@@ -97,14 +111,17 @@ impl CodexWorker {
                 let claimed = self.claim_next_task()?;
                 let Some(claimed) = claimed else {
                     if !processed_any {
-                        self.emit("idle", &format!("no pending tasks in {}", self.config.task_file.display()));
+                        self.emit(
+                            "idle",
+                            &format!("no pending tasks in {}", self.config.task_file.display()),
+                        );
                     }
                     return Ok(0);
                 };
                 processed_any = true;
-                let exit_code = self.execute_claimed_task(&claimed)?;
-                if exit_code != 0 {
-                    return Ok(exit_code);
+                let outcome = self.execute_claimed_task(&claimed)?;
+                if outcome.exit_code != 0 || !outcome.continue_processing {
+                    return Ok(outcome.exit_code);
                 }
             }
         })();
@@ -172,13 +189,16 @@ impl CodexWorker {
         }))
     }
 
-    fn execute_claimed_task(&mut self, claimed: &ClaimedTask) -> AppResult<i32> {
+    fn execute_claimed_task(&mut self, claimed: &ClaimedTask) -> AppResult<TaskExecutionOutcome> {
         let started_at = utc_now_iso();
-        let logs_root = self
-            .config
-            .logs_dir
-            .clone()
-            .unwrap_or_else(|| claimed.snapshot.path.parent().unwrap_or(Path::new(".")).join(".codex-worker"));
+        let logs_root = self.config.logs_dir.clone().unwrap_or_else(|| {
+            claimed
+                .snapshot
+                .path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(".codex-worker")
+        });
         let paths = RunPaths::new(&logs_root, &claimed.task, &claimed.run_id, &started_at);
         paths.ensure()?;
 
@@ -239,9 +259,18 @@ impl CodexWorker {
                                 .map(Value::from)
                                 .unwrap_or(Value::Null),
                         ),
-                        ("started_at".to_string(), Value::from(summary.started_at.clone())),
-                        ("finished_at".to_string(), Value::from(summary.finished_at.clone())),
-                        ("summary_path".to_string(), Value::from(paths.summary.display().to_string())),
+                        (
+                            "started_at".to_string(),
+                            Value::from(summary.started_at.clone()),
+                        ),
+                        (
+                            "finished_at".to_string(),
+                            Value::from(summary.finished_at.clone()),
+                        ),
+                        (
+                            "summary_path".to_string(),
+                            Value::from(paths.summary.display().to_string()),
+                        ),
                     ])),
                 )?;
 
@@ -273,7 +302,10 @@ impl CodexWorker {
                     );
                 }
 
-                return Ok(1);
+                return Ok(TaskExecutionOutcome {
+                    exit_code: 1,
+                    continue_processing: false,
+                });
             }
         };
 
@@ -400,9 +432,8 @@ impl CodexWorker {
                     continue;
                 }
                 Err(err) => {
-                    stream_error = Some(format!(
-                        "stream reader channel closed unexpectedly: {err}"
-                    ));
+                    stream_error =
+                        Some(format!("stream reader channel closed unexpectedly: {err}"));
                     break;
                 }
             };
@@ -417,7 +448,9 @@ impl CodexWorker {
                         &mut subagent_threads,
                     );
                     seq = next_seq;
-                    *event_counts.entry(parsed_event.event_type.clone()).or_insert(0) += 1;
+                    *event_counts
+                        .entry(parsed_event.event_type.clone())
+                        .or_insert(0) += 1;
                     let record = parsed_event.to_record();
                     write_event(&paths.events, &record)?;
                     self.maybe_write_problem_examples(&paths, &record)?;
@@ -531,10 +564,7 @@ impl CodexWorker {
             &mut session_tails,
             true,
         )?;
-        let heartbeat_failure = heartbeat_error
-            .lock()
-            .ok()
-            .and_then(|guard| guard.clone());
+        let heartbeat_failure = heartbeat_error.lock().ok().and_then(|guard| guard.clone());
 
         summary.finished_at = utc_now_iso();
         summary.exit_code = exit_code;
@@ -542,7 +572,8 @@ impl CodexWorker {
         summary.tool_counts = map_to_btree(&tool_counts);
         summary.subagent_counts = map_to_btree(&subagent_counts);
 
-        let failure_analysis = self.analyze_failure(&stderr_text, &paths.problem_examples_dir.join("main.jsonl"));
+        let failure_analysis =
+            self.analyze_failure(&stderr_text, &paths.problem_examples_dir.join("main.jsonl"));
         let failure_reason = if let Some(stream_err) = stream_error.clone() {
             summary.failure_analysis = Value::Object(Map::from_iter([(
                 "stream_error".to_string(),
@@ -563,7 +594,12 @@ impl CodexWorker {
             || reader.state.saw_turn_failed
             || reader.state.saw_top_error
             || reader.state.last_terminal.as_deref() != Some("turn.completed")
-            || reader.state.final_agent_message.as_deref().unwrap_or("").is_empty()
+            || reader
+                .state
+                .final_agent_message
+                .as_deref()
+                .unwrap_or("")
+                .is_empty()
         {
             Some("runtime_output_invalid".to_string())
         } else if exit_code.is_none() || exit_code.is_some_and(|code| code != 0) {
@@ -572,20 +608,58 @@ impl CodexWorker {
             None
         };
 
-        let (finalize_status, finalize_result, finalize_error, exit) = if let Some(reason) = failure_reason.clone() {
-            summary.status = "failed".to_string();
-            summary.failure_reason = Some(reason.clone());
-            if summary.failure_analysis.is_null()
-                || summary.failure_analysis.as_object().is_some_and(|v| v.is_empty())
-            {
-                summary.failure_analysis = failure_analysis;
-            }
-            ("!".to_string(), reason, summary.failure_reason.clone().unwrap_or_default(), 1)
-        } else {
-            summary.status = "completed".to_string();
-            summary.failure_analysis = Value::Object(Map::new());
-            ("x".to_string(), "success".to_string(), String::new(), 0)
-        };
+        let should_requeue = reader
+            .state
+            .final_agent_message
+            .as_deref()
+            .is_some_and(requests_pending_follow_up);
+
+        let (finalize_status, finalize_result, finalize_error, outcome) =
+            if let Some(reason) = failure_reason.clone() {
+                summary.status = "failed".to_string();
+                summary.failure_reason = Some(reason.clone());
+                if summary.failure_analysis.is_null()
+                    || summary
+                        .failure_analysis
+                        .as_object()
+                        .is_some_and(|v| v.is_empty())
+                {
+                    summary.failure_analysis = failure_analysis;
+                }
+                (
+                    "!".to_string(),
+                    reason,
+                    summary.failure_reason.clone().unwrap_or_default(),
+                    TaskExecutionOutcome {
+                        exit_code: 1,
+                        continue_processing: false,
+                    },
+                )
+            } else if should_requeue {
+                summary.status = "requeued".to_string();
+                summary.failure_analysis = Value::Object(Map::new());
+                (
+                    " ".to_string(),
+                    "requeued".to_string(),
+                    String::new(),
+                    TaskExecutionOutcome {
+                        exit_code: 0,
+                        continue_processing: false,
+                    },
+                )
+            } else {
+                summary.status = "completed".to_string();
+                summary.failure_analysis = Value::Object(Map::new());
+                (
+                    "x".to_string(),
+                    "success".to_string(),
+                    String::new(),
+                    TaskExecutionOutcome {
+                        exit_code: 0,
+                        continue_processing: true,
+                    },
+                )
+            };
 
         write_summary(&paths.summary, &summary)?;
         append_task_run(
@@ -602,20 +676,34 @@ impl CodexWorker {
                         .map(Value::from)
                         .unwrap_or(Value::Null),
                 ),
-                ("started_at".to_string(), Value::from(summary.started_at.clone())),
-                ("finished_at".to_string(), Value::from(summary.finished_at.clone())),
-                ("summary_path".to_string(), Value::from(paths.summary.display().to_string())),
+                (
+                    "started_at".to_string(),
+                    Value::from(summary.started_at.clone()),
+                ),
+                (
+                    "finished_at".to_string(),
+                    Value::from(summary.finished_at.clone()),
+                ),
+                (
+                    "summary_path".to_string(),
+                    Value::from(paths.summary.display().to_string()),
+                ),
             ])),
         )?;
 
-        let task_file_path = self.finalize_task(claimed, &finalize_status, &finalize_result, &finalize_error)?;
+        let task_file_path =
+            self.finalize_task(claimed, &finalize_status, &finalize_result, &finalize_error)?;
         let latest = load_snapshot(&task_file_path).map_err(task_err)?;
         if let Some(final_task) = latest
             .tasks
             .iter()
             .find(|item| item.task_id().ok() == Some(summary.task_id.as_str()))
         {
-            update_task_snapshot(&paths.task_json, final_task, &paths.summary.display().to_string())?;
+            update_task_snapshot(
+                &paths.task_json,
+                final_task,
+                &paths.summary.display().to_string(),
+            )?;
         }
         if let Some(ui) = self.ui.as_mut() {
             let _ = ui.on_result(
@@ -627,7 +715,7 @@ impl CodexWorker {
             );
         }
 
-        Ok(exit)
+        Ok(outcome)
     }
 
     fn finalize_task(
@@ -644,8 +732,8 @@ impl CodexWorker {
         let new_content =
             finalize_task(&snapshot, claimed, status, result, error).map_err(task_err)?;
         write_snapshot_atomic(&self.config.task_file, &new_content).map_err(task_err)?;
-        let archived =
-            archive_snapshot_if_completed(&self.config.task_file, &new_content).map_err(task_err)?;
+        let archived = archive_snapshot_if_completed(&self.config.task_file, &new_content)
+            .map_err(task_err)?;
         if let Some(path) = archived {
             self.config.task_file = path.clone();
         }
@@ -697,7 +785,8 @@ impl CodexWorker {
         let template = if let Some(path) = &self.config.prompt_template {
             std::fs::read_to_string(path)?
         } else {
-            "You are Codex worker.\nExecute the assigned task and return concise results.\n".to_string()
+            "You are Codex worker.\nExecute the assigned task and return concise results.\n"
+                .to_string()
         };
         let extra_prompt = task
             .metadata
@@ -714,6 +803,10 @@ impl CodexWorker {
 
         let mut parts = vec![
             template.trim_end().to_string(),
+            String::new(),
+            "Final Response Contract:".to_string(),
+            "If the task must stay pending for follow-up, start your final response with `TASK_STATUS: pending`.".to_string(),
+            "Otherwise return concise results normally.".to_string(),
             String::new(),
             "Task Metadata:".to_string(),
         ];
@@ -736,7 +829,11 @@ impl CodexWorker {
         if let Some(model) = task.metadata.get("model").or(self.config.model.as_ref()) {
             cmd.arg("--model").arg(model);
         }
-        if let Some(sandbox) = task.metadata.get("sandbox").or(self.config.sandbox.as_ref()) {
+        if let Some(sandbox) = task
+            .metadata
+            .get("sandbox")
+            .or(self.config.sandbox.as_ref())
+        {
             cmd.arg("--sandbox").arg(sandbox);
         }
         if let Some(ap) = task
@@ -760,16 +857,12 @@ impl CodexWorker {
 
     fn maybe_write_problem_examples(&self, paths: &RunPaths, event: &EventRecord) -> AppResult<()> {
         if event.event_type == "raw.unparsed" {
-            let target = if event
-                .payload
-                .get("actor_type")
-                .and_then(Value::as_str)
-                == Some("subagent")
-            {
-                "subagents.jsonl"
-            } else {
-                "main.jsonl"
-            };
+            let target =
+                if event.payload.get("actor_type").and_then(Value::as_str) == Some("subagent") {
+                    "subagents.jsonl"
+                } else {
+                    "main.jsonl"
+                };
             write_event(&paths.raw_unparsed_dir.join(target), event)?;
             write_event(&paths.problem_examples_dir.join(target), event)?;
         } else if event.event_type == "error" {
@@ -803,7 +896,10 @@ impl CodexWorker {
         };
 
         let mut analysis = Map::new();
-        analysis.insert("failure_reason".to_string(), Value::from("connection_error"));
+        analysis.insert(
+            "failure_reason".to_string(),
+            Value::from("connection_error"),
+        );
         analysis.insert("category".to_string(), Value::from(category));
         analysis.insert("stage".to_string(), Value::from("connect"));
         if let Some(code) = status {
@@ -824,10 +920,7 @@ impl CodexWorker {
                 analysis.insert("transport".to_string(), Value::from(transport));
             }
             if let Some(host) = host_from_url(url) {
-                analysis.insert(
-                    "hosts".to_string(),
-                    Value::Array(vec![Value::from(host)]),
-                );
+                analysis.insert("hosts".to_string(), Value::Array(vec![Value::from(host)]));
             }
         }
         Value::Object(analysis)
@@ -852,7 +945,10 @@ impl CodexWorker {
         let sessions_root = self.sessions_root().join("sessions");
         if !sessions_root.exists() {
             if final_pass {
-                self.emit("subagent", &format!("sessions root not found: {}", sessions_root.display()));
+                self.emit(
+                    "subagent",
+                    &format!("sessions root not found: {}", sessions_root.display()),
+                );
             }
             return Ok(seq);
         }
@@ -860,25 +956,22 @@ impl CodexWorker {
         let mut thread_ids: Vec<String> = subagent_threads.iter().cloned().collect();
         thread_ids.sort();
         for thread_id in thread_ids {
-            let tail = session_tails
-                .entry(thread_id.clone())
-                .or_insert_with(|| SubagentSessionTail {
-                    thread_id: thread_id.clone(),
-                    imported_path: paths.subagents_dir.join(format!("{thread_id}.jsonl")),
-                    ..SubagentSessionTail::default()
-                });
+            let tail =
+                session_tails
+                    .entry(thread_id.clone())
+                    .or_insert_with(|| SubagentSessionTail {
+                        thread_id: thread_id.clone(),
+                        imported_path: paths.subagents_dir.join(format!("{thread_id}.jsonl")),
+                        ..SubagentSessionTail::default()
+                    });
 
-            if tail
-                .session_path
-                .as_ref()
-                .is_none_or(|path| !path.exists())
-            {
+            if tail.session_path.as_ref().is_none_or(|path| !path.exists()) {
                 let now = Instant::now();
                 let should_lookup = final_pass
                     || tail.last_lookup_at.is_none()
-                    || tail
-                        .last_lookup_at
-                        .is_some_and(|seen| seen.elapsed().as_secs_f64() >= SUBAGENT_SESSION_LOOKUP_RETRY_SECONDS);
+                    || tail.last_lookup_at.is_some_and(|seen| {
+                        seen.elapsed().as_secs_f64() >= SUBAGENT_SESSION_LOOKUP_RETRY_SECONDS
+                    });
                 if should_lookup {
                     tail.last_lookup_at = Some(now);
                     tail.session_path =
@@ -888,14 +981,20 @@ impl CodexWorker {
 
             if tail.session_path.is_none() {
                 if final_pass && !tail.missing_announced {
-                    self.emit("subagent", &format!("session missing thread_id={thread_id}"));
+                    self.emit(
+                        "subagent",
+                        &format!("session file missing thread_id={thread_id}"),
+                    );
                     tail.missing_announced = true;
                 }
                 continue;
             }
 
             if !tail.announced {
-                self.emit("subagent", &format!("session_imported thread_id={thread_id}"));
+                self.emit(
+                    "subagent",
+                    &format!("session imported thread_id={thread_id}"),
+                );
                 tail.announced = true;
             }
 
@@ -975,6 +1074,10 @@ impl CodexWorker {
         }
 
         let lines = split_session_chunk_lines(&mut tail.partial_bytes, &chunk, final_pass);
+        let mut current_parent_thread_id = tail
+            .resolved_parent_thread_id
+            .clone()
+            .unwrap_or_else(|| parent_thread_id.to_string());
 
         for line in lines {
             let stripped = trim_line_bytes(&line);
@@ -1020,11 +1123,27 @@ impl CodexWorker {
                 }
             };
 
+            if let Some(meta) = imported_subagent_session_meta(&parsed, &tail.thread_id) {
+                if tail.resolved_parent_thread_id.is_none() {
+                    if let Some(resolved_parent_thread_id) = meta.parent_thread_id {
+                        current_parent_thread_id = resolved_parent_thread_id.clone();
+                        tail.resolved_parent_thread_id = Some(resolved_parent_thread_id);
+                    }
+                }
+                if tail.forked_from_id.is_none() {
+                    tail.forked_from_id = meta.forked_from_id;
+                }
+            }
+
+            if let Some(resolved_parent_thread_id) = tail.resolved_parent_thread_id.as_deref() {
+                current_parent_thread_id = resolved_parent_thread_id.to_string();
+            }
+
             let Some(codex_event) = output_reader.parse_subagent_session_payload(
                 seq,
                 &parsed,
                 &tail.imported_path,
-                parent_thread_id,
+                &current_parent_thread_id,
                 &tail.thread_id,
                 &mut tail.call_names,
                 tool_counts,
@@ -1079,7 +1198,10 @@ impl CodexWorker {
             };
             for entry in entries.flatten() {
                 let path = entry.path();
-                let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or_default();
+                let file_name = path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or_default();
                 if path.is_file()
                     && file_name.ends_with(".jsonl")
                     && session_file_name_matches_thread_id(file_name, thread_id)
@@ -1126,21 +1248,33 @@ impl CodexWorker {
         let Ok(years) = std::fs::read_dir(sessions_root) else {
             return result;
         };
-        let mut year_dirs: Vec<PathBuf> = years.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+        let mut year_dirs: Vec<PathBuf> = years
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
         year_dirs.sort();
         year_dirs.reverse();
         for year_dir in year_dirs {
             let Ok(months) = std::fs::read_dir(&year_dir) else {
                 continue;
             };
-            let mut month_dirs: Vec<PathBuf> = months.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+            let mut month_dirs: Vec<PathBuf> = months
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect();
             month_dirs.sort();
             month_dirs.reverse();
             for month_dir in month_dirs {
                 let Ok(days) = std::fs::read_dir(&month_dir) else {
                     continue;
                 };
-                let mut day_dirs: Vec<PathBuf> = days.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()).collect();
+                let mut day_dirs: Vec<PathBuf> = days
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| path.is_dir())
+                    .collect();
                 day_dirs.sort();
                 day_dirs.reverse();
                 result.extend(day_dirs);
@@ -1218,7 +1352,11 @@ fn session_name_boundary(ch: Option<char>) -> bool {
     ch.is_none_or(|value| !value.is_ascii_alphanumeric())
 }
 
-fn split_session_chunk_lines(partial_bytes: &mut Vec<u8>, chunk: &[u8], final_pass: bool) -> Vec<Vec<u8>> {
+fn split_session_chunk_lines(
+    partial_bytes: &mut Vec<u8>,
+    chunk: &[u8],
+    final_pass: bool,
+) -> Vec<Vec<u8>> {
     let mut combined = std::mem::take(partial_bytes);
     combined.extend_from_slice(chunk);
 
@@ -1264,8 +1402,15 @@ fn lock_err(err: crate::lockfile::LockfileError) -> AppError {
 fn status_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?i)\b(?:status|error:)\s*:?\s*(\d{3})\b")
-            .expect("status regex must compile")
+        Regex::new(r"(?i)\b(?:status|error:)\s*:?\s*(\d{3})\b").expect("status regex must compile")
+    })
+}
+
+fn task_status_directive_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)^task_status\s*[:=]\s*pending\s*$")
+            .expect("task status directive regex must compile")
     })
 }
 
@@ -1284,6 +1429,14 @@ fn extract_status_code(text: &str) -> Option<u16> {
         .and_then(|m| m.as_str().parse::<u16>().ok())
 }
 
+fn requests_pending_follow_up(message: &str) -> bool {
+    let normalized = message.replace("\\r\\n", "\n").replace("\\n", "\n");
+    let Some(first_non_empty) = normalized.lines().find(|line| !line.trim().is_empty()) else {
+        return false;
+    };
+    task_status_directive_regex().is_match(first_non_empty.trim())
+}
+
 fn extract_endpoint(text: &str) -> Option<String> {
     let raw = url_regex()
         .captures(text)
@@ -1297,13 +1450,7 @@ fn host_from_url(url: &str) -> Option<String> {
     if host_port.is_empty() {
         return None;
     }
-    Some(
-        host_port
-            .split(':')
-            .next()
-            .unwrap_or(host_port)
-            .to_string(),
-    )
+    Some(host_port.split(':').next().unwrap_or(host_port).to_string())
 }
 
 fn trim_endpoint(value: &str) -> String {
@@ -1321,7 +1468,11 @@ fn trim_endpoint(value: &str) -> String {
 }
 
 #[allow(dead_code)]
-fn _heartbeat_probe(snapshot: &crate::models::TaskFileSnapshot, task_id: &str, worker_id: &str) -> AppResult<String> {
+fn _heartbeat_probe(
+    snapshot: &crate::models::TaskFileSnapshot,
+    task_id: &str,
+    worker_id: &str,
+) -> AppResult<String> {
     refresh_heartbeat(snapshot, task_id, worker_id).map_err(task_err)
 }
 
@@ -1337,8 +1488,8 @@ mod tests {
     use crate::models::WorkerConfig;
 
     use super::{
-        heartbeat_interval, session_file_name_matches_thread_id, split_session_chunk_lines,
-        CodexWorker,
+        heartbeat_interval, requests_pending_follow_up, session_file_name_matches_thread_id,
+        split_session_chunk_lines, CodexWorker,
     };
 
     #[test]
@@ -1375,6 +1526,23 @@ mod tests {
         let second = split_session_chunk_lines(&mut partial, b"\x9F\"}\n", false);
         assert_eq!(second, vec![b"{\"text\":\"\xD0\x9F\"}".to_vec()]);
         assert!(partial.is_empty());
+    }
+
+    #[test]
+    fn requests_pending_follow_up_matches_control_line() {
+        assert!(requests_pending_follow_up(
+            "TASK_STATUS: pending\nНужен ещё один запуск."
+        ));
+        assert!(requests_pending_follow_up(
+            "TASK_STATUS: pending\\nНужен ещё один запуск."
+        ));
+        assert!(requests_pending_follow_up(
+            "\n task_status = pending \nFollow-up required."
+        ));
+        assert!(!requests_pending_follow_up("TASK_STATUS: completed\nDone."));
+        assert!(!requests_pending_follow_up(
+            "Нужен follow-up без control line."
+        ));
     }
 
     #[test]

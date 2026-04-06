@@ -135,8 +135,7 @@ fn recover_stale_running_skips_live_lease() {
     .expect("task file should be written");
 
     let snapshot = load_snapshot(&path).expect("snapshot should load");
-    let (content, recovered) =
-        recover_stale_tasks(&snapshot, 3600.0).expect("recovery should run");
+    let (content, recovered) = recover_stale_tasks(&snapshot, 3600.0).expect("recovery should run");
     assert!(recovered.is_empty());
     assert_eq!(content, snapshot.content);
 }
@@ -152,8 +151,7 @@ fn recover_stale_running_marks_failed_when_process_missing() {
     .expect("task file should be written");
 
     let snapshot = load_snapshot(&path).expect("snapshot should load");
-    let (content, recovered) =
-        recover_stale_tasks(&snapshot, 3600.0).expect("recovery should run");
+    let (content, recovered) = recover_stale_tasks(&snapshot, 3600.0).expect("recovery should run");
     assert_eq!(recovered, vec!["task-dead"]);
     assert!(content.contains("last_result: worker_interrupted"));
     assert!(content.contains("last_error: stale_running_recovered"));
@@ -264,12 +262,11 @@ fn serialize_preserves_explicit_metadata_order() {
     .expect("task file should be written");
 
     let snapshot = load_snapshot(&path).expect("snapshot should load");
-    let (content, _task) =
-        claim_next_task(&snapshot, "run-1", "worker-1").expect("claim should run").unwrap();
+    let (content, _task) = claim_next_task(&snapshot, "run-1", "worker-1")
+        .expect("claim should run")
+        .unwrap();
 
-    let zeta = content
-        .find("zeta: 1")
-        .expect("zeta metadata should exist");
+    let zeta = content.find("zeta: 1").expect("zeta metadata should exist");
     let alpha = content
         .find("alpha: 2")
         .expect("alpha metadata should exist");
@@ -341,7 +338,6 @@ fn heartbeat_rejects_ownership_change() {
     .expect("task file should be written");
 
     let snapshot = load_snapshot(&path).expect("snapshot should load");
-    let err =
-        refresh_heartbeat(&snapshot, "running-task", "worker-2").expect_err("must fail");
+    let err = refresh_heartbeat(&snapshot, "running-task", "worker-2").expect_err("must fail");
     assert!(matches!(err, TaskFileError::OwnershipChanged("heartbeat")));
 }

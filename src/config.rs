@@ -200,8 +200,7 @@ mod tests {
         let mut input = sample_input();
         input.codex_bin = "   \t  ".to_string();
 
-        let err =
-            build_worker_config(input).expect_err("whitespace-only codex_bin should fail");
+        let err = build_worker_config(input).expect_err("whitespace-only codex_bin should fail");
         assert!(matches!(
             err,
             AppError::Validation {
@@ -217,7 +216,8 @@ mod tests {
             let mut input = sample_input();
             input.poll_interval = value;
 
-            let err = build_worker_config(input).expect_err("non-positive poll_interval should fail");
+            let err =
+                build_worker_config(input).expect_err("non-positive poll_interval should fail");
             assert!(matches!(
                 err,
                 AppError::Validation {

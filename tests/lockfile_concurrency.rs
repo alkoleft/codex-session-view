@@ -494,7 +494,10 @@ fn heartbeat_recovery_under_load() {
         }
     }
 
-    assert!(child_error.is_empty(), "child recovery loop failed: {child_error}");
+    assert!(
+        child_error.is_empty(),
+        "child recovery loop failed: {child_error}"
+    );
     assert_eq!(recovered_count, 0, "running task must not be recovered");
     assert_eq!(
         heartbeat_errors, 0,
@@ -534,7 +537,8 @@ fn heartbeat_recovery_under_load() {
         })();
 
         let error = result.err().unwrap_or_default();
-        std::fs::write(&stale_marker, format!("error={error}\n")).expect("marker should be written");
+        std::fs::write(&stale_marker, format!("error={error}\n"))
+            .expect("marker should be written");
         unsafe { libc::_exit(0) };
     }
 
@@ -543,9 +547,13 @@ fn heartbeat_recovery_under_load() {
     close_fd(stale_pipe[1]);
 
     let mut stale_status: libc::c_int = 0;
-    let stale_waited = unsafe { libc::waitpid(stale_pid, &mut stale_status as *mut libc::c_int, 0) };
+    let stale_waited =
+        unsafe { libc::waitpid(stale_pid, &mut stale_status as *mut libc::c_int, 0) };
     assert_eq!(stale_waited, stale_pid, "must wait for stale child");
-    assert!(libc::WIFEXITED(stale_status), "stale child should exit cleanly");
+    assert!(
+        libc::WIFEXITED(stale_status),
+        "stale child should exit cleanly"
+    );
     let stale_text = std::fs::read_to_string(&stale_marker).expect("stale marker should exist");
     assert!(
         stale_text.trim() == "error=",
@@ -605,9 +613,13 @@ fn heartbeat_recovery_under_load() {
     let recover_waited =
         unsafe { libc::waitpid(recover_pid, &mut recover_status as *mut libc::c_int, 0) };
     assert_eq!(recover_waited, recover_pid, "must wait for recover child");
-    assert!(libc::WIFEXITED(recover_status), "recover child should exit cleanly");
+    assert!(
+        libc::WIFEXITED(recover_status),
+        "recover child should exit cleanly"
+    );
 
-    let recover_text = std::fs::read_to_string(&recover_marker).expect("recover marker should exist");
+    let recover_text =
+        std::fs::read_to_string(&recover_marker).expect("recover marker should exist");
     let mut recovered_first = 0usize;
     let mut recovered_second = 0usize;
     let mut recover_error = String::new();
@@ -631,7 +643,10 @@ fn heartbeat_recovery_under_load() {
         recover_error.is_empty(),
         "forced recovery phase failed: {recover_error}"
     );
-    assert_eq!(recovered_first, 1, "stale recovery must trigger exactly once");
+    assert_eq!(
+        recovered_first, 1,
+        "stale recovery must trigger exactly once"
+    );
     assert_eq!(
         recovered_second, 0,
         "second recovery pass must not recover already finalized stale task"

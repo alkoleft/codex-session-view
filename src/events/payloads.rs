@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::events::types::{
+    AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_META, AGENT_REASONING, AGENT_SESSION,
+    AGENT_STARTED, COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT,
+    COLLAB_WAIT, CONTEXT_COMPACTED, ERROR, FILE_CHANGE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
+    MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PLAN_UPDATE, RAW_UNPARSED,
+    RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED,
+    TASK_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_SEARCH,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct TextLinksPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,6 +121,32 @@ fn default_meta_type() -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct InfoTokensPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_output_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_token_usage: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ToolCallPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_type: Option<String>,
@@ -197,6 +232,50 @@ pub struct ToolResultPayload {
     pub detection_confidence: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct McpCallPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct McpResultPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -305,8 +384,11 @@ pub enum PayloadObject {
     AgentMessage(AgentMessagePayload),
     AgentSession(AgentSessionPayload),
     AgentMeta(AgentMetaPayload),
+    InfoTokens(InfoTokensPayload),
     ToolCall(ToolCallPayload),
     ToolResult(ToolResultPayload),
+    McpCall(McpCallPayload),
+    McpResult(McpResultPayload),
     FileChange(FileChangePayload),
     TodoUpdate(TodoUpdatePayload),
     Error(ErrorPayload),
@@ -329,13 +411,16 @@ pub fn parse_payload(event_type: &str, payload: &Value) -> PayloadObject {
     let mut normalized = obj.clone();
     if matches!(
         event_type,
-        "agent.turn.started" | "agent.turn.completed" | "agent.turn.failed" | "agent.message" | "agent.reasoning" | "error"
+        AGENT_STARTED | AGENT_COMPLETED | AGENT_FAILED | MESSAGE_AGENT | AGENT_REASONING | ERROR
     ) {
         if let Some(links) = normalized.get("text_links").and_then(Value::as_object) {
             normalized.insert(
                 "text_links".to_string(),
                 serde_json::to_value(TextLinksPayload {
-                    request_id: links.get("request_id").and_then(Value::as_str).map(str::to_string),
+                    request_id: links
+                        .get("request_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     reconnect_attempt: links
                         .get("reconnect_attempt")
                         .and_then(Value::as_u64)
@@ -345,17 +430,35 @@ pub fn parse_payload(event_type: &str, payload: &Value) -> PayloadObject {
                         .and_then(Value::as_u64)
                         .map(|v| v as u32),
                     is_fallback: links.get("is_fallback").and_then(Value::as_bool),
-                    fallback_from: links.get("fallback_from").and_then(Value::as_str).map(str::to_string),
-                    fallback_to: links.get("fallback_to").and_then(Value::as_str).map(str::to_string),
+                    fallback_from: links
+                        .get("fallback_from")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    fallback_to: links
+                        .get("fallback_to")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     status_code: links
                         .get("status_code")
                         .and_then(Value::as_u64)
                         .map(|v| v as u16),
-                    status_text: links.get("status_text").and_then(Value::as_str).map(str::to_string),
+                    status_text: links
+                        .get("status_text")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     url: links.get("url").and_then(Value::as_str).map(str::to_string),
-                    scheme: links.get("scheme").and_then(Value::as_str).map(str::to_string),
-                    host: links.get("host").and_then(Value::as_str).map(str::to_string),
-                    cf_ray: links.get("cf_ray").and_then(Value::as_str).map(str::to_string),
+                    scheme: links
+                        .get("scheme")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    host: links
+                        .get("host")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    cf_ray: links
+                        .get("cf_ray")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
                     disconnect_reason: links
                         .get("disconnect_reason")
                         .and_then(Value::as_str)
@@ -385,7 +488,10 @@ pub fn parse_payload(event_type: &str, payload: &Value) -> PayloadObject {
                 }
             }
         }
-        normalized.insert("changes".to_string(), serde_json::to_value(out).unwrap_or(Value::Null));
+        normalized.insert(
+            "changes".to_string(),
+            serde_json::to_value(out).unwrap_or(Value::Null),
+        );
     }
     if event_type == "todo.update" {
         let mut out = Vec::new();
@@ -406,42 +512,59 @@ pub fn parse_payload(event_type: &str, payload: &Value) -> PayloadObject {
                 }
             }
         }
-        normalized.insert("items".to_string(), serde_json::to_value(out).unwrap_or(Value::Null));
+        normalized.insert(
+            "items".to_string(),
+            serde_json::to_value(out).unwrap_or(Value::Null),
+        );
     }
 
     let value = Value::Object(normalized);
     match event_type {
-        "agent.turn.started" | "agent.turn.completed" | "agent.turn.failed" => serde_json::from_value(value)
+        AGENT_STARTED | AGENT_COMPLETED | AGENT_FAILED => serde_json::from_value(value)
             .map(PayloadObject::AgentTurn)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        "agent.message" | "agent.reasoning" => serde_json::from_value(value)
-            .map(PayloadObject::AgentMessage)
-            .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        "agent.session" => serde_json::from_value(value)
+        MESSAGE_AGENT | AGENT_REASONING | MESSAGE_COMMENTARY | MESSAGE_USER => {
+            serde_json::from_value(value)
+                .map(PayloadObject::AgentMessage)
+                .unwrap_or(PayloadObject::Unknown(payload.clone()))
+        }
+        AGENT_SESSION => serde_json::from_value(value)
             .map(PayloadObject::AgentSession)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        "agent.meta" => serde_json::from_value(value)
+        AGENT_META | TASK_STARTED | TASK_COMPLETED | RUNTIME_CONTEXT | CONTEXT_COMPACTED
+        | AGENT_ABORTED => serde_json::from_value(value)
             .map(PayloadObject::AgentMeta)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        "tool.call" => serde_json::from_value(value)
+        INFO_TOKENS => serde_json::from_value(value)
+            .map(PayloadObject::InfoTokens)
+            .unwrap_or(PayloadObject::Unknown(payload.clone())),
+        TOOL_CALL | SHELL_CALL => serde_json::from_value(value)
             .map(PayloadObject::ToolCall)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        "tool.result" => serde_json::from_value(value)
+        MCP_CALL => serde_json::from_value(value)
+            .map(PayloadObject::McpCall)
+            .unwrap_or(PayloadObject::Unknown(payload.clone())),
+        MCP_RESULT => serde_json::from_value(value)
+            .map(PayloadObject::McpResult)
+            .unwrap_or(PayloadObject::Unknown(payload.clone())),
+        TOOL_RESULT | SHELL_RESULT | STDIN_WRITE | WEB_SEARCH | PLAN_UPDATE | PATCH_APPLY
+        | COLLAB_SPAWN_AGENT | COLLAB_SEND_INPUT | COLLAB_WAIT | COLLAB_CLOSE_AGENT
+        | COLLAB_RESUME_AGENT => serde_json::from_value(value)
             .map(PayloadObject::ToolResult)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        "file.change" => serde_json::from_value(value)
+        FILE_CHANGE => serde_json::from_value(value)
             .map(PayloadObject::FileChange)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        "todo.update" => serde_json::from_value(value)
+        TODO_UPDATE => serde_json::from_value(value)
             .map(PayloadObject::TodoUpdate)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        "error" => serde_json::from_value(value)
+        ERROR => serde_json::from_value(value)
             .map(PayloadObject::Error)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        "raw.unparsed" => serde_json::from_value(value)
+        RAW_UNPARSED => serde_json::from_value(value)
             .map(PayloadObject::Raw)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        "stderr.line" => serde_json::from_value(value)
+        STDERR_LINE => serde_json::from_value(value)
             .map(PayloadObject::Stderr)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
         _ => PayloadObject::Unknown(payload.clone()),
