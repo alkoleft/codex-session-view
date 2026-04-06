@@ -321,9 +321,9 @@ fn summarize_event_truncates_overlong_command_lines() {
 }
 
 #[test]
-fn summarize_event_formats_web_search_result_with_query() {
+fn summarize_event_formats_web_open_result_with_url() {
     let summary = summarize_event(&make_event(
-        "web.search",
+        "web.open",
         json!({
             "tool_name": "web_search",
             "phase": "completed",
@@ -336,10 +336,31 @@ fn summarize_event_formats_web_search_result_with_query() {
             }
         }),
     ));
-    assert!(summary.contains("search result [web_search]"));
-    assert!(summary.contains("query=https://developers.openai.com/codex/cli"));
-    assert!(summary.contains("action=open_page"));
+    assert!(summary.contains("open page result [web_search]"));
     assert!(summary.contains("url=https://developers.openai.com/codex/cli"));
+    assert!(!summary.contains("action=open_page"));
+    assert!(!summary.contains("query=https://developers.openai.com/codex/cli"));
+}
+
+#[test]
+fn summarize_event_formats_session_web_open_result_with_web_search_call_label() {
+    let summary = summarize_event(&make_event(
+        "web.open",
+        json!({
+            "tool_name": "web_search_call",
+            "phase": "completed",
+            "output": {
+                "action": {
+                    "type": "open_page",
+                    "url": "https://iana.org/domains/example"
+                }
+            }
+        }),
+    ));
+    assert_eq!(
+        summary,
+        "open page result [web_search_call]: url=https://iana.org/domains/example"
+    );
 }
 
 #[test]
@@ -378,6 +399,31 @@ fn summarize_event_formats_stdin_write() {
         summary,
         "stdin write: phase=completed status=completed session_id=42 chars=ls output=ok"
     );
+}
+
+#[test]
+fn summarize_event_uses_message_role_when_present() {
+    let agent_summary = summarize_event(&make_event(
+        "message.agent",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "role": "system",
+            "text": "hello"
+        }),
+    ));
+    let commentary_summary = summarize_event(&make_event(
+        "message.commentary",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "role": "assistant",
+            "text": "thinking aloud"
+        }),
+    ));
+
+    assert_eq!(agent_summary, "system: hello");
+    assert_eq!(commentary_summary, "assistant: thinking aloud");
 }
 
 #[test]
@@ -574,6 +620,53 @@ fn summarize_event_formats_subagent_meta_variants() {
     assert_eq!(
         token_summary,
         "tokens: input: 700, cached input: 120, output: 340, reasoning output: 74, total: 1 234"
+    );
+}
+
+#[test]
+fn summarize_event_formats_subagent_import_notes() {
+    let foreign_session = summarize_event(&make_event(
+        "agent.session.foreign",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "foreign_thread_id": "sub-foreign",
+            "agent_role": "reviewer",
+            "agent_nickname": "Ada",
+            "cwd": "/repo"
+        }),
+    ));
+    let patch_duplicate = summarize_event(&make_event(
+        "patch.apply.duplicate",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "tool_name": "apply_patch",
+            "phase": "completed",
+            "status": "completed",
+            "output": "Success"
+        }),
+    ));
+    let compacted_duplicate = summarize_event(&make_event(
+        "context.compacted.duplicate",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "duplicate_of": "compacted"
+        }),
+    ));
+
+    assert_eq!(
+        foreign_session,
+        "foreign session meta: thread=sub-foreign role=reviewer nickname=Ada cwd=/repo"
+    );
+    assert_eq!(
+        patch_duplicate,
+        "patch apply duplicate: phase=completed status=completed output=Success"
+    );
+    assert_eq!(
+        compacted_duplicate,
+        "context compacted duplicate: source=compacted"
     );
 }
 

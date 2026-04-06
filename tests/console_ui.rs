@@ -174,6 +174,28 @@ fn web_search_event_renders_structured_prefix() {
 }
 
 #[test]
+fn web_open_event_renders_structured_prefix() {
+    let console = make_console();
+    let event = make_event(
+        "web.open",
+        json!({
+            "actor_type":"agent",
+            "thread_id":"root",
+            "tool_name":"web_search",
+            "phase":"completed",
+            "output":{
+                "query":"https://developers.openai.com/codex/cli",
+                "action":{"type":"open_page","url":"https://developers.openai.com/codex/cli"}
+            }
+        }),
+    );
+    assert_eq!(
+        console.format_event_line(&event),
+        "○ open page result [web_search]: url=https://developers.openai.com/codex/cli"
+    );
+}
+
+#[test]
 fn stdin_write_event_renders_structured_prefix() {
     let console = make_console();
     let event = make_event(

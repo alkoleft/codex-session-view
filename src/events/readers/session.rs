@@ -28,17 +28,19 @@ impl JsonOutputEventReader {
         }
 
         let mut event_type = "raw.unparsed".to_string();
-        let mut payload = payload_to_value(&RawPayload {
-            actor_type: Some("subagent".to_string()),
-            thread_id: Some(thread_id.to_string()),
-            raw: Some(Value::Object(parsed.clone())),
-            ..RawPayload::default()
-        });
+        let mut payload: Value;
         let mut parse_status = "best_effort".to_string();
 
         match raw_type.as_str() {
             "session_meta" => {
                 let Some(meta) = parsed.get("payload").and_then(Value::as_object) else {
+                    payload = subagent_raw_payload(
+                        thread_id,
+                        parent_thread_id,
+                        imported_path,
+                        Value::Object(parsed.clone()),
+                        Some("missing session_meta payload object".to_string()),
+                    );
                     return Some(self.build_subagent_event(
                         seq,
                         &ts,
@@ -54,7 +56,38 @@ impl JsonOutputEventReader {
                     .unwrap_or(thread_id)
                     .to_string();
                 if meta_thread_id != thread_id {
-                    return None;
+                    event_type = AGENT_SESSION_FOREIGN.to_string();
+                    parse_status = "parsed".to_string();
+                    let mut payload_map =
+                        subagent_base_payload_map(thread_id, parent_thread_id, imported_path);
+                    payload_map
+                        .insert("foreign_thread_id".to_string(), Value::from(meta_thread_id));
+                    payload_map.insert(
+                        "forked_from_id".to_string(),
+                        meta.get("forked_from_id").cloned().unwrap_or(Value::Null),
+                    );
+                    payload_map.insert(
+                        "cwd".to_string(),
+                        meta.get("cwd").cloned().unwrap_or(Value::Null),
+                    );
+                    payload_map.insert(
+                        "agent_nickname".to_string(),
+                        meta.get("agent_nickname").cloned().unwrap_or(Value::Null),
+                    );
+                    payload_map.insert(
+                        "agent_role".to_string(),
+                        meta.get("agent_role").cloned().unwrap_or(Value::Null),
+                    );
+                    payload_map.insert("raw".to_string(), Value::Object(parsed.clone()));
+                    payload = Value::Object(payload_map);
+                    return Some(self.build_subagent_event(
+                        seq,
+                        &ts,
+                        event_type,
+                        raw_type,
+                        parse_status,
+                        payload,
+                    ));
                 }
                 let session_meta =
                     imported_subagent_session_meta(parsed, thread_id).unwrap_or_default();
@@ -95,6 +128,13 @@ impl JsonOutputEventReader {
             }
             "response_item" => {
                 let Some(item) = parsed.get("payload").and_then(Value::as_object) else {
+                    payload = subagent_raw_payload(
+                        thread_id,
+                        parent_thread_id,
+                        imported_path,
+                        Value::Object(parsed.clone()),
+                        Some("missing response_item payload object".to_string()),
+                    );
                     return Some(self.build_subagent_event(
                         seq,
                         &ts,
@@ -310,7 +350,34 @@ impl JsonOutputEventReader {
                         increment(tool_counts, &name);
                         if name == "apply_patch" {
                             if self.state.patch_apply_end_call_ids.contains(&call_id) {
-                                return None;
+                                event_type = PATCH_APPLY_DUPLICATE.to_string();
+                                parse_status = "parsed".to_string();
+                                payload = payload_to_value(&ToolResultPayload {
+                                    actor_type: Some("subagent".to_string()),
+                                    thread_id: Some(thread_id.to_string()),
+                                    parent_thread_id: Some(parent_thread_id.to_string()),
+                                    session_path: Some(imported_path.display().to_string()),
+                                    tool_name: name,
+                                    tool_use_id: Some(call_id),
+                                    phase: Some("completed".to_string()),
+                                    status: custom_tool_output_status(item.get("output")),
+                                    output: item.get("output").cloned(),
+                                    ..ToolResultPayload::default()
+                                });
+                                if let Some(obj) = payload.as_object_mut() {
+                                    obj.insert(
+                                        "duplicate_of".to_string(),
+                                        Value::from("event_msg.patch_apply_end"),
+                                    );
+                                }
+                                return Some(self.build_subagent_event(
+                                    seq,
+                                    &ts,
+                                    event_type,
+                                    raw_type,
+                                    parse_status,
+                                    payload,
+                                ));
                             }
                             event_type = PATCH_APPLY.to_string();
                             parse_status = "parsed".to_string();
@@ -341,6 +408,42 @@ impl JsonOutputEventReader {
                                 ..ToolResultPayload::default()
                             });
                         }
+                    }
+                    "web_search_call" => {
+                        increment(tool_counts, "web_search_call");
+                        let phase = response_item_phase(item);
+                        let query_action = Value::Object(Map::from_iter([
+                            (
+                                "query".to_string(),
+                                item.get("query").cloned().unwrap_or(Value::Null),
+                            ),
+                            (
+                                "action".to_string(),
+                                item.get("action").cloned().unwrap_or(Value::Null),
+                            ),
+                        ]));
+                        event_type = if is_open_page_action(item.get("action")) {
+                            WEB_OPEN.to_string()
+                        } else {
+                            WEB_SEARCH.to_string()
+                        };
+                        parse_status = "parsed".to_string();
+                        payload = payload_to_value(&ToolResultPayload {
+                            actor_type: Some("subagent".to_string()),
+                            thread_id: Some(thread_id.to_string()),
+                            parent_thread_id: Some(parent_thread_id.to_string()),
+                            session_path: Some(imported_path.display().to_string()),
+                            tool_name: "web_search_call".to_string(),
+                            tool_use_id: item.get("id").and_then(Value::as_str).map(str::to_string),
+                            phase: Some(phase.clone()),
+                            status: item
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            input: (phase != "completed").then_some(query_action.clone()),
+                            output: (phase == "completed").then_some(query_action),
+                            ..ToolResultPayload::default()
+                        });
                     }
                     "message" => {
                         let text = self.extract_message_text(item);
@@ -411,7 +514,15 @@ impl JsonOutputEventReader {
                             ),
                         ]));
                     }
-                    _ => {}
+                    _ => {
+                        payload = subagent_raw_payload(
+                            thread_id,
+                            parent_thread_id,
+                            imported_path,
+                            Value::Object(parsed.clone()),
+                            Some(format!("unsupported response_item.type={item_type}")),
+                        );
+                    }
                 }
             }
             "compacted" => {
@@ -448,6 +559,13 @@ impl JsonOutputEventReader {
             }
             "event_msg" => {
                 let Some(item) = parsed.get("payload").and_then(Value::as_object) else {
+                    payload = subagent_raw_payload(
+                        thread_id,
+                        parent_thread_id,
+                        imported_path,
+                        Value::Object(parsed.clone()),
+                        Some("missing event_msg payload object".to_string()),
+                    );
                     return Some(self.build_subagent_event(
                         seq,
                         &ts,
@@ -637,7 +755,29 @@ impl JsonOutputEventReader {
                         "context_compacted" => {
                             if self.state.pending_context_compacted_duplicate {
                                 self.state.pending_context_compacted_duplicate = false;
-                                return None;
+                                event_type = CONTEXT_COMPACTED_DUPLICATE.to_string();
+                                payload = Value::Object(Map::from_iter([
+                                    ("actor_type".to_string(), Value::from("subagent")),
+                                    ("thread_id".to_string(), Value::from(thread_id)),
+                                    (
+                                        "parent_thread_id".to_string(),
+                                        Value::from(parent_thread_id),
+                                    ),
+                                    (
+                                        "session_path".to_string(),
+                                        Value::from(imported_path.display().to_string()),
+                                    ),
+                                    ("duplicate_of".to_string(), Value::from("compacted")),
+                                    ("raw".to_string(), Value::Object(parsed.clone())),
+                                ]));
+                                return Some(self.build_subagent_event(
+                                    seq,
+                                    &ts,
+                                    event_type,
+                                    raw_type,
+                                    parse_status,
+                                    payload,
+                                ));
                             }
                             event_type = CONTEXT_COMPACTED.to_string();
                             payload = Value::Object(Map::from_iter([
@@ -715,22 +855,15 @@ impl JsonOutputEventReader {
                             }
                         }
                         _ => {
-                            event_type = "agent.meta".to_string();
-                            let mut payload_map = Map::from_iter([
-                                ("actor_type".to_string(), Value::from("subagent")),
-                                ("thread_id".to_string(), Value::from(thread_id)),
-                                (
-                                    "parent_thread_id".to_string(),
-                                    Value::from(parent_thread_id),
-                                ),
-                                ("meta_type".to_string(), Value::from(msg_type.clone())),
-                                (
-                                    "session_path".to_string(),
-                                    Value::from(imported_path.display().to_string()),
-                                ),
-                            ]);
-                            payload_map.insert("raw".to_string(), Value::Object(item.clone()));
-                            payload = Value::Object(payload_map);
+                            event_type = RAW_UNPARSED.to_string();
+                            parse_status = "best_effort".to_string();
+                            payload = subagent_raw_payload(
+                                thread_id,
+                                parent_thread_id,
+                                imported_path,
+                                Value::Object(parsed.clone()),
+                                Some(format!("unsupported event_msg.type={msg_type}")),
+                            );
                         }
                     }
                 }
@@ -826,7 +959,15 @@ impl JsonOutputEventReader {
                     ),
                 ]));
             }
-            _ => {}
+            _ => {
+                payload = subagent_raw_payload(
+                    thread_id,
+                    parent_thread_id,
+                    imported_path,
+                    Value::Object(parsed.clone()),
+                    Some(format!("unsupported subagent record type={raw_type}")),
+                );
+            }
         }
 
         Some(self.build_subagent_event(seq, &ts, event_type, raw_type, parse_status, payload))
@@ -888,6 +1029,40 @@ impl JsonOutputEventReader {
         }
         parts.join("\n").trim().to_string()
     }
+}
+
+fn subagent_base_payload_map(
+    thread_id: &str,
+    parent_thread_id: &str,
+    imported_path: &Path,
+) -> Map<String, Value> {
+    Map::from_iter([
+        ("actor_type".to_string(), Value::from("subagent")),
+        ("thread_id".to_string(), Value::from(thread_id)),
+        (
+            "parent_thread_id".to_string(),
+            Value::from(parent_thread_id),
+        ),
+        (
+            "session_path".to_string(),
+            Value::from(imported_path.display().to_string()),
+        ),
+    ])
+}
+
+fn subagent_raw_payload(
+    thread_id: &str,
+    parent_thread_id: &str,
+    imported_path: &Path,
+    raw: Value,
+    reason: Option<String>,
+) -> Value {
+    let mut payload = subagent_base_payload_map(thread_id, parent_thread_id, imported_path);
+    payload.insert("raw".to_string(), raw);
+    if let Some(reason) = reason.filter(|reason| !reason.trim().is_empty()) {
+        payload.insert("reason".to_string(), Value::from(reason));
+    }
+    Value::Object(payload)
 }
 
 pub(crate) fn imported_subagent_session_meta(

@@ -10,11 +10,12 @@ use codex_worker_rs::events::projector::{
 use codex_worker_rs::events::replay::ReplayedRunStream;
 use codex_worker_rs::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_META, AGENT_REASONING, AGENT_SESSION,
-    AGENT_STARTED, COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT,
-    COLLAB_WAIT, CONTEXT_COMPACTED, FILE_CHANGE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
-    MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PLAN_UPDATE, RUNTIME_CONTEXT, SHELL_CALL,
-    SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED, TASK_STARTED, THREAD_STARTED,
-    TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_SEARCH,
+    AGENT_SESSION_FOREIGN, AGENT_STARTED, COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT,
+    COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT, CONTEXT_COMPACTED,
+    CONTEXT_COMPACTED_DUPLICATE, FILE_CHANGE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
+    MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, PLAN_UPDATE,
+    RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED,
+    TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
 };
 use codex_worker_rs::models::EventRecord;
 use serde_json::Value;
@@ -398,6 +399,7 @@ fn assign_operation_parent_ids(events: &mut [EventEntry]) {
                     | FILE_CHANGE
                     | TODO_UPDATE
                     | WEB_SEARCH
+                    | WEB_OPEN
                     | COLLAB_SPAWN_AGENT
                     | COLLAB_WAIT
             )
@@ -527,6 +529,7 @@ fn is_barrier_event(event: &EventEntry) -> bool {
             | MCP_RESULT
             | STDIN_WRITE
             | WEB_SEARCH
+            | WEB_OPEN
             | PLAN_UPDATE
             | PATCH_APPLY
             | COLLAB_SPAWN_AGENT
@@ -542,10 +545,13 @@ fn is_barrier_event(event: &EventEntry) -> bool {
             | TASK_COMPLETED
             | RUNTIME_CONTEXT
             | CONTEXT_COMPACTED
+            | CONTEXT_COMPACTED_DUPLICATE
             | MESSAGE_USER
             | MESSAGE_COMMENTARY
             | THREAD_STARTED
             | AGENT_SESSION
+            | AGENT_SESSION_FOREIGN
+            | PATCH_APPLY_DUPLICATE
     )
 }
 
@@ -567,6 +573,7 @@ fn operation_kind(event: &EventEntry) -> Option<&'static str> {
         MCP_CALL | MCP_RESULT => Some("mcp"),
         STDIN_WRITE => Some("stdin.write"),
         WEB_SEARCH => Some("web.search"),
+        WEB_OPEN => Some("web.open"),
         PLAN_UPDATE => Some("plan.update"),
         PATCH_APPLY => Some("patch.apply"),
         COLLAB_SPAWN_AGENT => Some("collab.spawn_agent"),
@@ -583,7 +590,7 @@ fn operation_kind(event: &EventEntry) -> Option<&'static str> {
 fn is_operation_start(event: &EventEntry) -> bool {
     match event.event_type.as_str() {
         TOOL_CALL | SHELL_CALL | MCP_CALL => true,
-        STDIN_WRITE | WEB_SEARCH | PLAN_UPDATE | PATCH_APPLY | COLLAB_SPAWN_AGENT
+        STDIN_WRITE | WEB_SEARCH | WEB_OPEN | PLAN_UPDATE | PATCH_APPLY | COLLAB_SPAWN_AGENT
         | COLLAB_SEND_INPUT | COLLAB_WAIT | COLLAB_CLOSE_AGENT | COLLAB_RESUME_AGENT => {
             event.phase.as_deref() == Some("started")
         }
@@ -1125,6 +1132,55 @@ mod tests {
         assert_eq!(web_search_completed.event.event_type, "web.search");
         assert_eq!(
             web_search_completed.event.parent_event_id.as_deref(),
+            Some("run-1:2")
+        );
+    }
+
+    #[test]
+    fn build_event_tree_nests_web_open_completed_under_started() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "web.open",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"web_search",
+                    "tool_use_id":"web-1",
+                    "phase":"started",
+                    "input":{"action":{"type":"open_page","url":"https://example.com"}}
+                }),
+                2,
+            ),
+            make_event(
+                "web.open",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"web_search",
+                    "tool_use_id":"web-1",
+                    "phase":"completed",
+                    "output":{"action":{"type":"open_page","url":"https://example.com"}}
+                }),
+                3,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let root = &tree.roots[0];
+        let web_open_started = match &root.items[1] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected web_open start event"),
+        };
+        let web_open_completed = match &web_open_started.children[0] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected web_open completion child"),
+        };
+
+        assert_eq!(web_open_started.event.event_type, "web.open");
+        assert_eq!(web_open_completed.event.event_type, "web.open");
+        assert_eq!(
+            web_open_completed.event.parent_event_id.as_deref(),
             Some("run-1:2")
         );
     }

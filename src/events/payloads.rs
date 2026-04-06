@@ -3,11 +3,12 @@ use serde_json::Value;
 
 use crate::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_META, AGENT_REASONING, AGENT_SESSION,
-    AGENT_STARTED, COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT,
-    COLLAB_WAIT, CONTEXT_COMPACTED, ERROR, FILE_CHANGE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
-    MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PLAN_UPDATE, RAW_UNPARSED,
-    RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED,
-    TASK_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_SEARCH,
+    AGENT_SESSION_FOREIGN, AGENT_STARTED, COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT,
+    COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT, CONTEXT_COMPACTED,
+    CONTEXT_COMPACTED_DUPLICATE, ERROR, FILE_CHANGE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
+    MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE,
+    PLAN_UPDATE, RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE,
+    TASK_COMPLETED, TASK_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -531,7 +532,13 @@ pub fn parse_payload(event_type: &str, payload: &Value) -> PayloadObject {
         AGENT_SESSION => serde_json::from_value(value)
             .map(PayloadObject::AgentSession)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        AGENT_META | TASK_STARTED | TASK_COMPLETED | RUNTIME_CONTEXT | CONTEXT_COMPACTED
+        AGENT_SESSION_FOREIGN
+        | AGENT_META
+        | TASK_STARTED
+        | TASK_COMPLETED
+        | RUNTIME_CONTEXT
+        | CONTEXT_COMPACTED
+        | CONTEXT_COMPACTED_DUPLICATE
         | AGENT_ABORTED => serde_json::from_value(value)
             .map(PayloadObject::AgentMeta)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
@@ -547,8 +554,18 @@ pub fn parse_payload(event_type: &str, payload: &Value) -> PayloadObject {
         MCP_RESULT => serde_json::from_value(value)
             .map(PayloadObject::McpResult)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        TOOL_RESULT | SHELL_RESULT | STDIN_WRITE | WEB_SEARCH | PLAN_UPDATE | PATCH_APPLY
-        | COLLAB_SPAWN_AGENT | COLLAB_SEND_INPUT | COLLAB_WAIT | COLLAB_CLOSE_AGENT
+        TOOL_RESULT
+        | SHELL_RESULT
+        | STDIN_WRITE
+        | WEB_SEARCH
+        | WEB_OPEN
+        | PLAN_UPDATE
+        | PATCH_APPLY
+        | PATCH_APPLY_DUPLICATE
+        | COLLAB_SPAWN_AGENT
+        | COLLAB_SEND_INPUT
+        | COLLAB_WAIT
+        | COLLAB_CLOSE_AGENT
         | COLLAB_RESUME_AGENT => serde_json::from_value(value)
             .map(PayloadObject::ToolResult)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),

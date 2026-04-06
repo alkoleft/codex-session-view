@@ -390,6 +390,34 @@ fn web_search_is_normalized_as_dedicated_event_type() {
 }
 
 #[test]
+fn web_open_is_normalized_as_dedicated_event_type() {
+    let mut reader = make_reader();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let mut subagent_threads = HashSet::new();
+
+    let (_, event) = reader.parse_main_output_line(
+        0,
+        r#"{"type":"item.completed","item":{"type":"web_search","id":"web-1","query":"https://developers.openai.com/codex/cli","action":{"type":"open_page","url":"https://developers.openai.com/codex/cli"}}}"#,
+        &mut tool_counts,
+        &mut subagent_counts,
+        &mut subagent_threads,
+    );
+
+    assert_eq!(event.event_type, "web.open");
+    assert_eq!(event.payload["tool_name"].as_str(), Some("web_search"));
+    assert_eq!(event.payload["phase"].as_str(), Some("completed"));
+    assert_eq!(
+        event.payload["output"]["action"]["type"].as_str(),
+        Some("open_page")
+    );
+    assert_eq!(
+        event.payload["output"]["action"]["url"].as_str(),
+        Some("https://developers.openai.com/codex/cli")
+    );
+}
+
+#[test]
 fn nested_item_wrapper_is_unwrapped_recursively() {
     let mut reader = make_reader();
     let mut tool_counts = HashMap::new();
@@ -711,17 +739,27 @@ fn subagent_session_meta_own_vs_foreign() {
     let foreign: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(r#"{"type":"session_meta","payload":{"id":"thread-foreign"}}"#)
             .expect("json should parse");
-    let skipped = reader.parse_subagent_session_payload(
-        2,
-        &foreign,
-        imported,
-        "parent-fallback",
-        "thread-1",
-        &mut call_names,
-        &mut tool_counts,
-        &mut subagent_counts,
+    let foreign_event = reader
+        .parse_subagent_session_payload(
+            2,
+            &foreign,
+            imported,
+            "parent-fallback",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("foreign session meta should produce event");
+    assert_eq!(foreign_event.event_type, "agent.session.foreign");
+    assert_eq!(
+        foreign_event.payload["thread_id"].as_str(),
+        Some("thread-1")
     );
-    assert!(skipped.is_none());
+    assert_eq!(
+        foreign_event.payload["foreign_thread_id"].as_str(),
+        Some("thread-foreign")
+    );
 }
 
 #[test]
@@ -1144,6 +1182,7 @@ fn subagent_response_item_message_and_reasoning_are_normalized() {
         )
         .expect("message should produce event");
     assert_eq!(message.event_type, "message.agent");
+    assert_eq!(message.payload["role"].as_str(), Some("assistant"));
     assert_eq!(message.payload["text"].as_str(), Some("hello\nworld"));
 
     let reasoning_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
@@ -1264,13 +1303,13 @@ fn subagent_event_msg_agent_message_and_meta_normalization() {
             &mut subagent_counts,
         )
         .expect("event_msg unknown meta should produce event");
-    assert_eq!(unknown_meta.event_type, "agent.meta");
+    assert_eq!(unknown_meta.event_type, "raw.unparsed");
     assert_eq!(
-        unknown_meta.payload["meta_type"].as_str(),
-        Some("custom_meta")
+        unknown_meta.payload["reason"].as_str(),
+        Some("unsupported event_msg.type=custom_meta")
     );
     assert_eq!(
-        unknown_meta.payload["raw"]["type"].as_str(),
+        unknown_meta.payload["raw"]["payload"]["type"].as_str(),
         Some("custom_meta")
     );
 }
@@ -1342,6 +1381,46 @@ fn subagent_turn_context_normalization() {
 }
 
 #[test]
+fn subagent_response_item_web_search_call_open_page_is_normalized() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"timestamp":"2026-04-06T15:01:01.125Z","type":"response_item","payload":{"type":"web_search_call","status":"completed","action":{"type":"open_page","url":"https://iana.org/domains/example"}}}"#,
+    )
+    .expect("json should parse");
+    let event = reader
+        .parse_subagent_session_payload(
+            31,
+            &payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("web_search_call should produce event");
+
+    assert_eq!(event.raw_type, "response_item");
+    assert_eq!(event.event_type, "web.open");
+    assert_eq!(event.payload["tool_name"].as_str(), Some("web_search_call"));
+    assert_eq!(event.payload["phase"].as_str(), Some("completed"));
+    assert_eq!(event.payload["status"].as_str(), Some("completed"));
+    assert_eq!(
+        event.payload["output"]["action"]["type"].as_str(),
+        Some("open_page")
+    );
+    assert_eq!(
+        event.payload["output"]["action"]["url"].as_str(),
+        Some("https://iana.org/domains/example")
+    );
+}
+
+#[test]
 fn subagent_custom_apply_patch_is_normalized_as_patch_apply() {
     let mut reader = make_reader();
     let mut call_names = HashMap::new();
@@ -1398,21 +1477,28 @@ fn subagent_custom_apply_patch_is_normalized_as_patch_apply() {
         r#"{"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"call-1","output":"Success"}}"#,
     )
     .expect("json should parse");
-    let duplicate = reader.parse_subagent_session_payload(
-        42,
-        &duplicate_output_payload,
-        imported,
-        "parent-1",
-        "thread-1",
-        &mut call_names,
-        &mut tool_counts,
-        &mut subagent_counts,
+    let duplicate = reader
+        .parse_subagent_session_payload(
+            42,
+            &duplicate_output_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("duplicate custom_tool_call_output should produce event");
+    assert_eq!(duplicate.event_type, "patch.apply.duplicate");
+    assert_eq!(duplicate.payload["phase"].as_str(), Some("completed"));
+    assert_eq!(
+        duplicate.payload["duplicate_of"].as_str(),
+        Some("event_msg.patch_apply_end")
     );
-    assert!(duplicate.is_none());
 }
 
 #[test]
-fn compacted_event_skips_follow_up_context_compacted_duplicate() {
+fn compacted_event_emits_follow_up_context_compacted_duplicate() {
     let mut reader = make_reader();
     let mut call_names = HashMap::new();
     let mut tool_counts = HashMap::new();
@@ -1441,15 +1527,21 @@ fn compacted_event_skips_follow_up_context_compacted_duplicate() {
     let duplicate_payload: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(r#"{"type":"event_msg","payload":{"type":"context_compacted"}}"#)
             .expect("json should parse");
-    let duplicate = reader.parse_subagent_session_payload(
-        51,
-        &duplicate_payload,
-        imported,
-        "parent-1",
-        "thread-1",
-        &mut call_names,
-        &mut tool_counts,
-        &mut subagent_counts,
+    let duplicate = reader
+        .parse_subagent_session_payload(
+            51,
+            &duplicate_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("duplicate context_compacted should produce event");
+    assert_eq!(duplicate.event_type, "context.compacted.duplicate");
+    assert_eq!(
+        duplicate.payload["duplicate_of"].as_str(),
+        Some("compacted")
     );
-    assert!(duplicate.is_none());
 }

@@ -388,8 +388,13 @@ impl JsonOutputEventReader {
                         item.get("action").cloned().unwrap_or(Value::Null),
                     ),
                 ]));
+                let event_type = if is_open_page_action(item.get("action")) {
+                    WEB_OPEN
+                } else {
+                    WEB_SEARCH
+                };
                 (
-                    WEB_SEARCH.to_string(),
+                    event_type.to_string(),
                     payload_to_value(&ToolResultPayload {
                         actor_type: Some("agent".to_string()),
                         thread_id: self.state.thread_id.clone(),

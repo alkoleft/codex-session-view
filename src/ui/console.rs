@@ -4,11 +4,12 @@ use crate::events::projector::{
     summarize_event, truncate_text, EventProjector, EventSummaryCategory,
 };
 use crate::events::types::{
-    AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT,
-    COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT, CONTEXT_COMPACTED, INFO_TOKENS, MCP_CALL,
-    MCP_RESULT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PLAN_UPDATE, RAW_UNPARSED,
-    RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED,
-    TASK_STARTED, TOOL_CALL, TOOL_RESULT, WEB_SEARCH,
+    AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_SESSION_FOREIGN, COLLAB_CLOSE_AGENT,
+    COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT, CONTEXT_COMPACTED,
+    CONTEXT_COMPACTED_DUPLICATE, INFO_TOKENS, MCP_CALL, MCP_RESULT, MESSAGE_COMMENTARY,
+    MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, PLAN_UPDATE, RAW_UNPARSED, RUNTIME_CONTEXT,
+    SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED, TASK_STARTED, TOOL_CALL,
+    TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
 };
 use crate::models::{EventRecord, TaskBlock, WorkerConfig};
 
@@ -277,8 +278,16 @@ impl<W: Write> WorkerConsole<W> {
         match event.event_type.as_str() {
             AGENT_FAILED | AGENT_ABORTED | RAW_UNPARSED | STDERR_LINE | "error" => "failed",
             AGENT_COMPLETED => "completed",
-            INFO_TOKENS | TASK_STARTED | TASK_COMPLETED | MESSAGE_USER | MESSAGE_COMMENTARY
-            | RUNTIME_CONTEXT | CONTEXT_COMPACTED => "info",
+            INFO_TOKENS
+            | TASK_STARTED
+            | TASK_COMPLETED
+            | MESSAGE_USER
+            | MESSAGE_COMMENTARY
+            | RUNTIME_CONTEXT
+            | CONTEXT_COMPACTED
+            | CONTEXT_COMPACTED_DUPLICATE
+            | AGENT_SESSION_FOREIGN
+            | PATCH_APPLY_DUPLICATE => "info",
             PATCH_APPLY => {
                 if let Some(success) = event
                     .payload
@@ -306,7 +315,7 @@ impl<W: Write> WorkerConsole<W> {
             }
             TOOL_RESULT | SHELL_RESULT | MCP_RESULT | STDIN_WRITE | COLLAB_SPAWN_AGENT
             | COLLAB_SEND_INPUT | COLLAB_WAIT | COLLAB_CLOSE_AGENT | COLLAB_RESUME_AGENT
-            | WEB_SEARCH | PLAN_UPDATE => {
+            | WEB_SEARCH | WEB_OPEN | PLAN_UPDATE => {
                 if let Some(exit_code) = event.payload.get("exit_code").and_then(ValueExt::as_i64) {
                     if exit_code == 0 {
                         "completed"

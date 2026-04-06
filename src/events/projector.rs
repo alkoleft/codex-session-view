@@ -6,12 +6,13 @@ use serde_json::{Map, Value};
 use crate::events::readers::EventLogFileReader;
 use crate::events::record::EventRecord;
 use crate::events::types::{
-    AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_META, AGENT_SESSION, COLLAB_CLOSE_AGENT,
-    COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT, CONTEXT_COMPACTED,
-    ERROR, FILE_CHANGE, INFO_TOKENS, MCP_CALL, MCP_RESULT, MESSAGE_AGENT, MESSAGE_COMMENTARY,
-    MESSAGE_USER, PATCH_APPLY, PLAN_UPDATE, RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL,
-    SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED, TASK_STARTED, THREAD_STARTED,
-    TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_SEARCH,
+    AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_META, AGENT_SESSION, AGENT_SESSION_FOREIGN,
+    COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT,
+    CONTEXT_COMPACTED, CONTEXT_COMPACTED_DUPLICATE, ERROR, FILE_CHANGE, INFO_TOKENS, MCP_CALL,
+    MCP_RESULT, MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY,
+    PATCH_APPLY_DUPLICATE, PLAN_UPDATE, RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT,
+    STDERR_LINE, STDIN_WRITE, TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL,
+    TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -734,8 +735,12 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
     let payload = event.payload.as_object();
     match event.event_type.as_str() {
         MESSAGE_AGENT => {
+            let role = payload_string(payload, "role")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "assistant".to_string());
             format!(
-                "assistant: {}{}",
+                "{role}: {}{}",
                 summary_text(
                     &payload_string(payload, "text").unwrap_or_default(),
                     100,
@@ -745,8 +750,12 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
             )
         }
         MESSAGE_COMMENTARY => {
+            let role = payload_string(payload, "role")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| "commentary".to_string());
             format!(
-                "commentary: {}{}",
+                "{role}: {}{}",
                 summary_text(
                     &payload_string(payload, "text").unwrap_or_default(),
                     100,
@@ -756,26 +765,28 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
             )
         }
         AGENT_SESSION => {
-            let mut details = Vec::new();
-            if let Some(role) = payload_string(payload, "agent_role") {
-                if !role.is_empty() {
-                    details.push(format!("role={role}"));
-                }
-            }
-            if let Some(nickname) = payload_string(payload, "agent_nickname") {
-                if !nickname.is_empty() {
-                    details.push(format!("nickname={nickname}"));
-                }
-            }
-            if let Some(cwd) = payload_string(payload, "cwd") {
-                if !cwd.is_empty() {
-                    details.push(format!("cwd={}", summary_text(&cwd, 60, full)));
-                }
-            }
+            let details = agent_session_detail(payload, full);
             if details.is_empty() {
                 "ready".to_string()
             } else {
-                format!("ready: {}", details.join(" "))
+                format!("ready: {details}")
+            }
+        }
+        AGENT_SESSION_FOREIGN => {
+            let mut parts = Vec::new();
+            if let Some(foreign_thread_id) = payload_string(payload, "foreign_thread_id") {
+                if !foreign_thread_id.is_empty() {
+                    parts.push(format!("thread={foreign_thread_id}"));
+                }
+            }
+            let details = agent_session_detail(payload, full);
+            if !details.is_empty() {
+                parts.push(details);
+            }
+            if parts.is_empty() {
+                "foreign session meta".to_string()
+            } else {
+                format!("foreign session meta: {}", parts.join(" "))
             }
         }
         AGENT_META => {
@@ -888,6 +899,14 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
                 format!("context compacted: {detail}")
             }
         }
+        CONTEXT_COMPACTED_DUPLICATE => {
+            let detail = payload_string(payload, "duplicate_of").unwrap_or_default();
+            if detail.is_empty() {
+                "context compacted duplicate".to_string()
+            } else {
+                format!("context compacted duplicate: source={detail}")
+            }
+        }
         INFO_TOKENS => {
             let detail = info_tokens_detail(payload);
             if detail.is_empty() {
@@ -900,8 +919,8 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
             if actor_type(event) == "subagent" {
                 let tool_name =
                     payload_string(payload, "tool_name").unwrap_or_else(|| "?".to_string());
-                let detail = if tool_name == "web_search" {
-                    web_search_detail(payload, full)
+                let detail = if is_web_tool_name(&tool_name) {
+                    web_event_detail(payload, full)
                 } else if let Some(command) = command_from_payload(payload) {
                     summarize_command_text(&command, 120, full)
                 } else {
@@ -978,8 +997,16 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
                 format!("patch apply: {detail}")
             }
         }
-        WEB_SEARCH | COLLAB_SPAWN_AGENT | COLLAB_SEND_INPUT | COLLAB_WAIT | COLLAB_CLOSE_AGENT
-        | COLLAB_RESUME_AGENT => format_root_tool_event(
+        PATCH_APPLY_DUPLICATE => {
+            let detail = patch_apply_detail(payload, full);
+            if detail.is_empty() {
+                "patch apply duplicate".to_string()
+            } else {
+                format!("patch apply duplicate: {detail}")
+            }
+        }
+        WEB_SEARCH | WEB_OPEN | COLLAB_SPAWN_AGENT | COLLAB_SEND_INPUT | COLLAB_WAIT
+        | COLLAB_CLOSE_AGENT | COLLAB_RESUME_AGENT => format_root_tool_event(
             payload,
             payload_phase(payload).as_deref() == Some("completed"),
             full,
@@ -1106,13 +1133,21 @@ pub fn categorize_event(event: &EventRecord) -> EventSummaryCategory {
     let payload = event.payload.as_object();
     match event.event_type.as_str() {
         MESSAGE_AGENT => EventSummaryCategory::Assistant,
-        MESSAGE_COMMENTARY | AGENT_SESSION | AGENT_META | MESSAGE_USER | TASK_STARTED
-        | TASK_COMPLETED | RUNTIME_CONTEXT | CONTEXT_COMPACTED | INFO_TOKENS => {
-            EventSummaryCategory::Subagent
-        }
+        MESSAGE_COMMENTARY
+        | AGENT_SESSION
+        | AGENT_SESSION_FOREIGN
+        | AGENT_META
+        | MESSAGE_USER
+        | TASK_STARTED
+        | TASK_COMPLETED
+        | RUNTIME_CONTEXT
+        | CONTEXT_COMPACTED
+        | CONTEXT_COMPACTED_DUPLICATE
+        | INFO_TOKENS
+        | PATCH_APPLY_DUPLICATE => EventSummaryCategory::Subagent,
         TOOL_CALL | TOOL_RESULT | SHELL_CALL | SHELL_RESULT | MCP_CALL | MCP_RESULT
-        | STDIN_WRITE | WEB_SEARCH | COLLAB_SPAWN_AGENT | COLLAB_SEND_INPUT | COLLAB_WAIT
-        | COLLAB_CLOSE_AGENT | COLLAB_RESUME_AGENT => tool_event_category(payload),
+        | STDIN_WRITE | WEB_SEARCH | WEB_OPEN | COLLAB_SPAWN_AGENT | COLLAB_SEND_INPUT
+        | COLLAB_WAIT | COLLAB_CLOSE_AGENT | COLLAB_RESUME_AGENT => tool_event_category(payload),
         PLAN_UPDATE => EventSummaryCategory::Default,
         PATCH_APPLY | FILE_CHANGE => EventSummaryCategory::File,
         TODO_UPDATE => EventSummaryCategory::Todo,
@@ -1133,8 +1168,8 @@ fn format_tool_event(
     let mut label = format!("{prefix} [{tool_name}]");
     let detail = if has_subagent_state(payload) {
         subagent_state_detail(payload, full)
-    } else if tool_name == "web_search" {
-        web_search_detail(payload, full)
+    } else if is_web_tool_name(&tool_name) {
+        web_event_detail(payload, full)
     } else if let Some(command) = command_from_payload(payload) {
         summarize_command_text(&command, 120, full)
     } else {
@@ -1169,7 +1204,7 @@ fn tool_event_category(payload: Option<&Map<String, Value>>) -> EventSummaryCate
     let tool_name = payload_string(payload, "tool_name").unwrap_or_default();
     if subagent_tool_label(&tool_name).is_some() || has_subagent_state(payload) {
         EventSummaryCategory::Subagent
-    } else if tool_name == "web_search" {
+    } else if is_web_tool_name(&tool_name) {
         EventSummaryCategory::Search
     } else if is_command_tool(&tool_name, payload) {
         EventSummaryCategory::Command
@@ -1187,9 +1222,9 @@ fn format_root_tool_event(
     if let Some(label) = subagent_tool_label(&tool_name) {
         return format_tool_event(label, payload, is_result, full);
     }
-    if tool_name == "web_search" {
+    if is_web_tool_name(&tool_name) {
         return format_tool_event(
-            if is_result { "search result" } else { "search" },
+            web_event_label(payload, is_result),
             payload,
             is_result,
             full,
@@ -1313,6 +1348,7 @@ fn is_root_toolish_event_type(event_type: &str) -> bool {
             | MCP_RESULT
             | STDIN_WRITE
             | WEB_SEARCH
+            | WEB_OPEN
             | PLAN_UPDATE
             | COLLAB_SPAWN_AGENT
             | COLLAB_WAIT
@@ -1342,41 +1378,112 @@ fn summarize_command_text(command: &str, limit: usize, full: bool) -> String {
     truncate_command_text(command, limit)
 }
 
-fn web_search_detail(payload: Option<&Map<String, Value>>, full: bool) -> String {
+fn is_web_tool_name(tool_name: &str) -> bool {
+    matches!(tool_name, "web_search" | "web_search_call")
+}
+
+fn web_event_label(payload: Option<&Map<String, Value>>, is_result: bool) -> &'static str {
+    if is_open_page_payload(payload) {
+        if is_result {
+            "open page result"
+        } else {
+            "open page"
+        }
+    } else if is_result {
+        "search result"
+    } else {
+        "search"
+    }
+}
+
+fn web_event_container(payload: Option<&Map<String, Value>>) -> Option<&Map<String, Value>> {
     let input = payload
         .and_then(|obj| obj.get("input"))
         .and_then(Value::as_object);
     let output = payload
         .and_then(|obj| obj.get("output"))
         .and_then(Value::as_object);
-    let container = input.or(output);
-    let Some(container) = container else {
+    input.or(output)
+}
+
+fn web_action_type(payload: Option<&Map<String, Value>>) -> Option<String> {
+    let action = web_event_container(payload)?
+        .get("action")
+        .cloned()
+        .unwrap_or(Value::Null);
+    match action {
+        Value::String(value) => {
+            let value = value.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        }
+        Value::Object(value) => value
+            .get("type")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+fn web_action_url(payload: Option<&Map<String, Value>>) -> Option<String> {
+    web_event_container(payload)?
+        .get("action")
+        .and_then(Value::as_object)
+        .and_then(|action| action.get("url"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn is_open_page_payload(payload: Option<&Map<String, Value>>) -> bool {
+    web_action_type(payload).as_deref() == Some("open_page")
+}
+
+fn web_event_detail(payload: Option<&Map<String, Value>>, full: bool) -> String {
+    let input = payload
+        .and_then(|obj| obj.get("input"))
+        .and_then(Value::as_object);
+    let Some(container) = web_event_container(payload) else {
         return String::new();
     };
     let mut parts = Vec::new();
-    if let Some(query) = container.get("query").and_then(Value::as_str) {
-        if !query.trim().is_empty() {
-            parts.push(format!("query={}", summary_text(query.trim(), 120, full)));
-        } else if input == Some(container) {
+    let query = container
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let action_type = web_action_type(payload);
+    let action_url = web_action_url(payload);
+
+    if action_type.as_deref() == Some("open_page") {
+        if let Some(url) = action_url.as_deref() {
+            parts.push(format!("url={}", summary_text(url, 120, full)));
+        }
+        if let Some(query) = query
+            .as_deref()
+            .filter(|query| Some(*query) != action_url.as_deref())
+        {
+            parts.push(format!("query={}", summary_text(query, 120, full)));
+        }
+        if parts.is_empty() && input == Some(container) {
             parts.push("query=<pending>".to_string());
         }
+        return parts.join(" ");
+    }
+
+    if let Some(query) = query.as_deref() {
+        parts.push(format!("query={}", summary_text(query, 120, full)));
     } else if input == Some(container) {
         parts.push("query=<pending>".to_string());
     }
-    if let Some(action) = container.get("action").and_then(Value::as_object) {
-        if let Some(action_type) = action.get("type").and_then(Value::as_str) {
-            if !action_type.trim().is_empty() {
-                parts.push(format!(
-                    "action={}",
-                    summary_text(action_type.trim(), 40, full)
-                ));
-            }
-        }
-        if let Some(url) = action.get("url").and_then(Value::as_str) {
-            if !url.trim().is_empty() {
-                parts.push(format!("url={}", summary_text(url.trim(), 120, full)));
-            }
-        }
+    if let Some(action_type) = action_type.as_deref() {
+        parts.push(format!("action={}", summary_text(action_type, 40, full)));
+    }
+    if let Some(url) = action_url.as_deref() {
+        parts.push(format!("url={}", summary_text(url, 120, full)));
     }
     parts.join(" ")
 }
@@ -1462,6 +1569,26 @@ fn patch_apply_detail(payload: Option<&Map<String, Value>>, full: bool) -> Strin
         parts.push(format!("output={}", summary_text(&output, 100, full)));
     }
     parts.join(" ")
+}
+
+fn agent_session_detail(payload: Option<&Map<String, Value>>, full: bool) -> String {
+    let mut details = Vec::new();
+    if let Some(role) = payload_string(payload, "agent_role") {
+        if !role.is_empty() {
+            details.push(format!("role={role}"));
+        }
+    }
+    if let Some(nickname) = payload_string(payload, "agent_nickname") {
+        if !nickname.is_empty() {
+            details.push(format!("nickname={nickname}"));
+        }
+    }
+    if let Some(cwd) = payload_string(payload, "cwd") {
+        if !cwd.is_empty() {
+            details.push(format!("cwd={}", summary_text(&cwd, 60, full)));
+        }
+    }
+    details.join(" ")
 }
 
 fn stdin_write_detail(payload: Option<&Map<String, Value>>, full: bool) -> String {

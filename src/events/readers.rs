@@ -14,11 +14,12 @@ use crate::events::payloads::{
 };
 use crate::events::record::{CodexEvent, EventRecord};
 use crate::events::types::{
-    AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_STARTED, COLLAB_CLOSE_AGENT,
-    COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT, CONTEXT_COMPACTED,
-    INFO_TOKENS, MCP_CALL, MCP_RESULT, MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER,
-    PATCH_APPLY, PLAN_UPDATE, RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDIN_WRITE,
-    TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TOOL_CALL, TOOL_RESULT, WEB_SEARCH,
+    AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_SESSION_FOREIGN, AGENT_STARTED,
+    COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT,
+    CONTEXT_COMPACTED, CONTEXT_COMPACTED_DUPLICATE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
+    MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE,
+    PLAN_UPDATE, RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDIN_WRITE,
+    TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TOOL_CALL, TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
 };
 use crate::util::utc_now_iso;
 
@@ -334,4 +335,32 @@ fn is_collab_high_confidence_tool(tool_name: &str) -> bool {
         tool_name,
         "spawn_agent" | "send_input" | "wait" | "wait_agent" | "close_agent" | "resume_agent"
     )
+}
+
+fn is_open_page_action(action: Option<&Value>) -> bool {
+    match action {
+        Some(Value::String(value)) => value.trim() == "open_page",
+        Some(Value::Object(value)) => value
+            .get("type")
+            .and_then(Value::as_str)
+            .map(|value| value.trim() == "open_page")
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn response_item_phase(item: &Map<String, Value>) -> String {
+    if let Some(phase) = item.get("phase").and_then(Value::as_str) {
+        let phase = phase.trim();
+        if !phase.is_empty() {
+            return phase.to_string();
+        }
+    }
+
+    match item.get("status").and_then(Value::as_str) {
+        Some("started" | "in_progress" | "running") => "started".to_string(),
+        Some("updated") => "updated".to_string(),
+        Some("completed" | "failed" | "error" | "cancelled") => "completed".to_string(),
+        _ => "completed".to_string(),
+    }
 }

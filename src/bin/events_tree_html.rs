@@ -514,6 +514,29 @@ mod tests {
     }
 
     #[test]
+    fn render_html_uses_message_role_prefix_when_present() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "role":"system",
+                    "text":"hello"
+                }),
+                2,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains("system: hello"));
+        assert!(!html.contains("assistant: hello"));
+    }
+
+    #[test]
     fn render_html_styles_info_tokens_pairs() {
         let events = vec![
             make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
