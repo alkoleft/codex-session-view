@@ -11,8 +11,8 @@ use codex_worker_rs::events::projector::EventSummaryCategory;
 mod events_tree_shared;
 
 use events_tree_shared::{
-    build_event_tree, load_records_from_run_input, EventEntry, EventNode, EventTree, ThreadNode,
-    TimelineItem,
+    build_event_tree, is_run_input, load_records_any, load_records_from_run_input, EventEntry,
+    EventNode, EventTree, ThreadNode, TimelineItem,
 };
 
 #[derive(Debug, Parser)]
@@ -47,7 +47,17 @@ fn run(cli: Cli) -> AppResult<()> {
         return Err(AppError::EmptyPath(cli.input_path));
     }
 
-    let (source_path, events) = load_records_from_run_input(&cli.input_path)?;
+    let (source_path, events) = if is_run_input(&cli.input_path) {
+        load_records_from_run_input(&cli.input_path)?
+    } else if is_rollout_jsonl_candidate(&cli.input_path) {
+        let events = load_records_any(&cli.input_path)?;
+        (cli.input_path.clone(), events)
+    } else {
+        return Err(AppError::Runner(format!(
+            "invalid input: ожидалась run-директория/артефакт или rollout-*.jsonl, получено {}",
+            cli.input_path.display()
+        )));
+    };
     let tree = build_event_tree(&source_path, &events, cli.text_limit);
     let output_file = cli
         .output_file
@@ -64,6 +74,13 @@ fn run(cli: Cli) -> AppResult<()> {
     }
 
     Ok(())
+}
+
+fn is_rollout_jsonl_candidate(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    file_name.starts_with("rollout-") && file_name.ends_with(".jsonl")
 }
 
 fn default_output_path(source_path: &Path) -> PathBuf {
@@ -414,14 +431,17 @@ fn escape_html(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs;
     use std::path::{Path, PathBuf};
 
     use codex_worker_rs::models::EventRecord;
     use serde_json::json;
     use tempfile::tempdir;
 
-    use super::{default_output_path, render_html};
-    use crate::events_tree_shared::{build_event_tree, load_records_from_run_input, TimelineItem};
+    use super::{default_output_path, render_html, run, Cli};
+    use crate::events_tree_shared::{
+        build_event_tree, is_run_input, load_records_from_run_input, TimelineItem,
+    };
 
     fn make_event(event_type: &str, payload: serde_json::Value, seq: u64) -> EventRecord {
         EventRecord {
@@ -747,6 +767,83 @@ mod tests {
         let tmp = tempdir().expect("temp dir should exist");
         let path = tmp.path();
         assert_eq!(default_output_path(path), path.join("events.tree.html"));
+    }
+
+    #[test]
+    fn run_rejects_non_run_non_rollout_input_with_explicit_invalid_input() {
+        let tmp = tempdir().expect("temp dir should exist");
+        let cli = Cli {
+            input_path: tmp.path().join("events.jsonl"),
+            output_file: Some(tmp.path().join("out.html")),
+            text_limit: 180,
+            no_open: true,
+        };
+
+        let err = run(cli).expect_err("invalid path should be rejected before loading");
+        assert!(err.to_string().contains("invalid input"));
+    }
+
+    #[test]
+    fn run_accepts_rollout_jsonl_as_standalone_candidate() {
+        let tmp = tempdir().expect("temp dir should exist");
+        let input = tmp.path().join("rollout-smoke.jsonl");
+        fs::write(
+            &input,
+            "{\"schema_version\":1,\"ts\":\"2026-04-06T08:47:59Z\",\"task_id\":\"smoke-run\",\"run_id\":\"run-1\",\"seq\":1,\"event_type\":\"thread.started\",\"raw_type\":\"thread.started\",\"parse_status\":\"parsed\",\"payload\":{\"thread_id\":\"root-thread\"}}\n",
+        )
+        .expect("rollout jsonl should be written");
+        let output = tmp.path().join("out.html");
+        let cli = Cli {
+            input_path: input,
+            output_file: Some(output.clone()),
+            text_limit: 180,
+            no_open: true,
+        };
+
+        run(cli).expect("rollout input should be accepted");
+        assert!(output.is_file());
+    }
+
+    #[test]
+    fn run_prefers_run_input_over_rollout_candidate_when_both_match() {
+        let run_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
+            "target/manual-smoke/.codex-worker/tasks/all-operation-emulation--07f4203b/runs/20260406T145552Z--18a3cc56f6037e36-1",
+        );
+        let input = run_dir.join("subagents/rollout-shadow.jsonl");
+        let tmp = tempdir().expect("temp dir should exist");
+        let output = tmp.path().join("out.html");
+
+        assert!(is_run_input(&input));
+        assert!(super::is_rollout_jsonl_candidate(&input));
+
+        let cli = Cli {
+            input_path: input.clone(),
+            output_file: Some(output.clone()),
+            text_limit: 180,
+            no_open: true,
+        };
+
+        run(cli).expect("run-path should win and replay run dir");
+        assert!(output.is_file());
+
+        let html = fs::read_to_string(&output).expect("rendered html should be readable");
+        let run_source_marker = format!(
+            "<div>{}</div>",
+            super::escape_html(&run_dir.display().to_string())
+        );
+        let rollout_source_marker = format!(
+            "<div>{}</div>",
+            super::escape_html(&input.display().to_string())
+        );
+
+        assert!(
+            html.contains(&run_source_marker),
+            "expected run source marker in html: {run_source_marker}"
+        );
+        assert!(
+            !html.contains(&rollout_source_marker),
+            "standalone rollout source marker must be absent when run-path wins: {rollout_source_marker}"
+        );
     }
 
     fn event_counts(events: &[EventRecord]) -> BTreeMap<String, u64> {

@@ -128,6 +128,10 @@ pub fn load_records_from_run_input(input_path: &Path) -> AppResult<(PathBuf, Vec
     Ok((run_dir, replayed.events))
 }
 
+pub fn is_run_input(path: &Path) -> bool {
+    resolve_run_dir(path).is_some()
+}
+
 pub fn build_event_tree(path: &Path, events: &[EventRecord], _text_limit: usize) -> EventTree {
     let task_id = events
         .first()
