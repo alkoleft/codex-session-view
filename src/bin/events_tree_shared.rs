@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use codex_worker_rs::error::{AppError, AppResult};
@@ -130,6 +131,89 @@ pub fn load_records_from_run_input(input_path: &Path) -> AppResult<(PathBuf, Vec
 
 pub fn is_run_input(path: &Path) -> bool {
     resolve_run_dir(path).is_some()
+}
+
+pub fn validate_standalone_rollout_root(path: &Path) -> AppResult<String> {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            AppError::Runner(format!(
+                "standalone rollout: некорректное имя файла {}",
+                path.display()
+            ))
+        })?;
+    if !file_name.starts_with("rollout-") || !file_name.ends_with(".jsonl") {
+        return Err(AppError::Runner(format!(
+            "standalone rollout: ожидался файл rollout-*.jsonl, получено {}",
+            path.display()
+        )));
+    }
+
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            AppError::Runner(format!(
+                "standalone rollout: не удалось определить stem файла {}",
+                path.display()
+            ))
+        })?;
+    let session_id = stem
+        .rsplit('-')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppError::Runner(format!(
+                "standalone rollout: session-id в имени файла пустой: {}",
+                path.display()
+            ))
+        })?
+        .to_string();
+
+    let file = fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut first_line = String::new();
+    if reader.read_line(&mut first_line)? == 0 {
+        return Err(AppError::Runner(format!(
+            "standalone rollout: файл пустой, ожидалась первая строка session_meta: {}",
+            path.display()
+        )));
+    }
+    let first_line = first_line.trim_end_matches(['\r', '\n']);
+    let parsed: Value = serde_json::from_str(first_line).map_err(|err| {
+        AppError::Runner(format!(
+            "standalone rollout: первая строка должна быть JSON session_meta ({}): {err}",
+            path.display()
+        ))
+    })?;
+    if parsed.get("type").and_then(Value::as_str) != Some("session_meta") {
+        return Err(AppError::Runner(format!(
+            "standalone rollout: первая строка должна иметь type=session_meta ({})",
+            path.display()
+        )));
+    }
+
+    let meta_id = parsed
+        .get("payload")
+        .and_then(Value::as_object)
+        .and_then(|payload| payload.get("id"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AppError::Runner(format!(
+                "standalone rollout: session_meta.payload.id отсутствует или не строка ({})",
+                path.display()
+            ))
+        })?;
+    if meta_id != session_id {
+        return Err(AppError::Runner(format!(
+            "standalone rollout: session_meta.payload.id ({meta_id}) не совпадает с session-id из имени файла ({session_id}) в {}",
+            path.display()
+        )));
+    }
+
+    Ok(session_id)
 }
 
 pub fn build_event_tree(path: &Path, events: &[EventRecord], _text_limit: usize) -> EventTree {

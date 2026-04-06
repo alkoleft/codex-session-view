@@ -12,7 +12,7 @@ mod events_tree_shared;
 
 use events_tree_shared::{
     build_event_tree, is_run_input, load_records_any, load_records_from_run_input, EventEntry,
-    EventNode, EventTree, ThreadNode, TimelineItem,
+    EventNode, EventTree, ThreadNode, TimelineItem, validate_standalone_rollout_root,
 };
 
 #[derive(Debug, Parser)]
@@ -50,6 +50,7 @@ fn run(cli: Cli) -> AppResult<()> {
     let (source_path, events) = if is_run_input(&cli.input_path) {
         load_records_from_run_input(&cli.input_path)?
     } else if is_rollout_jsonl_candidate(&cli.input_path) {
+        validate_standalone_rollout_root(&cli.input_path)?;
         let events = load_records_any(&cli.input_path)?;
         (cli.input_path.clone(), events)
     } else {
@@ -786,10 +787,10 @@ mod tests {
     #[test]
     fn run_accepts_rollout_jsonl_as_standalone_candidate() {
         let tmp = tempdir().expect("temp dir should exist");
-        let input = tmp.path().join("rollout-smoke.jsonl");
+        let input = tmp.path().join("rollout-smoke-sub1.jsonl");
         fs::write(
             &input,
-            "{\"schema_version\":1,\"ts\":\"2026-04-06T08:47:59Z\",\"task_id\":\"smoke-run\",\"run_id\":\"run-1\",\"seq\":1,\"event_type\":\"thread.started\",\"raw_type\":\"thread.started\",\"parse_status\":\"parsed\",\"payload\":{\"thread_id\":\"root-thread\"}}\n",
+            "{\"type\":\"session_meta\",\"schema_version\":1,\"ts\":\"2026-04-06T08:47:59Z\",\"task_id\":\"smoke-run\",\"run_id\":\"run-1\",\"seq\":1,\"event_type\":\"thread.started\",\"raw_type\":\"thread.started\",\"parse_status\":\"parsed\",\"payload\":{\"id\":\"sub1\",\"thread_id\":\"root-thread\"}}\n",
         )
         .expect("rollout jsonl should be written");
         let output = tmp.path().join("out.html");
@@ -802,6 +803,72 @@ mod tests {
 
         run(cli).expect("rollout input should be accepted");
         assert!(output.is_file());
+    }
+
+    #[test]
+    fn run_rejects_standalone_rollout_when_first_line_is_not_session_meta() {
+        let tmp = tempdir().expect("temp dir should exist");
+        let input = tmp.path().join("rollout-smoke-sub1.jsonl");
+        fs::write(
+            &input,
+            "{\"schema_version\":1,\"ts\":\"2026-04-06T08:47:59Z\",\"task_id\":\"smoke-run\",\"run_id\":\"run-1\",\"seq\":1,\"event_type\":\"thread.started\",\"raw_type\":\"thread.started\",\"parse_status\":\"parsed\",\"payload\":{\"thread_id\":\"root-thread\"}}\n",
+        )
+        .expect("rollout jsonl should be written");
+        let cli = Cli {
+            input_path: input,
+            output_file: Some(tmp.path().join("out.html")),
+            text_limit: 180,
+            no_open: true,
+        };
+
+        let err = run(cli).expect_err("standalone rollout must fail on invalid root line");
+        let message = err.to_string();
+        assert!(message.contains("standalone rollout"));
+        assert!(!message.contains("invalid input"));
+    }
+
+    #[test]
+    fn run_rejects_standalone_rollout_when_session_id_mismatches_filename_suffix() {
+        let tmp = tempdir().expect("temp dir should exist");
+        let input = tmp.path().join("rollout-smoke-sub1.jsonl");
+        fs::write(
+            &input,
+            "{\"type\":\"session_meta\",\"schema_version\":1,\"ts\":\"2026-04-06T08:47:59Z\",\"task_id\":\"smoke-run\",\"run_id\":\"run-1\",\"seq\":1,\"event_type\":\"thread.started\",\"raw_type\":\"thread.started\",\"parse_status\":\"parsed\",\"payload\":{\"id\":\"sub2\",\"thread_id\":\"root-thread\"}}\n",
+        )
+        .expect("rollout jsonl should be written");
+        let cli = Cli {
+            input_path: input,
+            output_file: Some(tmp.path().join("out.html")),
+            text_limit: 180,
+            no_open: true,
+        };
+
+        let err = run(cli).expect_err("standalone rollout must fail on mismatched id");
+        let message = err.to_string();
+        assert!(message.contains("не совпадает"));
+        assert!(!message.contains("invalid input"));
+    }
+
+    #[test]
+    fn run_rejects_standalone_rollout_with_empty_filename_session_id_suffix() {
+        let tmp = tempdir().expect("temp dir should exist");
+        let input = tmp.path().join("rollout-smoke-.jsonl");
+        fs::write(
+            &input,
+            "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sub1\"}}\n",
+        )
+        .expect("rollout jsonl should be written");
+        let cli = Cli {
+            input_path: input,
+            output_file: Some(tmp.path().join("out.html")),
+            text_limit: 180,
+            no_open: true,
+        };
+
+        let err = run(cli).expect_err("empty suffix after last '-' must fail");
+        let message = err.to_string();
+        assert!(message.contains("session-id"));
+        assert!(!message.contains("invalid input"));
     }
 
     #[test]
