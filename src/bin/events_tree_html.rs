@@ -162,10 +162,49 @@ fn render_html(tree: &EventTree) -> String {
     out.push_str(
         "body{margin:0;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#f4f1ea;color:#1f2937;}\
         .page{max-width:1440px;margin:0 auto;padding:24px;}\
-        .hero{background:linear-gradient(135deg,#fdf6e3,#e7f0ff);border:1px solid #d8dee9;border-radius:18px;padding:20px 24px;box-shadow:0 12px 32px rgba(15,23,42,.08);}\
-        h1{margin:0 0 8px;font-size:28px;line-height:1.2;}\
-        .meta{display:flex;flex-wrap:wrap;gap:10px 12px;margin-top:10px;}\
+        .hero{display:flex;flex-direction:column;gap:18px;background:linear-gradient(135deg,#fdf6e3,#e7f0ff);border:1px solid #d8dee9;border-radius:18px;padding:24px;box-shadow:0 12px 32px rgba(15,23,42,.08);}\
+        .hero-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;}\
+        .hero-title{display:flex;flex-direction:column;gap:6px;min-width:0;}\
+        h1{margin:0;font-size:28px;line-height:1.2;}\
+        .hero-lead{color:#475569;max-width:72ch;}\
+        .hero-source{display:flex;flex-direction:column;gap:6px;min-width:min(420px,100%);max-width:100%;padding:12px 14px;border:1px solid #d8dee9;border-radius:16px;background:rgba(255,255,255,.72);}\
+        .hero-source-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;}\
+        .hero-source-path{white-space:pre-wrap;word-break:break-word;color:#334155;}\
+        .hero-source-path code{background:none;border:none;padding:0;color:inherit;}\
+        .hero-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}\
+        .hero-card{display:flex;flex-direction:column;gap:8px;min-width:0;padding:14px 16px;border:1px solid #d8dee9;border-radius:16px;background:rgba(255,255,255,.78);}\
+        .hero-card-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;}\
+        .hero-card-value{font-size:16px;font-weight:700;color:#0f172a;white-space:pre-wrap;word-break:break-word;}\
+        .hero-card-value code{background:none;border:none;padding:0;color:inherit;font-size:inherit;}\
+        .hero-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}\
+        .hero-metric{display:flex;flex-direction:column;gap:2px;padding-top:4px;border-top:1px dashed #d8dee9;}\
+        .hero-metric-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;}\
+        .hero-metric-value{font-size:22px;font-weight:800;color:#0f172a;line-height:1.1;}\
+        .hero-startup{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;}\
+        .hero-base{display:flex;flex-direction:column;gap:8px;}\
+        .hero-base .inset-block{margin-top:0;}\
+        .hero-startup-card{display:flex;flex-direction:column;gap:8px;min-width:0;padding:12px 14px;border:1px solid #d8dee9;border-radius:14px;background:rgba(255,255,255,.62);}\
+        .hero-startup-value{color:#334155;white-space:pre-wrap;word-break:break-word;}\
+        .hero-startup-value code{background:none;border:none;padding:0;color:inherit;font-size:inherit;}\
+        .hero-startup-rows{display:flex;flex-direction:column;gap:8px;}\
+        .hero-startup-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding-top:8px;border-top:1px dashed #d8dee9;}\
+        .hero-startup-row:first-child{padding-top:0;border-top:none;}\
+        .hero-startup-row-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;flex:0 0 auto;}\
+        .hero-startup-row-value{min-width:0;text-align:right;color:#0f172a;white-space:pre-wrap;word-break:break-word;}\
+        .hero-startup-row-value code{background:none;border:none;padding:0;color:inherit;font-size:inherit;}\
         .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:#fff;border:1px solid #d8dee9;color:#334155;}\
+        .inset-block{position:relative;margin-top:8px;padding:18px 14px 12px;border:1px solid #d8dee9;border-radius:14px;background:rgba(255,255,255,.94);box-shadow:inset 0 1px 0 rgba(255,255,255,.85);}\
+        .inset-block.inline-title{padding-top:14px;}\
+        .inset-block-title{position:absolute;top:0;left:14px;transform:translateY(-50%);display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:#ece8df;border:1px solid #d8dee9;color:#475569;font-size:12px;font-weight:600;}\
+        .inset-block-title.inline-title{display:block;position:static;transform:none;margin-bottom:14px;padding:0;border:none;border-radius:0;background:none;font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;}\
+        .inset-block-body{display:flex;flex-direction:column;gap:10px;min-width:0;}\
+        .inset-block-footer{display:flex;justify-content:flex-end;align-items:center;margin-top:8px;font-size:12px;color:#64748b;}\
+        .inset-block .message-collapse{width:100%;}\
+        .shell-block-command{white-space:pre-wrap;word-break:break-word;font-size:15px;line-height:1.45;color:#0f172a;}\
+        .shell-block-output{color:#475569;}\
+        .shell-block-empty{color:#94a3b8;}\
+        .shell-block-status{display:inline-flex;align-items:center;gap:6px;}\
+        .shell-block-status.is-failure{color:#b91c1c;}\
         .tree{margin-top:24px;}\
         .children{margin:16px 0 0 28px;padding-left:18px;border-left:3px solid #d8dee9;}\
         details.thread{margin:14px 0;border:1px solid #d8dee9;border-radius:16px;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,.05);}\
@@ -216,8 +255,9 @@ fn render_html(tree: &EventTree) -> String {
         .cat-todo{background:#ecfeff;color:#155e75;border-color:#a5f3fc;}\
         .cat-error{background:#fee2e2;color:#b91c1c;border-color:#fecaca;}\
         .empty{margin-top:10px;padding:14px;border:1px dashed #d8dee9;border-radius:12px;color:#64748b;background:#fafaf9;}\
-        @media (max-width:1200px){.event-card{grid-template-columns:88px 140px 150px 130px 100px;}.event-card.has-subagent{grid-template-columns:88px 140px 160px 150px 130px 100px;}}\
-        @media (max-width:980px){.event-footnote{padding:0 16px;}.event-card{grid-template-columns:1fr;}.event-key{margin-bottom:2px;}}\
+        @media (max-width:1200px){.hero-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.event-card{grid-template-columns:88px 140px 150px 130px 100px;}.event-card.has-subagent{grid-template-columns:88px 140px 160px 150px 130px 100px;}}\
+        @media (max-width:980px){.hero-source{min-width:0;width:100%;}.event-footnote{padding:0 16px;}.event-card{grid-template-columns:1fr;}.event-key{margin-bottom:2px;}}\
+        @media (max-width:640px){.page{padding:16px;}.hero{padding:18px;}.hero-grid{grid-template-columns:1fr;}}\
         code{background:#f8fafc;padding:2px 6px;border-radius:6px;border:1px solid #e2e8f0;}",
     );
     out.push_str("</style><script>");
@@ -225,34 +265,51 @@ fn render_html(tree: &EventTree) -> String {
         "function toggleMessageBlock(button){var block=button.closest('.message-collapse');if(!block){return;}var expanded=block.getAttribute('data-expanded')==='true';var nextState=expanded?'false':'true';block.setAttribute('data-expanded',nextState);button.setAttribute('aria-expanded',nextState);button.textContent=expanded?'see full':'collapse';}",
     );
     out.push_str("</script></head><body><main class=\"page\">");
+    let startup_cards = tree
+        .standalone_startup_metadata
+        .as_ref()
+        .map(render_startup_metadata_cards)
+        .unwrap_or_default();
+    let base_instructions_panel = tree
+        .standalone_startup_metadata
+        .as_ref()
+        .and_then(render_base_instructions_panel);
+    let startup_cards_block = if startup_cards.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"hero-startup\">{startup_cards}</div>")
+    };
+    let base_instructions_block = base_instructions_panel
+        .as_deref()
+        .map(|panel| format!("<div class=\"hero-base\">{panel}</div>"))
+        .unwrap_or_default();
     let _ = write!(
         out,
-        "<section class=\"hero\"><h1>Дерево событий</h1><div>{}</div><div class=\"meta\">\
-         <span class=\"pill\">task_id <code>{}</code></span>\
-         <span class=\"pill\">run_id <code>{}</code></span>\
-         <span class=\"pill\">events <strong>{}</strong></span>\
-         <span class=\"pill\">threads <strong>{}</strong></span>\
-         <span class=\"pill\">root <code>{}</code></span>",
+        "<section class=\"hero\">\
+         <div class=\"hero-head\">\
+         <div class=\"hero-title\"><h1>Дерево событий</h1><div class=\"hero-lead\">Потоки, операции и системные метаданные одного run-лога в одной ленте.</div></div>\
+         <div class=\"hero-source\"><span class=\"hero-source-label\">Источник</span><div class=\"hero-source-path\"><code>{}</code></div></div>\
+         </div>\
+         <div class=\"hero-grid\">{}{}{}{}\
+         </div>{}{}\
+         </section>",
         escape_html(&tree.source_path.display().to_string()),
-        escape_html(&tree.task_id),
-        escape_html(&tree.run_id),
-        tree.event_count,
-        tree.thread_count,
-        escape_html(&tree.root_thread_id),
+        render_hero_card(
+            "task_id",
+            &format!("<code>{}</code>", escape_html(&tree.task_id)),
+        ),
+        render_hero_card(
+            "run_id",
+            &format!("<code>{}</code>", escape_html(&tree.run_id)),
+        ),
+        render_hero_overview_card(tree.event_count, tree.thread_count),
+        render_hero_card(
+            "root",
+            &format!("<code>{}</code>", escape_html(&tree.root_thread_id)),
+        ),
+        startup_cards_block,
+        base_instructions_block,
     );
-    if let Some(startup) = tree.standalone_startup_metadata.as_ref() {
-        for (key, value) in startup {
-            let rendered_value =
-                serde_json::to_string(value).unwrap_or_else(|_| "\"<invalid-json>\"".to_string());
-            let _ = write!(
-                out,
-                "<span class=\"pill\">startup:{} <code>{}</code></span>",
-                escape_html(key),
-                escape_html(&rendered_value),
-            );
-        }
-    }
-    out.push_str("</div></section>");
     out.push_str("<section class=\"tree\">");
     for node in &tree.roots {
         render_thread_html(&mut out, node, 0);
@@ -262,7 +319,8 @@ fn render_html(tree: &EventTree) -> String {
         render_event_flow(&mut out, &tree.orphan_events);
         out.push_str("</div></details></section>");
     }
-    out.push_str("</section></main></body></html>");
+    out.push_str("</section>");
+    out.push_str("</main></body></html>");
     out
 }
 
@@ -387,6 +445,160 @@ fn render_event_node(
 const TEXT_COLLAPSE_CHAR_LIMIT: usize = 420;
 const TEXT_COLLAPSE_LINE_LIMIT: usize = 6;
 
+fn render_hero_card(label: &str, value_html: &str) -> String {
+    format!(
+        "<div class=\"hero-card\"><span class=\"hero-card-label\">{}</span><div class=\"hero-card-value\">{}</div></div>",
+        escape_html(label),
+        value_html,
+    )
+}
+
+fn render_hero_overview_card(event_count: usize, thread_count: usize) -> String {
+    format!(
+        "<div class=\"hero-card\"><span class=\"hero-card-label\">overview</span><div class=\"hero-metrics\">\
+         <div class=\"hero-metric\"><span class=\"hero-metric-label\">events</span><span class=\"hero-metric-value\">{}</span></div>\
+         <div class=\"hero-metric\"><span class=\"hero-metric-label\">threads</span><span class=\"hero-metric-value\">{}</span></div>\
+         </div></div>",
+        event_count,
+        thread_count,
+    )
+}
+
+fn render_startup_metadata_cards(startup: &serde_json::Map<String, serde_json::Value>) -> String {
+    let mut out = String::new();
+    for (key, value) in startup {
+        if key == "base_instructions" {
+            continue;
+        }
+        out.push_str(&render_startup_metadata_card(key, value));
+    }
+    out
+}
+
+fn render_startup_metadata_card(key: &str, value: &serde_json::Value) -> String {
+    format!(
+        "<div class=\"hero-startup-card\"><span class=\"hero-card-label\">{}</span>{}</div>",
+        escape_html(key),
+        render_startup_metadata_body(value),
+    )
+}
+
+fn render_startup_metadata_body(value: &serde_json::Value) -> String {
+    if let Some(entries) = startup_metadata_entries(value) {
+        let mut out = String::from("<div class=\"hero-startup-rows\">");
+        for (entry_key, entry_value) in entries {
+            let _ = write!(
+                out,
+                "<div class=\"hero-startup-row\"><span class=\"hero-startup-row-label\">{}</span><div class=\"hero-startup-row-value\"><code>{}</code></div></div>",
+                escape_html(&entry_key),
+                escape_html(&entry_value),
+            );
+        }
+        out.push_str("</div>");
+        return out;
+    }
+
+    let rendered_value = render_startup_metadata_value(value);
+    format!(
+        "<div class=\"hero-startup-value\"><code>{}</code></div>",
+        escape_html(&rendered_value),
+    )
+}
+
+fn startup_metadata_entries(value: &serde_json::Value) -> Option<Vec<(String, String)>> {
+    match value {
+        serde_json::Value::Object(object) => Some(
+            object
+                .iter()
+                .map(|(entry_key, entry_value)| {
+                    (entry_key.clone(), render_startup_metadata_value(entry_value))
+                })
+                .collect(),
+        ),
+        serde_json::Value::String(text) => serde_json::from_str::<serde_json::Value>(text)
+            .ok()
+            .and_then(|parsed| startup_metadata_entries(&parsed)),
+        _ => None,
+    }
+}
+
+fn render_base_instructions_panel(
+    startup: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    let value = startup.get("base_instructions")?;
+    let rendered_value = render_startup_metadata_text(value);
+    let content = if should_collapse_text_content(&rendered_value) {
+        render_collapsible_text_block(&rendered_value)
+    } else {
+        format!(
+            "<div class=\"summary-text\">{}</div>",
+            escape_html(&rendered_value)
+        )
+    };
+    Some(render_inset_block(
+        "base_instructions",
+        &content,
+        None,
+        "meta-inset-block",
+        true,
+    ))
+}
+
+fn render_startup_metadata_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) | serde_json::Value::Null => {
+            value.to_string()
+        }
+        _ => serde_json::to_string(value).unwrap_or_else(|_| "<invalid-json>".to_string()),
+    }
+}
+
+fn render_startup_metadata_text(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(text) => text.clone(),
+        serde_json::Value::Object(object) => object
+            .get("text")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| {
+                serde_json::to_string_pretty(value).unwrap_or_else(|_| "<invalid-json>".to_string())
+            }),
+        _ => serde_json::to_string_pretty(value)
+            .unwrap_or_else(|_| "<invalid-json>".to_string()),
+    }
+}
+
+fn render_inset_block(
+    title: &str,
+    body_html: &str,
+    footer_html: Option<&str>,
+    class_name: &str,
+    inline_title: bool,
+) -> String {
+    let footer = footer_html
+        .map(|content| format!("<div class=\"inset-block-footer\">{content}</div>"))
+        .unwrap_or_default();
+    let block_class = if inline_title {
+        format!("inset-block {class_name} inline-title")
+    } else {
+        format!("inset-block {class_name}")
+    };
+    let title_class = if inline_title {
+        "inset-block-title inline-title"
+    } else {
+        "inset-block-title"
+    };
+    format!(
+        "<div class=\"{}\"><span class=\"{}\">{}</span><div class=\"inset-block-body\">{}{}</div></div>",
+        block_class,
+        title_class,
+        escape_html(title),
+        body_html,
+        footer,
+    )
+}
+
 fn render_summary_block(event: &EventEntry) -> String {
     if event.summary_pairs.is_empty() {
         if should_collapse_summary(event) {
@@ -458,24 +670,8 @@ fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mu
     } else {
         "event-card has-subagent"
     };
-    let summary_block = render_summary_block(event);
-    let aggregated_output_block = event
-        .aggregated_output
-        .as_deref()
-        .map(|output| {
-            let output_block = if event.event_type == SHELL_RESULT
-                && should_collapse_text_content(output)
-            {
-                render_collapsible_text_block(output)
-            } else {
-                format!("<div class=\"summary-text\">{}</div>", escape_html(output))
-            };
-            format!(
-                "<div class=\"event-cell event-detail\"><span class=\"event-key\">aggregated_output</span>{}</div>",
-                output_block
-            )
-        })
-        .unwrap_or_default();
+    let summary_cell = render_event_summary_cell(event);
+    let aggregated_output_block = render_event_detail_block(event);
     let token_footnote = render_token_footnote(event, last_token_usage);
     let _ = write!(
         out,
@@ -486,7 +682,7 @@ fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mu
          <div class=\"event-cell\"><span class=\"event-key\">event_type</span><span class=\"badge {}\">{}</span></div>\
          <div class=\"event-cell\"><span class=\"event-key\">raw_type</span>{}</div>\
          <div class=\"event-cell\"><span class=\"event-key\">parse</span>{}</div>\
-         <div class=\"event-cell event-summary\"><span class=\"event-key\">summary</span>{}</div>{}\
+         {}{}\
          </article>{}",
         event_card_class,
         event.seq,
@@ -499,10 +695,80 @@ fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mu
         escape_html(&event.event_type),
         escape_html(&event.raw_type),
         escape_html(&event.parse_status),
-        summary_block,
+        summary_cell,
         aggregated_output_block,
         token_footnote,
     );
+}
+
+fn render_event_summary_cell(event: &EventEntry) -> String {
+    if event.event_type == SHELL_RESULT {
+        return String::new();
+    }
+
+    format!(
+        "<div class=\"event-cell event-summary\"><span class=\"event-key\">summary</span>{}</div>",
+        render_summary_block(event)
+    )
+}
+
+fn render_event_detail_block(event: &EventEntry) -> String {
+    if let Some(shell_block) = render_shell_result_block(event) {
+        return format!("<div class=\"event-cell event-detail\">{shell_block}</div>");
+    }
+
+    event.aggregated_output
+        .as_deref()
+        .map(|output| {
+            format!(
+                "<div class=\"event-cell event-detail\"><span class=\"event-key\">aggregated_output</span><div class=\"summary-text\">{}</div></div>",
+                escape_html(output)
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn render_shell_result_block(event: &EventEntry) -> Option<String> {
+    if event.event_type != SHELL_RESULT {
+        return None;
+    }
+    if !matches!(
+        event.tool_name.as_deref(),
+        Some("command_execution" | "exec_command")
+    ) {
+        return None;
+    }
+
+    let command = event
+        .shell_command
+        .as_deref()
+        .map(|command| format!("<div class=\"shell-block-command\">$ {}</div>", escape_html(command)))
+        .unwrap_or_default();
+    let output = match event.aggregated_output.as_deref() {
+        Some(output) if should_collapse_text_content(output) => render_collapsible_text_block(output),
+        Some(output) => format!("<div class=\"summary-text shell-block-output\">{}</div>", escape_html(output)),
+        None => "<div class=\"summary-text shell-block-output shell-block-empty\">Нет вывода</div>".to_string(),
+    };
+    let footer = render_shell_result_status(event.shell_exit_code);
+    let body = format!("{command}<div class=\"shell-block-output-wrap\">{output}</div>");
+    Some(render_inset_block(
+        "Shell",
+        &body,
+        Some(&footer),
+        "shell-block",
+        true,
+    ))
+}
+
+fn render_shell_result_status(exit_code: Option<i32>) -> String {
+    match exit_code {
+        Some(0) => "<span class=\"shell-block-status is-success\">&#10003; Успех</span>".to_string(),
+        Some(code) => format!(
+            "<span class=\"shell-block-status is-failure\">&#10005; Код {}</span>",
+            code
+        ),
+        None => "<span class=\"shell-block-status\">Код неизвестен</span>".to_string(),
+    }
 }
 
 fn render_token_footnote(event: &EventEntry, last_token_usage: &mut TokenUsage) -> String {
@@ -747,7 +1013,7 @@ mod tests {
     }
 
     #[test]
-    fn render_html_includes_standalone_startup_metadata_pills() {
+    fn render_html_includes_standalone_startup_metadata_cards() {
         let events = vec![make_event(
             "thread.started",
             json!({"thread_id":"root-thread"}),
@@ -756,6 +1022,49 @@ mod tests {
         let startup = serde_json::Map::from_iter([
             ("id".to_string(), json!("sub1")),
             ("approval_policy".to_string(), json!("never")),
+            ("model".to_string(), json!("gpt-5")),
+            (
+                "git".to_string(),
+                json!({
+                    "branch":"implementation-orchestrator/codex-worker-rs-mvp-stage-0-3",
+                    "commit_hash":"0369291d3f2b5edb8c02a512abef201949b2d06b"
+                }),
+            ),
+        ]);
+        let tree = build_event_tree_with_standalone_startup_metadata(
+            Path::new("/tmp/rollout-smoke-sub1.jsonl"),
+            &events,
+            Some(startup),
+            120,
+        );
+
+        let html = render_html(&tree);
+
+        assert!(html.contains("class=\"hero-grid\""));
+        assert!(html.contains("class=\"hero-startup\""));
+        assert!(html.contains("class=\"hero-startup-card\"><span class=\"hero-card-label\">id<"));
+        assert!(html.contains("class=\"hero-startup-card\"><span class=\"hero-card-label\">approval_policy<"));
+        assert!(html.contains("class=\"hero-startup-card\"><span class=\"hero-card-label\">model<"));
+        assert!(html.contains("class=\"hero-startup-card\"><span class=\"hero-card-label\">git<"));
+        assert!(html.contains("class=\"hero-startup-row-label\">branch<"));
+        assert!(html.contains("class=\"hero-startup-row-label\">commit_hash<"));
+        assert!(html.contains("implementation-orchestrator/codex-worker-rs-mvp-stage-0-3"));
+        assert!(html.contains("0369291d3f2b5edb8c02a512abef201949b2d06b"));
+        assert!(html.contains(">never<"));
+    }
+
+    #[test]
+    fn render_html_collapses_startup_base_instructions() {
+        let events = vec![make_event(
+            "thread.started",
+            json!({"thread_id":"root-thread"}),
+            1,
+        )];
+        let startup = serde_json::Map::from_iter([
+            (
+                "base_instructions".to_string(),
+                json!({"text": "instruction line\n".repeat(40)}),
+            ),
             ("model".to_string(), json!("gpt-5")),
         ]);
         let tree = build_event_tree_with_standalone_startup_metadata(
@@ -767,10 +1076,15 @@ mod tests {
 
         let html = render_html(&tree);
 
-        assert!(html.contains("startup:id"));
-        assert!(html.contains("startup:approval_policy"));
-        assert!(html.contains("startup:model"));
-        assert!(html.contains("&quot;never&quot;"));
+        assert!(html.contains(">base_instructions<"));
+        assert!(html.contains("class=\"hero-base\""));
+        assert!(html.contains("class=\"inset-block meta-inset-block inline-title\""));
+        assert!(html.contains("class=\"inset-block-title inline-title\">base_instructions<"));
+        assert!(html.contains("class=\"inset-block-body\"><div class=\"message-collapse\""));
+        assert!(html.contains("instruction line"));
+        assert!(html.contains(">see full<"));
+        assert!(html.find("class=\"hero-base\"").expect("base instructions block should exist")
+            < html.find("class=\"tree\"").expect("tree section should exist"));
     }
 
     #[test]
@@ -1030,11 +1344,14 @@ mod tests {
         let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
         let html = render_html(&tree);
 
-        assert!(html.contains("<span class=\"event-key\">aggregated_output</span><div class=\"message-collapse\""));
+        assert!(html.contains("class=\"inset-block shell-block inline-title\""));
+        assert!(html.contains("class=\"inset-block-title inline-title\">Shell<"));
+        assert!(html.contains("$ printf &#39;shell-output-line\\n&#39;"));
         assert!(html.contains("class=\"summary-text message-preview\""));
         assert!(html.contains("onclick=\"toggleMessageBlock(this)\""));
         assert!(html.contains(">see full<"));
         assert!(html.contains("shell-output-line"));
+        assert!(!html.contains("<span class=\"event-key\">summary</span><div class=\"summary-text\">command ok"));
     }
 
     #[test]
@@ -1059,8 +1376,40 @@ mod tests {
         let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
         let html = render_html(&tree);
 
-        assert!(html.contains("aggregated_output"));
+        assert!(html.contains("class=\"inset-block shell-block inline-title\""));
+        assert!(html.contains("class=\"inset-block-title inline-title\">Shell<"));
+        assert!(html.contains("$ printf &#39;a\\nb\\n&#39;"));
         assert!(html.contains("a\nb"));
+        assert!(html.contains("&#10003; Успех"));
+        assert!(!html.contains("<span class=\"event-key\">summary</span><div class=\"summary-text\">command ok"));
+    }
+
+    #[test]
+    fn render_html_shows_shell_block_without_output() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "shell.result",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-1",
+                    "input":{"command":"git diff --stat"},
+                    "exit_code":0,
+                    "output":""
+                }),
+                2,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains("class=\"inset-block shell-block inline-title\""));
+        assert!(html.contains("$ git diff --stat"));
+        assert!(html.contains("Нет вывода"));
+        assert!(html.contains("&#10003; Успех"));
     }
 
     #[test]
@@ -1323,11 +1672,11 @@ mod tests {
 
         let html = fs::read_to_string(&output).expect("rendered html should be readable");
         let run_source_marker = format!(
-            "<div>{}</div>",
+            "<div class=\"hero-source-path\"><code>{}</code></div>",
             super::escape_html(&run_dir.display().to_string())
         );
         let rollout_source_marker = format!(
-            "<div>{}</div>",
+            "<div class=\"hero-source-path\"><code>{}</code></div>",
             super::escape_html(&input.display().to_string())
         );
 

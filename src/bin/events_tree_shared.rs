@@ -42,6 +42,8 @@ pub struct EventEntry {
     pub operation_id: Option<String>,
     pub phase: Option<String>,
     pub aggregated_output: Option<String>,
+    pub shell_command: Option<String>,
+    pub shell_exit_code: Option<i32>,
     pub summary_pairs: Vec<(String, String)>,
     pub input_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
@@ -1096,6 +1098,8 @@ fn format_event_entry(
                 _ => None,
             }),
         aggregated_output: extract_command_aggregated_output(&event.event_type, payload),
+        shell_command: extract_shell_command(&event.event_type, payload),
+        shell_exit_code: extract_shell_exit_code(&event.event_type, payload),
         summary_pairs: extract_summary_pairs(&event.event_type, payload),
         input_tokens: extract_token_value(&event.event_type, payload, "input_tokens"),
         cached_input_tokens: extract_token_value(&event.event_type, payload, "cached_input_tokens"),
@@ -1165,13 +1169,7 @@ fn extract_command_aggregated_output(
     event_type: &str,
     payload: Option<&serde_json::Map<String, Value>>,
 ) -> Option<String> {
-    if event_type != SHELL_RESULT {
-        return None;
-    }
-    let tool_name = payload
-        .and_then(|obj| obj.get("tool_name"))
-        .and_then(Value::as_str)?;
-    if !matches!(tool_name, "command_execution" | "exec_command") {
+    if !is_command_shell_result(event_type, payload) {
         return None;
     }
     let rendered = payload
@@ -1184,6 +1182,63 @@ fn extract_command_aggregated_output(
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn extract_shell_command(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    if !is_command_shell_result(event_type, payload) {
+        return None;
+    }
+
+    let input = payload.and_then(|obj| obj.get("input")).and_then(Value::as_object)?;
+    for key in ["command", "cmd"] {
+        let Some(value) = input.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+fn extract_shell_exit_code(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<i32> {
+    if !is_command_shell_result(event_type, payload) {
+        return None;
+    }
+
+    payload
+        .and_then(|obj| obj.get("exit_code"))
+        .and_then(Value::as_i64)
+        .and_then(|code| {
+            if (i32::MIN as i64..=i32::MAX as i64).contains(&code) {
+                Some(code as i32)
+            } else {
+                None
+            }
+        })
+}
+
+fn is_command_shell_result(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> bool {
+    if event_type != SHELL_RESULT {
+        return false;
+    }
+
+    matches!(
+        payload
+            .and_then(|obj| obj.get("tool_name"))
+            .and_then(Value::as_str),
+        Some("command_execution" | "exec_command")
+    )
 }
 
 fn render_event_value(value: &Value) -> String {
