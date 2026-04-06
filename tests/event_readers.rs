@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 
 use codex_worker_rs::events::payloads::PayloadObject;
 use codex_worker_rs::events::readers::{
@@ -1311,6 +1312,351 @@ fn subagent_event_msg_agent_message_and_meta_normalization() {
     assert_eq!(
         unknown_meta.payload["raw"]["payload"]["type"].as_str(),
         Some("custom_meta")
+    );
+}
+
+#[test]
+fn subagent_legacy_event_msg_exec_command_end_is_normalized() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let started_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"exec-1","arguments":"{\"cmd\":\"pwd\"}"}}"#,
+    )
+    .expect("json should parse");
+    reader
+        .parse_subagent_session_payload(
+            24,
+            &started_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("function_call should produce event");
+
+    let legacy_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"exec_command_end","call_id":"exec-1","command":["/bin/bash","-lc","pwd"],"cwd":"/repo","status":"completed","aggregated_output":"/repo\n","stderr":"","exit_code":0,"process_id":"123","source":"unified_exec","duration":{"secs":0,"nanos":1},"parsed_cmd":[{"type":"search","cmd":"pwd"}],"formatted_output":"formatted","turn_id":"turn-1"}}"#,
+    )
+    .expect("json should parse");
+    let event = reader
+        .parse_subagent_session_payload(
+            25,
+            &legacy_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("exec_command_end should produce event");
+
+    assert_eq!(event.event_type, "shell.result");
+    assert_eq!(event.payload["tool_name"].as_str(), Some("exec_command"));
+    assert_eq!(event.payload["tool_use_id"].as_str(), Some("exec-1"));
+    assert_eq!(event.payload["phase"].as_str(), Some("completed"));
+    assert_eq!(event.payload["status"].as_str(), Some("completed"));
+    assert_eq!(event.payload["output"].as_str(), Some("/repo\n"));
+    assert_eq!(event.payload["exit_code"].as_i64(), Some(0));
+    assert_eq!(
+        event.payload["duplicate_of"].as_str(),
+        Some("response_item.function_call_output")
+    );
+}
+
+#[test]
+fn subagent_legacy_event_msg_collab_end_events_are_normalized() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let started_payloads = [
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"spawn-1","arguments":"{\"goal\":\"review\"}"}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"wait_agent","call_id":"wait-1","arguments":"{\"targets\":[\"sub-1\"]}"}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"close_agent","call_id":"close-1","arguments":"{\"target\":\"sub-1\"}"}}"#,
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"send_input","call_id":"send-1","arguments":"{\"target\":\"sub-1\",\"message\":\"continue\"}"}}"#,
+    ];
+
+    for (index, payload) in started_payloads.iter().enumerate() {
+        let parsed: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(payload).expect("json should parse");
+        reader
+            .parse_subagent_session_payload(
+                30 + index as u64,
+                &parsed,
+                imported,
+                "parent-1",
+                "thread-1",
+                &mut call_names,
+                &mut tool_counts,
+                &mut subagent_counts,
+            )
+            .expect("function_call should produce event");
+    }
+
+    let spawn_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"collab_agent_spawn_end","call_id":"spawn-1","sender_thread_id":"thread-1","new_thread_id":"sub-1","new_agent_nickname":"Ada","new_agent_role":"reviewer","prompt":"review this","status":"pending_init","model":"gpt-5","reasoning_effort":"high"}}"#,
+    )
+    .expect("json should parse");
+    let spawn = reader
+        .parse_subagent_session_payload(
+            40,
+            &spawn_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("collab_agent_spawn_end should produce event");
+    assert_eq!(spawn.event_type, "collab.spawn_agent");
+    assert_eq!(
+        spawn.payload["receiver_thread_ids"][0].as_str(),
+        Some("sub-1")
+    );
+    assert_eq!(
+        spawn.payload["detection_source"].as_str(),
+        Some("legacy_event_msg")
+    );
+    assert_eq!(spawn.payload["status"].as_str(), Some("pending_init"));
+
+    let wait_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"collab_waiting_end","call_id":"wait-1","sender_thread_id":"thread-1","agent_statuses":[{"thread_id":"sub-1","agent_nickname":"Ada","agent_role":"reviewer","status":{"completed":"done"}}],"statuses":{"sub-1":{"completed":"done"}}}}"#,
+    )
+    .expect("json should parse");
+    let wait = reader
+        .parse_subagent_session_payload(
+            41,
+            &wait_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("collab_waiting_end should produce event");
+    assert_eq!(wait.event_type, "collab.wait");
+    assert_eq!(
+        wait.payload["receiver_thread_ids"][0].as_str(),
+        Some("sub-1")
+    );
+    assert_eq!(
+        wait.payload["agents_states"]["sub-1"]["completed"].as_str(),
+        Some("done")
+    );
+    assert_eq!(wait.payload["status"].as_str(), Some("completed"));
+
+    let close_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"collab_close_end","call_id":"close-1","sender_thread_id":"thread-1","receiver_thread_id":"sub-1","receiver_agent_nickname":"Ada","receiver_agent_role":"reviewer","status":{"completed":"closed"}}}"#,
+    )
+    .expect("json should parse");
+    let close = reader
+        .parse_subagent_session_payload(
+            42,
+            &close_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("collab_close_end should produce event");
+    assert_eq!(close.event_type, "collab.close_agent");
+    assert_eq!(
+        close.payload["receiver_thread_ids"][0].as_str(),
+        Some("sub-1")
+    );
+    assert_eq!(close.payload["status"].as_str(), Some("completed"));
+    assert_eq!(
+        close.payload["duplicate_of"].as_str(),
+        Some("response_item.function_call_output")
+    );
+
+    let send_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"collab_agent_interaction_end","call_id":"send-1","sender_thread_id":"thread-1","receiver_thread_id":"sub-1","receiver_agent_nickname":"Ada","receiver_agent_role":"reviewer","prompt":"continue","status":{"completed":"accepted"}}}"#,
+    )
+    .expect("json should parse");
+    let send = reader
+        .parse_subagent_session_payload(
+            43,
+            &send_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("collab_agent_interaction_end should produce event");
+    assert_eq!(send.event_type, "collab.send_input");
+    assert_eq!(
+        send.payload["receiver_thread_ids"][0].as_str(),
+        Some("sub-1")
+    );
+    assert_eq!(send.payload["prompt"].as_str(), Some("continue"));
+    assert_eq!(send.payload["status"].as_str(), Some("completed"));
+}
+
+#[test]
+fn subagent_legacy_event_msg_item_completed_and_web_search_end_are_normalized() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let item_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r##"{"type":"event_msg","payload":{"type":"item_completed","thread_id":"thread-1","turn_id":"turn-1","item":{"type":"Plan","id":"turn-1-plan","text":"# Plan\n\n1. Inspect\n2. Patch"}}}"##,
+    )
+    .expect("json should parse");
+    let item_event = reader
+        .parse_subagent_session_payload(
+            50,
+            &item_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("item_completed should produce event");
+    assert_eq!(item_event.event_type, "plan.update");
+    assert_eq!(
+        item_event.payload["tool_name"].as_str(),
+        Some("update_plan")
+    );
+    assert_eq!(
+        item_event.payload["tool_use_id"].as_str(),
+        Some("turn-1-plan")
+    );
+    assert_eq!(
+        item_event.payload["output"]["text"].as_str(),
+        Some("# Plan\n\n1. Inspect\n2. Patch")
+    );
+    assert_eq!(
+        item_event.payload["duplicate_of"].as_str(),
+        Some("response_item.message")
+    );
+
+    let web_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"web_search_end","call_id":"web-1","query":"","action":{"type":"other"}}}"#,
+    )
+    .expect("json should parse");
+    let web_event = reader
+        .parse_subagent_session_payload(
+            51,
+            &web_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("web_search_end should produce event");
+    assert_eq!(web_event.event_type, "web.search");
+    assert_eq!(
+        web_event.payload["tool_name"].as_str(),
+        Some("web_search_call")
+    );
+    assert_eq!(web_event.payload["status"].as_str(), Some("completed"));
+    assert_eq!(
+        web_event.payload["duplicate_of"].as_str(),
+        Some("response_item.web_search_call")
+    );
+}
+
+#[test]
+fn subagent_session_example_from_env_has_no_raw_unparsed_when_configured() {
+    let Some(path) = std::env::var_os("CODEX_SESSION_EXAMPLE").map(PathBuf::from) else {
+        eprintln!("skip: CODEX_SESSION_EXAMPLE is not set");
+        return;
+    };
+
+    let file = std::fs::File::open(&path).expect("session example should be readable");
+    let parsed_lines: Vec<serde_json::Map<String, serde_json::Value>> = BufReader::new(file)
+        .lines()
+        .enumerate()
+        .map(|(index, line)| {
+            let line =
+                line.unwrap_or_else(|err| panic!("line {} should be readable: {err}", index + 1));
+            serde_json::from_str(&line)
+                .unwrap_or_else(|err| panic!("line {} should be valid json: {err}", index + 1))
+        })
+        .collect();
+
+    let Some(first) = parsed_lines.first() else {
+        panic!("session example should not be empty");
+    };
+    assert_eq!(
+        first.get("type").and_then(|value| value.as_str()),
+        Some("session_meta")
+    );
+    let thread_id = first
+        .get("payload")
+        .and_then(|value| value.as_object())
+        .and_then(|payload| payload.get("id"))
+        .and_then(|value| value.as_str())
+        .expect("session_meta.payload.id should be present")
+        .to_string();
+    let parent_thread_id = first
+        .get("payload")
+        .and_then(|value| value.as_object())
+        .and_then(|payload| payload.get("source"))
+        .and_then(|value| value.as_object())
+        .and_then(|payload| payload.get("subagent"))
+        .and_then(|value| value.as_object())
+        .and_then(|payload| payload.get("thread_spawn"))
+        .and_then(|value| value.as_object())
+        .and_then(|payload| payload.get("parent_thread_id"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("root-parent")
+        .to_string();
+
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let mut unparsed = Vec::new();
+
+    for (index, parsed) in parsed_lines.iter().enumerate() {
+        let event = reader
+            .parse_subagent_session_payload(
+                (index + 1) as u64,
+                parsed,
+                &path,
+                &parent_thread_id,
+                &thread_id,
+                &mut call_names,
+                &mut tool_counts,
+                &mut subagent_counts,
+            )
+            .expect("session line should produce event");
+        if event.event_type == "raw.unparsed" {
+            unparsed.push(format!(
+                "line {}: {}",
+                index + 1,
+                event.payload["reason"].as_str().unwrap_or("unknown reason")
+            ));
+        }
+    }
+
+    assert!(
+        unparsed.is_empty(),
+        "session example produced raw.unparsed events: {}",
+        unparsed.join("; ")
     );
 }
 

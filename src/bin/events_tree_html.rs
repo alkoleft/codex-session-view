@@ -511,7 +511,10 @@ fn startup_metadata_entries(value: &serde_json::Value) -> Option<Vec<(String, St
             object
                 .iter()
                 .map(|(entry_key, entry_value)| {
-                    (entry_key.clone(), render_startup_metadata_value(entry_value))
+                    (
+                        entry_key.clone(),
+                        render_startup_metadata_value(entry_value),
+                    )
                 })
                 .collect(),
         ),
@@ -564,8 +567,7 @@ fn render_startup_metadata_text(value: &serde_json::Value) -> String {
             .unwrap_or_else(|| {
                 serde_json::to_string_pretty(value).unwrap_or_else(|_| "<invalid-json>".to_string())
             }),
-        _ => serde_json::to_string_pretty(value)
-            .unwrap_or_else(|_| "<invalid-json>".to_string()),
+        _ => serde_json::to_string_pretty(value).unwrap_or_else(|_| "<invalid-json>".to_string()),
     }
 }
 
@@ -626,8 +628,7 @@ fn render_summary_block(event: &EventEntry) -> String {
 }
 
 fn should_collapse_summary(event: &EventEntry) -> bool {
-    matches_collapse_event_type(event)
-        && should_collapse_text_content(&event.summary)
+    matches_collapse_event_type(event) && should_collapse_text_content(&event.summary)
 }
 
 fn matches_collapse_event_type(event: &EventEntry) -> bool {
@@ -742,12 +743,23 @@ fn render_shell_result_block(event: &EventEntry) -> Option<String> {
     let command = event
         .shell_command
         .as_deref()
-        .map(|command| format!("<div class=\"shell-block-command\">$ {}</div>", escape_html(command)))
+        .map(|command| {
+            format!(
+                "<div class=\"shell-block-command\">$ {}</div>",
+                escape_html(command)
+            )
+        })
         .unwrap_or_default();
     let output = match event.aggregated_output.as_deref() {
-        Some(output) if should_collapse_text_content(output) => render_collapsible_text_block(output),
-        Some(output) => format!("<div class=\"summary-text shell-block-output\">{}</div>", escape_html(output)),
-        None => "<div class=\"summary-text shell-block-output shell-block-empty\">Нет вывода</div>".to_string(),
+        Some(output) if should_collapse_text_content(output) => {
+            render_collapsible_text_block(output)
+        }
+        Some(output) => format!(
+            "<div class=\"summary-text shell-block-output\">{}</div>",
+            escape_html(output)
+        ),
+        None => "<div class=\"summary-text shell-block-output shell-block-empty\">Нет вывода</div>"
+            .to_string(),
     };
     let footer = render_shell_result_status(event.shell_exit_code);
     let body = format!("{command}<div class=\"shell-block-output-wrap\">{output}</div>");
@@ -762,7 +774,9 @@ fn render_shell_result_block(event: &EventEntry) -> Option<String> {
 
 fn render_shell_result_status(exit_code: Option<i32>) -> String {
     match exit_code {
-        Some(0) => "<span class=\"shell-block-status is-success\">&#10003; Успех</span>".to_string(),
+        Some(0) => {
+            "<span class=\"shell-block-status is-success\">&#10003; Успех</span>".to_string()
+        }
         Some(code) => format!(
             "<span class=\"shell-block-status is-failure\">&#10005; Код {}</span>",
             code
@@ -1043,7 +1057,9 @@ mod tests {
         assert!(html.contains("class=\"hero-grid\""));
         assert!(html.contains("class=\"hero-startup\""));
         assert!(html.contains("class=\"hero-startup-card\"><span class=\"hero-card-label\">id<"));
-        assert!(html.contains("class=\"hero-startup-card\"><span class=\"hero-card-label\">approval_policy<"));
+        assert!(html.contains(
+            "class=\"hero-startup-card\"><span class=\"hero-card-label\">approval_policy<"
+        ));
         assert!(html.contains("class=\"hero-startup-card\"><span class=\"hero-card-label\">model<"));
         assert!(html.contains("class=\"hero-startup-card\"><span class=\"hero-card-label\">git<"));
         assert!(html.contains("class=\"hero-startup-row-label\">branch<"));
@@ -1083,8 +1099,13 @@ mod tests {
         assert!(html.contains("class=\"inset-block-body\"><div class=\"message-collapse\""));
         assert!(html.contains("instruction line"));
         assert!(html.contains(">see full<"));
-        assert!(html.find("class=\"hero-base\"").expect("base instructions block should exist")
-            < html.find("class=\"tree\"").expect("tree section should exist"));
+        assert!(
+            html.find("class=\"hero-base\"")
+                .expect("base instructions block should exist")
+                < html
+                    .find("class=\"tree\"")
+                    .expect("tree section should exist")
+        );
     }
 
     #[test]
@@ -1351,7 +1372,9 @@ mod tests {
         assert!(html.contains("onclick=\"toggleMessageBlock(this)\""));
         assert!(html.contains(">see full<"));
         assert!(html.contains("shell-output-line"));
-        assert!(!html.contains("<span class=\"event-key\">summary</span><div class=\"summary-text\">command ok"));
+        assert!(!html.contains(
+            "<span class=\"event-key\">summary</span><div class=\"summary-text\">command ok"
+        ));
     }
 
     #[test]
@@ -1381,7 +1404,9 @@ mod tests {
         assert!(html.contains("$ printf &#39;a\\nb\\n&#39;"));
         assert!(html.contains("a\nb"));
         assert!(html.contains("&#10003; Успех"));
-        assert!(!html.contains("<span class=\"event-key\">summary</span><div class=\"summary-text\">command ok"));
+        assert!(!html.contains(
+            "<span class=\"event-key\">summary</span><div class=\"summary-text\">command ok"
+        ));
     }
 
     #[test]

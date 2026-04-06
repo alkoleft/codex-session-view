@@ -1192,7 +1192,9 @@ fn extract_shell_command(
         return None;
     }
 
-    let input = payload.and_then(|obj| obj.get("input")).and_then(Value::as_object)?;
+    let input = payload
+        .and_then(|obj| obj.get("input"))
+        .and_then(Value::as_object)?;
     for key in ["command", "cmd"] {
         let Some(value) = input.get(key).and_then(Value::as_str) else {
             continue;

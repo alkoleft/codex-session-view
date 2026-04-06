@@ -854,6 +854,276 @@ impl JsonOutputEventReader {
                                 );
                             }
                         }
+                        "exec_command_end" => {
+                            let call_id = item
+                                .get("call_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string();
+                            let tool_name =
+                                legacy_event_msg_tool_name(&msg_type, &call_id, call_names);
+                            event_type = normalized_tool_event_type(&tool_name, true);
+                            payload = payload_to_value(&ToolResultPayload {
+                                actor_type: Some("subagent".to_string()),
+                                thread_id: Some(thread_id.to_string()),
+                                parent_thread_id: Some(parent_thread_id.to_string()),
+                                session_path: Some(imported_path.display().to_string()),
+                                tool_name,
+                                tool_use_id: (!call_id.is_empty()).then_some(call_id.clone()),
+                                input: Some(Value::Object(Map::from_iter([(
+                                    "command".to_string(),
+                                    item.get("command").cloned().unwrap_or(Value::Null),
+                                )]))),
+                                status: item
+                                    .get("status")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string)
+                                    .or_else(|| Some("completed".to_string())),
+                                phase: Some("completed".to_string()),
+                                output: item
+                                    .get("aggregated_output")
+                                    .cloned()
+                                    .or_else(|| item.get("stdout").cloned()),
+                                stderr: item.get("stderr").cloned(),
+                                exit_code: item
+                                    .get("exit_code")
+                                    .and_then(Value::as_i64)
+                                    .map(|value| value as i32),
+                                ..ToolResultPayload::default()
+                            });
+                            if let Some(obj) = payload.as_object_mut() {
+                                obj.insert(
+                                    "cwd".to_string(),
+                                    item.get("cwd").cloned().unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "process_id".to_string(),
+                                    item.get("process_id").cloned().unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "turn_id".to_string(),
+                                    item.get("turn_id").cloned().unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "source".to_string(),
+                                    item.get("source").cloned().unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "duration".to_string(),
+                                    item.get("duration").cloned().unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "parsed_cmd".to_string(),
+                                    item.get("parsed_cmd").cloned().unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "formatted_output".to_string(),
+                                    item.get("formatted_output").cloned().unwrap_or(Value::Null),
+                                );
+                            }
+                            insert_duplicate_of(&mut payload, "response_item.function_call_output");
+                        }
+                        "web_search_end" => {
+                            event_type = if is_open_page_action(item.get("action")) {
+                                WEB_OPEN.to_string()
+                            } else {
+                                WEB_SEARCH.to_string()
+                            };
+                            payload = payload_to_value(&ToolResultPayload {
+                                actor_type: Some("subagent".to_string()),
+                                thread_id: Some(thread_id.to_string()),
+                                parent_thread_id: Some(parent_thread_id.to_string()),
+                                session_path: Some(imported_path.display().to_string()),
+                                tool_name: "web_search_call".to_string(),
+                                tool_use_id: item
+                                    .get("call_id")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string),
+                                status: Some("completed".to_string()),
+                                phase: Some("completed".to_string()),
+                                output: Some(Value::Object(Map::from_iter([
+                                    (
+                                        "query".to_string(),
+                                        item.get("query").cloned().unwrap_or(Value::Null),
+                                    ),
+                                    (
+                                        "action".to_string(),
+                                        item.get("action").cloned().unwrap_or(Value::Null),
+                                    ),
+                                ]))),
+                                ..ToolResultPayload::default()
+                            });
+                            insert_duplicate_of(&mut payload, "response_item.web_search_call");
+                        }
+                        "collab_agent_spawn_end"
+                        | "collab_waiting_end"
+                        | "collab_close_end"
+                        | "collab_agent_interaction_end" => {
+                            let call_id = item
+                                .get("call_id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string();
+                            let tool_name =
+                                legacy_event_msg_tool_name(&msg_type, &call_id, call_names);
+                            let receiver_thread_ids =
+                                legacy_event_msg_receiver_thread_ids(&msg_type, item);
+                            let detection_confidence =
+                                if is_collab_high_confidence_tool(&tool_name) {
+                                    "high"
+                                } else {
+                                    "medium"
+                                }
+                                .to_string();
+
+                            event_type = normalized_tool_event_type(&tool_name, true);
+                            payload = payload_to_value(&ToolResultPayload {
+                                actor_type: Some("subagent".to_string()),
+                                thread_id: Some(thread_id.to_string()),
+                                parent_thread_id: Some(parent_thread_id.to_string()),
+                                session_path: Some(imported_path.display().to_string()),
+                                tool_name,
+                                tool_use_id: (!call_id.is_empty()).then_some(call_id.clone()),
+                                status: legacy_event_msg_status(item),
+                                phase: Some("completed".to_string()),
+                                sender_thread_id: item
+                                    .get("sender_thread_id")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string),
+                                receiver_thread_ids: (!receiver_thread_ids.is_empty())
+                                    .then_some(receiver_thread_ids),
+                                prompt: item
+                                    .get("prompt")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string),
+                                agents_states: legacy_event_msg_agents_states(&msg_type, item),
+                                detection_source: Some("legacy_event_msg".to_string()),
+                                detection_confidence: Some(detection_confidence),
+                                raw_ref: (!call_id.is_empty()).then_some(call_id.clone()),
+                                output: Some(Value::Object(item.clone())),
+                                ..ToolResultPayload::default()
+                            });
+                            if let Some(obj) = payload.as_object_mut() {
+                                obj.insert(
+                                    "new_thread_id".to_string(),
+                                    item.get("new_thread_id").cloned().unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "new_agent_nickname".to_string(),
+                                    item.get("new_agent_nickname")
+                                        .cloned()
+                                        .unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "new_agent_role".to_string(),
+                                    item.get("new_agent_role").cloned().unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "receiver_agent_nickname".to_string(),
+                                    item.get("receiver_agent_nickname")
+                                        .cloned()
+                                        .unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "receiver_agent_role".to_string(),
+                                    item.get("receiver_agent_role")
+                                        .cloned()
+                                        .unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "model".to_string(),
+                                    item.get("model").cloned().unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "reasoning_effort".to_string(),
+                                    item.get("reasoning_effort").cloned().unwrap_or(Value::Null),
+                                );
+                                obj.insert(
+                                    "timed_out".to_string(),
+                                    item.get("timed_out").cloned().unwrap_or(Value::Null),
+                                );
+                            }
+                            insert_duplicate_of(&mut payload, "response_item.function_call_output");
+                        }
+                        "item_completed" => {
+                            let Some(completed_item) = item.get("item").and_then(Value::as_object)
+                            else {
+                                event_type = RAW_UNPARSED.to_string();
+                                parse_status = "best_effort".to_string();
+                                payload = subagent_raw_payload(
+                                    thread_id,
+                                    parent_thread_id,
+                                    imported_path,
+                                    Value::Object(parsed.clone()),
+                                    Some("missing item_completed item object".to_string()),
+                                );
+                                return Some(self.build_subagent_event(
+                                    seq,
+                                    &ts,
+                                    event_type,
+                                    raw_type,
+                                    parse_status,
+                                    payload,
+                                ));
+                            };
+                            let item_type = completed_item
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown");
+                            if item_type == "Plan" {
+                                let item_id = completed_item
+                                    .get("id")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_string);
+                                event_type = PLAN_UPDATE.to_string();
+                                payload = payload_to_value(&ToolResultPayload {
+                                    actor_type: Some("subagent".to_string()),
+                                    thread_id: Some(thread_id.to_string()),
+                                    parent_thread_id: Some(parent_thread_id.to_string()),
+                                    session_path: Some(imported_path.display().to_string()),
+                                    tool_name: "update_plan".to_string(),
+                                    tool_use_id: item_id.clone(),
+                                    status: Some("completed".to_string()),
+                                    phase: Some("completed".to_string()),
+                                    output: Some(Value::Object(Map::from_iter([
+                                        (
+                                            "item_type".to_string(),
+                                            Value::from(item_type.to_string()),
+                                        ),
+                                        (
+                                            "item_id".to_string(),
+                                            item_id.clone().map(Value::from).unwrap_or(Value::Null),
+                                        ),
+                                        (
+                                            "text".to_string(),
+                                            completed_item
+                                                .get("text")
+                                                .cloned()
+                                                .unwrap_or(Value::Null),
+                                        ),
+                                        (
+                                            "turn_id".to_string(),
+                                            item.get("turn_id").cloned().unwrap_or(Value::Null),
+                                        ),
+                                    ]))),
+                                    raw_ref: item_id,
+                                    ..ToolResultPayload::default()
+                                });
+                                insert_duplicate_of(&mut payload, "response_item.message");
+                            } else {
+                                event_type = RAW_UNPARSED.to_string();
+                                parse_status = "best_effort".to_string();
+                                payload = subagent_raw_payload(
+                                    thread_id,
+                                    parent_thread_id,
+                                    imported_path,
+                                    Value::Object(parsed.clone()),
+                                    Some(format!(
+                                        "unsupported item_completed item.type={item_type}"
+                                    )),
+                                );
+                            }
+                        }
                         _ => {
                             event_type = RAW_UNPARSED.to_string();
                             parse_status = "best_effort".to_string();
@@ -1063,6 +1333,169 @@ fn subagent_raw_payload(
         payload.insert("reason".to_string(), Value::from(reason));
     }
     Value::Object(payload)
+}
+
+fn legacy_event_msg_tool_name(
+    msg_type: &str,
+    call_id: &str,
+    call_names: &HashMap<String, String>,
+) -> String {
+    if let Some(name) = call_names.get(call_id) {
+        return name.clone();
+    }
+
+    match msg_type {
+        "exec_command_end" => "exec_command",
+        "collab_agent_spawn_end" => "spawn_agent",
+        "collab_waiting_end" => "wait_agent",
+        "collab_close_end" => "close_agent",
+        "collab_agent_interaction_end" => "send_input",
+        _ => "unknown",
+    }
+    .to_string()
+}
+
+fn legacy_event_msg_status(item: &Map<String, Value>) -> Option<String> {
+    match item.get("status") {
+        Some(Value::String(status)) if !status.trim().is_empty() => Some(status.to_string()),
+        Some(Value::Object(statuses)) if statuses.len() == 1 => statuses.keys().next().cloned(),
+        Some(Value::Bool(true)) => Some("completed".to_string()),
+        Some(Value::Bool(false)) => Some("failed".to_string()),
+        _ => Some("completed".to_string()),
+    }
+}
+
+fn legacy_event_msg_receiver_thread_ids(msg_type: &str, item: &Map<String, Value>) -> Vec<String> {
+    match msg_type {
+        "collab_agent_spawn_end" => item
+            .get("new_thread_id")
+            .and_then(Value::as_str)
+            .map(|thread_id| vec![thread_id.to_string()])
+            .unwrap_or_default(),
+        "collab_close_end" | "collab_agent_interaction_end" => item
+            .get("receiver_thread_id")
+            .and_then(Value::as_str)
+            .map(|thread_id| vec![thread_id.to_string()])
+            .unwrap_or_default(),
+        "collab_waiting_end" => {
+            let mut receiver_thread_ids = Vec::new();
+            if let Some(agent_statuses) = item.get("agent_statuses").and_then(Value::as_array) {
+                for entry in agent_statuses {
+                    let Some(entry_obj) = entry.as_object() else {
+                        continue;
+                    };
+                    let Some(thread_id) = entry_obj.get("thread_id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    if !receiver_thread_ids.iter().any(|known| known == thread_id) {
+                        receiver_thread_ids.push(thread_id.to_string());
+                    }
+                }
+            }
+            if let Some(statuses) = item.get("statuses").and_then(Value::as_object) {
+                for thread_id in statuses.keys() {
+                    if !receiver_thread_ids.iter().any(|known| known == thread_id) {
+                        receiver_thread_ids.push(thread_id.clone());
+                    }
+                }
+            }
+            receiver_thread_ids
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn legacy_event_msg_agents_states(
+    msg_type: &str,
+    item: &Map<String, Value>,
+) -> Option<serde_json::Map<String, Value>> {
+    match msg_type {
+        "collab_waiting_end" => {
+            if let Some(statuses) = item.get("statuses").and_then(Value::as_object) {
+                return Some(statuses.clone());
+            }
+
+            let mut states = Map::new();
+            if let Some(agent_statuses) = item.get("agent_statuses").and_then(Value::as_array) {
+                for entry in agent_statuses {
+                    let Some(entry_obj) = entry.as_object() else {
+                        continue;
+                    };
+                    let Some(thread_id) = entry_obj.get("thread_id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let mut state = Map::new();
+                    state.insert(
+                        "agent_nickname".to_string(),
+                        entry_obj
+                            .get("agent_nickname")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    );
+                    state.insert(
+                        "agent_role".to_string(),
+                        entry_obj.get("agent_role").cloned().unwrap_or(Value::Null),
+                    );
+                    state.insert(
+                        "status".to_string(),
+                        entry_obj.get("status").cloned().unwrap_or(Value::Null),
+                    );
+                    states.insert(thread_id.to_string(), Value::Object(state));
+                }
+            }
+            (!states.is_empty()).then_some(states)
+        }
+        "collab_agent_spawn_end" => {
+            let thread_id = item.get("new_thread_id").and_then(Value::as_str)?;
+            let mut states = Map::new();
+            states.insert(
+                thread_id.to_string(),
+                Value::Object(Map::from_iter([
+                    (
+                        "status".to_string(),
+                        item.get("status").cloned().unwrap_or(Value::Null),
+                    ),
+                    (
+                        "agent_nickname".to_string(),
+                        item.get("new_agent_nickname")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    ),
+                    (
+                        "agent_role".to_string(),
+                        item.get("new_agent_role").cloned().unwrap_or(Value::Null),
+                    ),
+                    (
+                        "model".to_string(),
+                        item.get("model").cloned().unwrap_or(Value::Null),
+                    ),
+                    (
+                        "reasoning_effort".to_string(),
+                        item.get("reasoning_effort").cloned().unwrap_or(Value::Null),
+                    ),
+                ])),
+            );
+            Some(states)
+        }
+        "collab_close_end" | "collab_agent_interaction_end" => {
+            let thread_id = item.get("receiver_thread_id").and_then(Value::as_str)?;
+            let status = match item.get("status") {
+                Some(Value::Object(value)) => Value::Object(value.clone()),
+                Some(value) => {
+                    Value::Object(Map::from_iter([("status".to_string(), value.clone())]))
+                }
+                None => Value::Object(Map::new()),
+            };
+            Some(Map::from_iter([(thread_id.to_string(), status)]))
+        }
+        _ => None,
+    }
+}
+
+fn insert_duplicate_of(payload: &mut Value, duplicate_of: &str) {
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("duplicate_of".to_string(), Value::from(duplicate_of));
+    }
 }
 
 pub(crate) fn imported_subagent_session_meta(
