@@ -25,7 +25,8 @@ python3 scripts/acceptance_v1.py
 
 - В `.devcontainer/devcontainer.json` зафиксировано воспроизводимое Rust-окружение с `CODEX_HOME=${containerWorkspaceFolder}/.codex-mount`.
 - После открытия контейнера доступны те же команды: `cargo test`, `cargo run -- run-next --help`, `python3 scripts/acceptance_v1.py`.
-- `@openai/codex` ставится в `postCreateCommand`; `auth.json` монтируется в `.codex-mount/auth.json`.
+- `@openai/codex` ставится в `postCreateCommand`.
+- Для реального Codex auth внутри контейнера положите `auth.json` в `.codex-mount/auth.json`.
 
 ## Acceptance и CI
 

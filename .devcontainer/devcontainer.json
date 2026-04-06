@@ -21,8 +21,5 @@
         "tamasfe.even-better-toml"
       ]
     }
-  },
-  "mounts": [
-    "source=/home/alko/.codex/auth.json,target=${containerWorkspaceFolder}/.codex-mount/auth.json,type=bind"
-  ]
+  }
 }
