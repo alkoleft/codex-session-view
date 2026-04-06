@@ -6,6 +6,7 @@ use std::process::Command;
 use clap::Parser;
 use codex_worker_rs::error::{AppError, AppResult};
 use codex_worker_rs::events::projector::EventSummaryCategory;
+use codex_worker_rs::events::types::{INFO_TOKENS, SHELL_RESULT};
 
 #[path = "events_tree_shared.rs"]
 mod events_tree_shared;
@@ -33,6 +34,15 @@ struct Cli {
 
     #[arg(long)]
     no_open: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct TokenUsage {
+    input_tokens: u64,
+    cached_input_tokens: u64,
+    output_tokens: u64,
+    reasoning_output_tokens: u64,
+    total_tokens: u64,
 }
 
 fn main() {
@@ -164,13 +174,31 @@ fn render_html(tree: &EventTree) -> String {
         summary::-webkit-details-marker{display:none;}\
         .thread-id{font-size:16px;font-weight:700;color:#0f172a;}\
         .thread-body{padding:0 18px 18px;}\
-        .thread-flow{display:flex;flex-direction:column;gap:10px;margin-top:8px;}\
+        .thread-flow{display:flex;flex-direction:column;gap:10px;margin-top:12px;}\
+        .event-footnote{margin:8px calc(50% - 50vw) 0;padding:0 24px;background:linear-gradient(90deg,rgba(253,246,227,.96),rgba(231,240,255,.96));border-top:1px dashed #d8dee9;border-bottom:1px solid #d8dee9;}\
+        .event-footnote-content{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:baseline;padding:10px 0 12px;}\
+        .event-footnote-seq{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:#fff;border:1px solid #d8dee9;color:#334155;font-size:12px;}\
+        .event-footnote-title{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#475569;}\
+        .event-footnote-pair{display:inline-flex;align-items:baseline;gap:6px;}\
+        .event-footnote-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;}\
+        .event-footnote-value{font-size:13px;font-weight:400;color:#0f172a;}\
+        .event-footnote-diff{font-size:14px;font-weight:800;color:#64748b;}\
+        .event-footnote-pair.is-total .event-footnote-label{font-size:11px;font-weight:700;}\
+        .event-footnote-pair.is-total .event-footnote-value{font-size:13px;font-weight:400;}\
+        .event-footnote-pair.is-total .event-footnote-diff{font-size:14px;font-weight:800;}\
+        .diff-pos{color:#166534;}\
+        .diff-neg{color:#b91c1c;}\
         .event-card{display:grid;grid-template-columns:88px 168px 170px 150px 110px;gap:10px;align-items:start;padding:12px 14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff;box-shadow:0 6px 18px rgba(15,23,42,.04);}\
         .event-card.has-subagent{grid-template-columns:88px 168px 180px 170px 150px 110px;}\
         .event-cell{min-width:0;}\
         .event-key{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#94a3b8;margin-bottom:4px;}\
         .seq-chip{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:#0f172a;color:#fff;font-weight:700;}\
         .summary-text{white-space:pre-wrap;word-break:break-word;color:#0f172a;}\
+        .message-collapse{display:flex;flex-direction:column;align-items:flex-start;gap:8px;}\
+        .message-toggle{padding:5px 10px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;color:#334155;font:inherit;font-size:12px;cursor:pointer;}\
+        .message-toggle:hover{background:#eef2f7;}\
+        .message-collapse[data-expanded=\"false\"] .message-full{display:none;}\
+        .message-collapse[data-expanded=\"true\"] .message-preview{display:none;}\
         .summary-structured{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline;color:#0f172a;}\
         .summary-title{font-weight:700;color:#334155;}\
         .summary-pair{display:inline-flex;align-items:baseline;gap:6px;}\
@@ -189,10 +217,14 @@ fn render_html(tree: &EventTree) -> String {
         .cat-error{background:#fee2e2;color:#b91c1c;border-color:#fecaca;}\
         .empty{margin-top:10px;padding:14px;border:1px dashed #d8dee9;border-radius:12px;color:#64748b;background:#fafaf9;}\
         @media (max-width:1200px){.event-card{grid-template-columns:88px 140px 150px 130px 100px;}.event-card.has-subagent{grid-template-columns:88px 140px 160px 150px 130px 100px;}}\
-        @media (max-width:980px){.event-card{grid-template-columns:1fr;}.event-key{margin-bottom:2px;}}\
+        @media (max-width:980px){.event-footnote{padding:0 16px;}.event-card{grid-template-columns:1fr;}.event-key{margin-bottom:2px;}}\
         code{background:#f8fafc;padding:2px 6px;border-radius:6px;border:1px solid #e2e8f0;}",
     );
-    out.push_str("</style></head><body><main class=\"page\">");
+    out.push_str("</style><script>");
+    out.push_str(
+        "function toggleMessageBlock(button){var block=button.closest('.message-collapse');if(!block){return;}var expanded=block.getAttribute('data-expanded')==='true';var nextState=expanded?'false':'true';block.setAttribute('data-expanded',nextState);button.setAttribute('aria-expanded',nextState);button.textContent=expanded?'see full':'collapse';}",
+    );
+    out.push_str("</script></head><body><main class=\"page\">");
     let _ = write!(
         out,
         "<section class=\"hero\"><h1>Дерево событий</h1><div>{}</div><div class=\"meta\">\
@@ -237,6 +269,7 @@ fn render_html(tree: &EventTree) -> String {
 fn render_thread_html(out: &mut String, node: &ThreadNode, depth: usize) {
     let container_class = if depth == 0 { "tree-root" } else { "children" };
     let open = if depth <= 1 { " open" } else { "" };
+    let mut last_token_usage = TokenUsage::default();
 
     let mut meta = Vec::new();
     if node.is_root {
@@ -296,12 +329,17 @@ fn render_thread_html(out: &mut String, node: &ThreadNode, depth: usize) {
         meta.join("")
     );
 
-    render_timeline_items(out, &node.items, depth);
+    render_timeline_items(out, &node.items, depth, &mut last_token_usage);
 
     out.push_str("</div></details></section>");
 }
 
-fn render_timeline_items(out: &mut String, items: &[TimelineItem], depth: usize) {
+fn render_timeline_items(
+    out: &mut String,
+    items: &[TimelineItem],
+    depth: usize,
+    last_token_usage: &mut TokenUsage,
+) {
     if items.is_empty() {
         out.push_str("<div class=\"empty\">Для этого потока нет событий.</div>");
         return;
@@ -310,7 +348,7 @@ fn render_timeline_items(out: &mut String, items: &[TimelineItem], depth: usize)
     out.push_str("<div class=\"thread-flow\">");
     for item in items {
         match item {
-            TimelineItem::Event(node) => render_event_node(out, node, depth),
+            TimelineItem::Event(node) => render_event_node(out, node, depth, last_token_usage),
             TimelineItem::Thread(thread) => render_thread_html(out, thread, depth + 1),
         }
     }
@@ -323,70 +361,37 @@ fn render_event_flow(out: &mut String, events: &[EventEntry]) {
         return;
     }
 
+    let mut last_token_usage = TokenUsage::default();
     out.push_str("<div class=\"thread-flow\">");
     for event in events {
-        render_event_card(out, event);
+        render_event_card(out, event, &mut last_token_usage);
     }
     out.push_str("</div>");
 }
 
-fn render_event_node(out: &mut String, node: &EventNode, depth: usize) {
-    render_event_card(out, &node.event);
+fn render_event_node(
+    out: &mut String,
+    node: &EventNode,
+    depth: usize,
+    last_token_usage: &mut TokenUsage,
+) {
+    render_event_card(out, &node.event, last_token_usage);
     if !node.children.is_empty() {
         let _ = depth;
         out.push_str("<div class=\"children\">");
-        render_timeline_items(out, &node.children, depth + 1);
+        render_timeline_items(out, &node.children, depth + 1, last_token_usage);
         out.push_str("</div>");
     }
 }
 
-fn render_event_card(out: &mut String, event: &EventEntry) {
-    let subagent_block = render_subagent_block(event);
-    let event_card_class = if subagent_block.is_empty() {
-        "event-card"
-    } else {
-        "event-card has-subagent"
-    };
-    let summary_block = render_summary_block(event);
-    let aggregated_output_block = event
-        .aggregated_output
-        .as_deref()
-        .map(|output| {
-            format!(
-                "<div class=\"event-cell event-detail\"><span class=\"event-key\">aggregated_output</span><div class=\"summary-text\">{}</div></div>",
-                escape_html(output)
-            )
-        })
-        .unwrap_or_default();
-    let _ = write!(
-        out,
-        "<article class=\"{}\" data-seq=\"{}\" data-event-id=\"{}\" data-parent-event-id=\"{}\">\
-         <div class=\"event-cell\"><span class=\"event-key\">seq</span><span class=\"seq-chip\">#{:04}</span></div>\
-         <div class=\"event-cell\"><span class=\"event-key\">ts</span>{}</div>\
-         {}\
-         <div class=\"event-cell\"><span class=\"event-key\">event_type</span><span class=\"badge {}\">{}</span></div>\
-         <div class=\"event-cell\"><span class=\"event-key\">raw_type</span>{}</div>\
-         <div class=\"event-cell\"><span class=\"event-key\">parse</span>{}</div>\
-         <div class=\"event-cell event-summary\"><span class=\"event-key\">summary</span>{}</div>{}\
-         </article>",
-        event_card_class,
-        event.seq,
-        escape_html(&event.event_id),
-        escape_html(event.parent_event_id.as_deref().unwrap_or("")),
-        event.seq,
-        escape_html(&event.ts),
-        subagent_block,
-        category_class(event.category),
-        escape_html(&event.event_type),
-        escape_html(&event.raw_type),
-        escape_html(&event.parse_status),
-        summary_block,
-        aggregated_output_block,
-    );
-}
+const TEXT_COLLAPSE_CHAR_LIMIT: usize = 420;
+const TEXT_COLLAPSE_LINE_LIMIT: usize = 6;
 
 fn render_summary_block(event: &EventEntry) -> String {
     if event.summary_pairs.is_empty() {
+        if should_collapse_summary(event) {
+            return render_collapsible_text_block(&event.summary);
+        }
         return format!(
             "<div class=\"summary-text\">{}</div>",
             escape_html(&event.summary)
@@ -406,6 +411,219 @@ fn render_summary_block(event: &EventEntry) -> String {
     }
     out.push_str("</div>");
     out
+}
+
+fn should_collapse_summary(event: &EventEntry) -> bool {
+    matches_collapse_event_type(event)
+        && should_collapse_text_content(&event.summary)
+}
+
+fn matches_collapse_event_type(event: &EventEntry) -> bool {
+    event.event_type.starts_with("message.") || event.event_type == SHELL_RESULT
+}
+
+fn should_collapse_text_content(text: &str) -> bool {
+    text.chars().count() > TEXT_COLLAPSE_CHAR_LIMIT
+        || text.lines().count() > TEXT_COLLAPSE_LINE_LIMIT
+}
+
+fn render_collapsible_text_block(summary: &str) -> String {
+    let preview = truncate_message_preview(summary, TEXT_COLLAPSE_CHAR_LIMIT);
+    format!(
+        "<div class=\"message-collapse\" data-expanded=\"false\">\
+         <div class=\"summary-text message-preview\">{}</div>\
+         <div class=\"summary-text message-full\">{}</div>\
+         <button class=\"message-toggle\" type=\"button\" aria-expanded=\"false\" onclick=\"toggleMessageBlock(this)\">see full</button>\
+         </div>",
+        escape_html(&preview),
+        escape_html(summary),
+    )
+}
+
+fn truncate_message_preview(summary: &str, limit: usize) -> String {
+    let char_count = summary.chars().count();
+    if char_count <= limit {
+        return summary.to_string();
+    }
+
+    let truncated = summary.chars().take(limit).collect::<String>();
+    let trimmed = truncated.trim_end_matches(char::is_whitespace);
+    format!("{trimmed}...")
+}
+
+fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mut TokenUsage) {
+    let subagent_block = render_subagent_block(event);
+    let event_card_class = if subagent_block.is_empty() {
+        "event-card"
+    } else {
+        "event-card has-subagent"
+    };
+    let summary_block = render_summary_block(event);
+    let aggregated_output_block = event
+        .aggregated_output
+        .as_deref()
+        .map(|output| {
+            let output_block = if event.event_type == SHELL_RESULT
+                && should_collapse_text_content(output)
+            {
+                render_collapsible_text_block(output)
+            } else {
+                format!("<div class=\"summary-text\">{}</div>", escape_html(output))
+            };
+            format!(
+                "<div class=\"event-cell event-detail\"><span class=\"event-key\">aggregated_output</span>{}</div>",
+                output_block
+            )
+        })
+        .unwrap_or_default();
+    let token_footnote = render_token_footnote(event, last_token_usage);
+    let _ = write!(
+        out,
+        "<article class=\"{}\" data-seq=\"{}\" data-event-id=\"{}\" data-parent-event-id=\"{}\">\
+         <div class=\"event-cell\"><span class=\"event-key\">seq</span><span class=\"seq-chip\">#{:04}</span></div>\
+         <div class=\"event-cell\"><span class=\"event-key\">ts</span>{}</div>\
+         {}\
+         <div class=\"event-cell\"><span class=\"event-key\">event_type</span><span class=\"badge {}\">{}</span></div>\
+         <div class=\"event-cell\"><span class=\"event-key\">raw_type</span>{}</div>\
+         <div class=\"event-cell\"><span class=\"event-key\">parse</span>{}</div>\
+         <div class=\"event-cell event-summary\"><span class=\"event-key\">summary</span>{}</div>{}\
+         </article>{}",
+        event_card_class,
+        event.seq,
+        escape_html(&event.event_id),
+        escape_html(event.parent_event_id.as_deref().unwrap_or("")),
+        event.seq,
+        escape_html(&event.ts),
+        subagent_block,
+        category_class(event.category),
+        escape_html(&event.event_type),
+        escape_html(&event.raw_type),
+        escape_html(&event.parse_status),
+        summary_block,
+        aggregated_output_block,
+        token_footnote,
+    );
+}
+
+fn render_token_footnote(event: &EventEntry, last_token_usage: &mut TokenUsage) -> String {
+    if event.event_type != INFO_TOKENS {
+        return String::new();
+    }
+
+    let current_usage = token_usage_from_event(event);
+    let diff = current_usage.diff_from(*last_token_usage);
+    *last_token_usage = current_usage;
+
+    let mut out = String::new();
+    let _ = write!(
+        out,
+        "<div class=\"event-footnote\" data-footnote-event-type=\"{}\" data-footnote-event-id=\"{}\">\
+         <div class=\"event-footnote-content\">\
+         <span class=\"event-footnote-seq\">#{:04}</span>\
+         <span class=\"event-footnote-title\">token consumption</span>",
+        escape_html(&event.event_type),
+        escape_html(&event.event_id),
+        event.seq,
+    );
+    for (label, value, diff_value, pair_class) in [
+        ("input", event.input_tokens, diff.input_tokens, ""),
+        (
+            "cached input",
+            event.cached_input_tokens,
+            diff.cached_input_tokens,
+            "",
+        ),
+        ("output", event.output_tokens, diff.output_tokens, ""),
+        (
+            "reasoning output",
+            event.reasoning_output_tokens,
+            diff.reasoning_output_tokens,
+            "",
+        ),
+        ("total", event.total_tokens, diff.total_tokens, " is-total"),
+    ] {
+        let Some(value) = value else {
+            continue;
+        };
+        let _ = write!(
+            out,
+            "<span class=\"event-footnote-pair{}\"><span class=\"event-footnote-label\">{}</span><span class=\"event-footnote-diff {}\">Δ {}</span><span class=\"event-footnote-value\">{}</span></span>",
+            pair_class,
+            escape_html(label),
+            diff_class(diff_value),
+            escape_html(&format_signed_number(diff_value)),
+            escape_html(&format_chart_number(value)),
+        );
+    }
+    out.push_str("</div></div>");
+    out
+}
+
+fn token_usage_from_event(event: &EventEntry) -> TokenUsage {
+    TokenUsage {
+        input_tokens: event.input_tokens.unwrap_or(0),
+        cached_input_tokens: event.cached_input_tokens.unwrap_or(0),
+        output_tokens: event.output_tokens.unwrap_or(0),
+        reasoning_output_tokens: event.reasoning_output_tokens.unwrap_or(0),
+        total_tokens: event.total_tokens.unwrap_or(0),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct TokenUsageDiff {
+    input_tokens: i128,
+    cached_input_tokens: i128,
+    output_tokens: i128,
+    reasoning_output_tokens: i128,
+    total_tokens: i128,
+}
+
+impl TokenUsage {
+    fn diff_from(self, previous: TokenUsage) -> TokenUsageDiff {
+        TokenUsageDiff {
+            input_tokens: self.input_tokens as i128 - previous.input_tokens as i128,
+            cached_input_tokens: self.cached_input_tokens as i128
+                - previous.cached_input_tokens as i128,
+            output_tokens: self.output_tokens as i128 - previous.output_tokens as i128,
+            reasoning_output_tokens: self.reasoning_output_tokens as i128
+                - previous.reasoning_output_tokens as i128,
+            total_tokens: self.total_tokens as i128 - previous.total_tokens as i128,
+        }
+    }
+}
+
+fn diff_class(value: i128) -> &'static str {
+    if value > 0 {
+        "diff-pos"
+    } else if value < 0 {
+        "diff-neg"
+    } else {
+        ""
+    }
+}
+
+fn format_chart_number(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            out.push(' ');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
+}
+
+fn format_signed_number(value: i128) -> String {
+    let abs = value.unsigned_abs() as u64;
+    let rendered = format_chart_number(abs);
+    if value > 0 {
+        format!("+{rendered}")
+    } else if value < 0 {
+        format!("-{rendered}")
+    } else {
+        "0".to_string()
+    }
 }
 
 fn render_subagent_block(event: &EventEntry) -> String {
@@ -481,6 +699,10 @@ mod tests {
 
     fn rollout_root_name(session_id: &str) -> String {
         format!("rollout-2026-04-06T22-54-37-{session_id}.jsonl")
+    }
+
+    fn count_occurrences(haystack: &str, needle: &str) -> usize {
+        haystack.match_indices(needle).count()
     }
 
     #[test]
@@ -639,8 +861,126 @@ mod tests {
     }
 
     #[test]
-    fn render_html_keeps_full_summary_text_without_truncation() {
-        let long_text = "assistant-message-without-truncation ".repeat(6);
+    fn render_html_renders_info_tokens_footnotes() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "text":"first"
+                }),
+                2,
+            ),
+            make_event(
+                "info.tokens",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "input_tokens":700,
+                    "cached_input_tokens":120,
+                    "output_tokens":340,
+                    "reasoning_output_tokens":74,
+                    "total_tokens":1234
+                }),
+                3,
+            ),
+            make_event(
+                "collab.spawn_agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"spawn_agent",
+                    "phase":"completed",
+                    "status":"completed",
+                    "receiver_thread_ids":["sub-1"],
+                    "agents_states":{"sub-1":{"status":"pending_init"}}
+                }),
+                4,
+            ),
+            make_event(
+                "agent.session",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "agent_role":"reviewer",
+                    "agent_nickname":"Ada"
+                }),
+                5,
+            ),
+            make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "text":"second"
+                }),
+                6,
+            ),
+            make_event(
+                "info.tokens",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "input_tokens":900,
+                    "cached_input_tokens":300,
+                    "output_tokens":280,
+                    "reasoning_output_tokens":60,
+                    "total_tokens":1500
+                }),
+                7,
+            ),
+            make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "text":"child"
+                }),
+                8,
+            ),
+            make_event(
+                "info.tokens",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "input_tokens":111,
+                    "cached_input_tokens":22,
+                    "output_tokens":33,
+                    "reasoning_output_tokens":4,
+                    "total_tokens":170
+                }),
+                9,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(!html.contains("Token Bar Chart"));
+        assert_eq!(
+            count_occurrences(&html, "data-footnote-event-type=\"info.tokens\""),
+            3
+        );
+        assert!(html.contains("data-footnote-event-id=\"run-1:3\""));
+        assert!(html.contains("data-footnote-event-id=\"run-1:7\""));
+        assert!(html.contains("data-footnote-event-id=\"run-1:9\""));
+        assert!(html.contains("event-footnote-title\">token consumption<"));
+        assert!(html.contains("event-footnote-label\">input<"));
+        assert!(html.contains("class=\"event-footnote-pair is-total\""));
+        assert!(html.contains("event-footnote-value\">1 234<"));
+        assert!(html.contains("event-footnote-value\">1 500<"));
+        assert!(html.contains("event-footnote-value\">170<"));
+        assert!(html.contains("Δ +1 234"));
+        assert!(html.contains("Δ +266"));
+        assert!(html.contains("Δ +170"));
+    }
+
+    #[test]
+    fn render_html_collapses_large_message_summary_with_toggle() {
+        let long_text = "assistant-message-without-truncation ".repeat(20);
         let events = vec![
             make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
             make_event(
@@ -658,9 +998,43 @@ mod tests {
         let html = render_html(&tree);
 
         assert!(html.contains(
-            "assistant: assistant-message-without-truncation assistant-message-without-truncation assistant-message-without-truncation assistant-message-without-truncation assistant-message-without-truncation assistant-message-without-truncation"
+            "assistant: assistant-message-without-truncation assistant-message-without-truncation assistant-message-without-truncation"
         ));
-        assert!(!html.contains("assistant-message-without-truncation ..."));
+        assert!(html.contains("class=\"message-collapse\""));
+        assert!(html.contains("class=\"summary-text message-preview\""));
+        assert!(html.contains("onclick=\"toggleMessageBlock(this)\""));
+        assert!(html.contains(">see full<"));
+        assert!(html.contains("..."));
+    }
+
+    #[test]
+    fn render_html_collapses_large_shell_result_output_with_toggle() {
+        let long_output = "shell-output-line\n".repeat(40);
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "shell.result",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-1",
+                    "input":{"command":"printf 'shell-output-line\\n'"},
+                    "exit_code":0,
+                    "output": long_output
+                }),
+                2,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains("<span class=\"event-key\">aggregated_output</span><div class=\"message-collapse\""));
+        assert!(html.contains("class=\"summary-text message-preview\""));
+        assert!(html.contains("onclick=\"toggleMessageBlock(this)\""));
+        assert!(html.contains(">see full<"));
+        assert!(html.contains("shell-output-line"));
     }
 
     #[test]

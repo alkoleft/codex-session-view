@@ -43,6 +43,11 @@ pub struct EventEntry {
     pub phase: Option<String>,
     pub aggregated_output: Option<String>,
     pub summary_pairs: Vec<(String, String)>,
+    pub input_tokens: Option<u64>,
+    pub cached_input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub reasoning_output_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1092,6 +1097,15 @@ fn format_event_entry(
             }),
         aggregated_output: extract_command_aggregated_output(&event.event_type, payload),
         summary_pairs: extract_summary_pairs(&event.event_type, payload),
+        input_tokens: extract_token_value(&event.event_type, payload, "input_tokens"),
+        cached_input_tokens: extract_token_value(&event.event_type, payload, "cached_input_tokens"),
+        output_tokens: extract_token_value(&event.event_type, payload, "output_tokens"),
+        reasoning_output_tokens: extract_token_value(
+            &event.event_type,
+            payload,
+            "reasoning_output_tokens",
+        ),
+        total_tokens: extract_token_value(&event.event_type, payload, "total_tokens"),
     }
 }
 
@@ -1121,6 +1135,18 @@ fn extract_summary_pairs(
         pairs.push((label.to_string(), rendered));
     }
     pairs
+}
+
+fn extract_token_value(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+    key: &str,
+) -> Option<u64> {
+    if event_type != INFO_TOKENS {
+        return None;
+    }
+
+    payload.and_then(|obj| obj.get(key)).and_then(Value::as_u64)
 }
 
 fn format_summary_number(value: u64) -> String {
