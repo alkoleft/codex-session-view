@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -8,14 +7,16 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use chrono::{Datelike, Duration as ChronoDuration, Utc};
+use codex_log::session::{
+    session_file_name_matches_thread_id as codex_session_file_name_matches_thread_id,
+    split_session_chunk_lines as codex_split_session_chunk_lines, ResolvedCodexHome,
+    SessionCatalog, SessionReadContext, SessionReader, TailCursor,
+};
 use regex::Regex;
 use serde_json::{Map, Value};
 
 use crate::error::{AppError, AppResult};
-use crate::events::readers::{
-    imported_subagent_session_meta, JsonOutputEventReader, RunEventContext,
-};
+use crate::events::readers::{JsonOutputEventReader, RunEventContext};
 use crate::events::record::EventRecord;
 use crate::lockfile::TaskFileLock;
 use crate::logs::{append_task_run, update_task_snapshot, write_event, write_summary, RunPaths};
@@ -30,7 +31,6 @@ use crate::util::utc_now_iso;
 
 static RUN_COUNTER: AtomicU64 = AtomicU64::new(1);
 const SUBAGENT_SESSION_LOOKUP_RETRY_SECONDS: f64 = 1.0;
-const RECENT_SUBAGENT_SESSION_DAY_WINDOW: usize = 3;
 
 enum StreamEvent {
     StdoutLine(String),
@@ -51,14 +51,11 @@ struct TaskExecutionOutcome {
 struct SubagentSessionTail {
     thread_id: String,
     imported_path: PathBuf,
+    session_ref: Option<String>,
     session_path: Option<PathBuf>,
-    resolved_parent_thread_id: Option<String>,
-    forked_from_id: Option<String>,
-    read_cursor: u64,
-    partial_bytes: Vec<u8>,
+    cursor: Option<TailCursor>,
     announced: bool,
     missing_announced: bool,
-    call_names: HashMap<String, String>,
     last_lookup_at: Option<Instant>,
     last_error: Option<String>,
 }
@@ -942,16 +939,16 @@ impl CodexWorker {
         if subagent_threads.is_empty() {
             return Ok(seq);
         }
-        let sessions_root = self.sessions_root().join("sessions");
-        if !sessions_root.exists() {
-            if final_pass {
-                self.emit(
-                    "subagent",
-                    &format!("sessions root not found: {}", sessions_root.display()),
-                );
+        let resolved_home = match ResolvedCodexHome::initialize(self.config.codex_home.clone()) {
+            Ok(home) => home,
+            Err(err) => {
+                if final_pass {
+                    self.emit("subagent", &format!("sessions root not available: {err}"));
+                }
+                return Ok(seq);
             }
-            return Ok(seq);
-        }
+        };
+        let catalog = SessionCatalog::new(resolved_home.clone());
 
         let mut thread_ids: Vec<String> = subagent_threads.iter().cloned().collect();
         thread_ids.sort();
@@ -974,8 +971,23 @@ impl CodexWorker {
                     });
                 if should_lookup {
                     tail.last_lookup_at = Some(now);
-                    tail.session_path =
-                        self.find_session_file(&sessions_root, &thread_id, final_pass);
+                    match catalog.find_session(&thread_id)? {
+                        Some(summary) => {
+                            let session_path =
+                                resolved_home.resolve_session_ref(&summary.session_ref)?;
+                            let session_ref_changed =
+                                tail.session_ref.as_deref() != Some(summary.session_ref.as_str());
+                            tail.session_ref = Some(summary.session_ref.clone());
+                            tail.session_path = Some(session_path);
+                            if session_ref_changed || tail.cursor.is_none() {
+                                tail.cursor = Some(TailCursor::new(summary.session_ref));
+                            }
+                        }
+                        None => {
+                            tail.session_ref = None;
+                            tail.session_path = None;
+                        }
+                    }
                 }
             }
 
@@ -1043,117 +1055,60 @@ impl CodexWorker {
         let Some(session_path) = tail.session_path.clone() else {
             return Ok(seq);
         };
-
-        let mut output_reader = JsonOutputEventReader::new(
-            RunEventContext {
-                task_id: claimed.task.task_id().unwrap_or_default().to_string(),
-                run_id: claimed.run_id.clone(),
-            },
-            None,
-        );
+        let Some(session_ref) = tail.session_ref.clone() else {
+            return Ok(seq);
+        };
+        let context = SessionReadContext {
+            task_id: claimed.task.task_id().unwrap_or_default().to_string(),
+            run_id: claimed.run_id.clone(),
+            session_ref: session_ref.clone(),
+            session_id: tail.thread_id.clone(),
+            default_parent_thread_id: parent_thread_id.to_string(),
+        };
+        let cursor = tail
+            .cursor
+            .clone()
+            .unwrap_or_else(|| TailCursor::new(session_ref));
+        let initial_cursor = cursor.offset == 0;
+        let result = match SessionReader::tail(&session_path, &context, &cursor) {
+            Ok(result) => result,
+            Err(codex_log::AppError::Io(err))
+                if err.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                return Ok(seq);
+            }
+            Err(err) => return Err(err.into()),
+        };
+        tail.cursor = Some(result.next_cursor.clone());
+        for (tool_name, count) in result.tool_counts {
+            *tool_counts.entry(tool_name).or_insert(0) += count;
+        }
+        for (subagent_name, count) in result.subagent_counts {
+            *subagent_counts.entry(subagent_name).or_insert(0) += count;
+        }
+        if result.raw_bytes.is_empty() && !final_pass {
+            return Ok(seq);
+        }
 
         if let Some(parent) = tail.imported_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
-        let mut source = File::open(&session_path)?;
-        source.seek(SeekFrom::Start(tail.read_cursor))?;
-        let mut chunk = Vec::new();
-        source.read_to_end(&mut chunk)?;
-        tail.read_cursor = source.stream_position()?;
-        if chunk.is_empty() && !final_pass {
-            return Ok(seq);
+        let mut imported_options = std::fs::OpenOptions::new();
+        imported_options.create(true).write(true);
+        if result.reset || initial_cursor {
+            imported_options.truncate(true);
+        } else {
+            imported_options.append(true);
+        }
+        let mut imported = imported_options.open(&tail.imported_path)?;
+        if !result.raw_bytes.is_empty() {
+            imported.write_all(&result.raw_bytes)?;
         }
 
-        let mut imported = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&tail.imported_path)?;
-        if !chunk.is_empty() {
-            imported.write_all(&chunk)?;
-        }
-
-        let lines = split_session_chunk_lines(&mut tail.partial_bytes, &chunk, final_pass);
-        let mut current_parent_thread_id = tail
-            .resolved_parent_thread_id
-            .clone()
-            .unwrap_or_else(|| parent_thread_id.to_string());
-
-        for line in lines {
-            let stripped = trim_line_bytes(&line);
-            if stripped.is_empty() {
-                continue;
-            }
+        for mut event in result.events {
             seq += 1;
-            let ts = utc_now_iso();
-            let stripped = match std::str::from_utf8(stripped) {
-                Ok(text) => text,
-                Err(_) => {
-                    let event = subagent_unparsed_event(
-                        claimed,
-                        seq,
-                        &ts,
-                        &tail.thread_id,
-                        "invalid_utf8",
-                        String::from_utf8_lossy(stripped).into_owned(),
-                    );
-                    write_event(&paths.events, &event)?;
-                    self.maybe_write_problem_examples(paths, &event)?;
-                    *event_counts.entry(event.event_type.clone()).or_insert(0) += 1;
-                    self.emit_event(&event);
-                    continue;
-                }
-            };
-            let parsed = match serde_json::from_str::<Value>(stripped) {
-                Ok(Value::Object(obj)) => obj,
-                _ => {
-                    let event = subagent_unparsed_event(
-                        claimed,
-                        seq,
-                        &ts,
-                        &tail.thread_id,
-                        "invalid_json",
-                        stripped.to_string(),
-                    );
-                    write_event(&paths.events, &event)?;
-                    self.maybe_write_problem_examples(paths, &event)?;
-                    *event_counts.entry(event.event_type.clone()).or_insert(0) += 1;
-                    self.emit_event(&event);
-                    continue;
-                }
-            };
-
-            if let Some(meta) = imported_subagent_session_meta(&parsed, &tail.thread_id) {
-                if tail.resolved_parent_thread_id.is_none() {
-                    if let Some(resolved_parent_thread_id) = meta.parent_thread_id {
-                        current_parent_thread_id = resolved_parent_thread_id.clone();
-                        tail.resolved_parent_thread_id = Some(resolved_parent_thread_id);
-                    }
-                }
-                if tail.forked_from_id.is_none() {
-                    tail.forked_from_id = meta.forked_from_id;
-                }
-            }
-
-            if let Some(resolved_parent_thread_id) = tail.resolved_parent_thread_id.as_deref() {
-                current_parent_thread_id = resolved_parent_thread_id.to_string();
-            }
-
-            let Some(codex_event) = output_reader.parse_subagent_session_payload(
-                seq,
-                &parsed,
-                &tail.imported_path,
-                &current_parent_thread_id,
-                &tail.thread_id,
-                &mut tail.call_names,
-                tool_counts,
-                subagent_counts,
-            ) else {
-                seq -= 1;
-                continue;
-            };
-
-            let event = codex_event.to_record();
+            event.seq = seq;
             write_event(&paths.events, &event)?;
             self.maybe_write_problem_examples(paths, &event)?;
             *event_counts.entry(event.event_type.clone()).or_insert(0) += 1;
@@ -1189,98 +1144,25 @@ impl CodexWorker {
         &self,
         sessions_root: &Path,
         thread_id: &str,
-        exhaustive: bool,
+        _exhaustive: bool,
     ) -> Option<PathBuf> {
-        let mut matches = Vec::new();
-        for day_dir in self.candidate_session_dirs(sessions_root, exhaustive) {
-            let Ok(entries) = std::fs::read_dir(&day_dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let file_name = path
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or_default();
-                if path.is_file()
-                    && file_name.ends_with(".jsonl")
-                    && session_file_name_matches_thread_id(file_name, thread_id)
-                {
-                    matches.push(path);
-                }
-            }
-            if !matches.is_empty() {
-                matches.sort();
-                return matches.pop();
-            }
-        }
-        None
-    }
-
-    fn candidate_session_dirs(&self, sessions_root: &Path, exhaustive: bool) -> Vec<PathBuf> {
-        if exhaustive {
-            return self.iter_session_dirs(sessions_root);
-        }
-
-        let today = Utc::now().date_naive();
-        let mut candidates = Vec::new();
-        for offset in 0..RECENT_SUBAGENT_SESSION_DAY_WINDOW {
-            let day = today - ChronoDuration::days(offset as i64);
-            let day_dir = sessions_root
-                .join(format!("{:04}", day.year()))
-                .join(format!("{:02}", day.month()))
-                .join(format!("{:02}", day.day()));
-            if day_dir.is_dir() {
-                candidates.push(day_dir);
-            }
-        }
-        if !candidates.is_empty() {
-            return candidates;
-        }
-        self.iter_session_dirs(sessions_root)
-            .into_iter()
-            .take(RECENT_SUBAGENT_SESSION_DAY_WINDOW)
-            .collect()
-    }
-
-    fn iter_session_dirs(&self, sessions_root: &Path) -> Vec<PathBuf> {
-        let mut result = Vec::new();
-        let Ok(years) = std::fs::read_dir(sessions_root) else {
-            return result;
+        let sessions_dir = sessions_root
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| *value == "sessions")
+            .map(|_| sessions_root.to_path_buf())?;
+        let root = sessions_dir.parent()?.to_path_buf();
+        let home = ResolvedCodexHome {
+            root: root.clone(),
+            sessions_dir,
+            session_index_path: root.join("session_index.jsonl"),
         };
-        let mut year_dirs: Vec<PathBuf> = years
-            .flatten()
-            .map(|entry| entry.path())
-            .filter(|path| path.is_dir())
-            .collect();
-        year_dirs.sort();
-        year_dirs.reverse();
-        for year_dir in year_dirs {
-            let Ok(months) = std::fs::read_dir(&year_dir) else {
-                continue;
-            };
-            let mut month_dirs: Vec<PathBuf> = months
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| path.is_dir())
-                .collect();
-            month_dirs.sort();
-            month_dirs.reverse();
-            for month_dir in month_dirs {
-                let Ok(days) = std::fs::read_dir(&month_dir) else {
-                    continue;
-                };
-                let mut day_dirs: Vec<PathBuf> = days
-                    .flatten()
-                    .map(|entry| entry.path())
-                    .filter(|path| path.is_dir())
-                    .collect();
-                day_dirs.sort();
-                day_dirs.reverse();
-                result.extend(day_dirs);
-            }
-        }
-        result
+        let catalog = SessionCatalog::new(home);
+        let summary = catalog.find_session(thread_id).ok().flatten()?;
+        catalog
+            .resolved_home()
+            .resolve_session_ref(&summary.session_ref)
+            .ok()
     }
 }
 
@@ -1315,41 +1197,8 @@ fn next_run_id() -> String {
     format!("{ts:x}-{counter:x}")
 }
 
-fn subagent_unparsed_event(
-    claimed: &ClaimedTask,
-    seq: u64,
-    ts: &str,
-    thread_id: &str,
-    raw_type: &str,
-    text: String,
-) -> EventRecord {
-    EventRecord {
-        schema_version: 1,
-        ts: ts.to_string(),
-        task_id: claimed.task.task_id().unwrap_or_default().to_string(),
-        run_id: claimed.run_id.clone(),
-        seq,
-        event_type: "raw.unparsed".to_string(),
-        raw_type: raw_type.to_string(),
-        parse_status: "unparsed".to_string(),
-        payload: Value::Object(Map::from_iter([
-            ("actor_type".to_string(), Value::from("subagent")),
-            ("thread_id".to_string(), Value::from(thread_id.to_string())),
-            ("text".to_string(), Value::from(text)),
-        ])),
-    }
-}
-
 fn session_file_name_matches_thread_id(file_name: &str, thread_id: &str) -> bool {
-    file_name.match_indices(thread_id).any(|(start, _)| {
-        let before = file_name[..start].chars().next_back();
-        let after = file_name[start + thread_id.len()..].chars().next();
-        session_name_boundary(before) && session_name_boundary(after)
-    })
-}
-
-fn session_name_boundary(ch: Option<char>) -> bool {
-    ch.is_none_or(|value| !value.is_ascii_alphanumeric())
+    codex_session_file_name_matches_thread_id(file_name, thread_id)
 }
 
 fn split_session_chunk_lines(
@@ -1357,31 +1206,7 @@ fn split_session_chunk_lines(
     chunk: &[u8],
     final_pass: bool,
 ) -> Vec<Vec<u8>> {
-    let mut combined = std::mem::take(partial_bytes);
-    combined.extend_from_slice(chunk);
-
-    let mut lines = Vec::new();
-    let mut line_start = 0usize;
-    for (idx, byte) in combined.iter().enumerate() {
-        if *byte == b'\n' {
-            lines.push(combined[line_start..idx].to_vec());
-            line_start = idx + 1;
-        }
-    }
-
-    if final_pass {
-        if line_start < combined.len() {
-            lines.push(combined[line_start..].to_vec());
-        }
-    } else {
-        partial_bytes.extend_from_slice(&combined[line_start..]);
-    }
-
-    lines
-}
-
-fn trim_line_bytes(line: &[u8]) -> &[u8] {
-    line.strip_suffix(b"\r").unwrap_or(line)
+    codex_split_session_chunk_lines(partial_bytes, chunk, final_pass)
 }
 
 fn heartbeat_interval(stale_after_seconds: f64) -> Duration {

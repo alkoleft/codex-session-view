@@ -9,9 +9,6 @@ pub enum AppError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("{0}")]
-    CodexLog(#[from] codex_log::AppError),
-
     #[error("cli parse error: {0}")]
     CliParse(String),
 

@@ -9,12 +9,18 @@
 
 Источник истины в коде:
 
-- `src/events/readers/stdout.rs`
-- `src/events/readers/session.rs`
-- `src/events/record.rs`
-- `src/events/payloads.rs`
-- `src/bin/events_tree_shared.rs`
+- `crates/codex-log/src/events/readers/stdout.rs`
+- `crates/codex-log/src/events/readers/session.rs`
+- `crates/codex-log/src/events/record.rs`
+- `crates/codex-log/src/events/payloads.rs`
+- `crates/codex-log/src/session.rs`
+- `crates/codex-log/src/tree.rs`
+- `src/runner.rs`
 - `src/bin/events_tree_html.rs`
+
+Совместимые re-export файлы в `src/events/*` и `src/bin/events_tree_shared.rs` сохранены только
+для плавной миграции существующего worker crate. Каноническая логика ingestion, session
+discovery, tail и tree/view-model теперь находится в `crates/codex-log`.
 
 ## 1. Источники логов
 
@@ -25,6 +31,21 @@
 - root stdout поток `codex exec --json`
 - root stderr поток процесса
 - session-файлы субагентов (`CODEX_HOME/sessions/.../*.jsonl` или standalone `rollout-*.jsonl`)
+
+### 1.1.1. Discovery и metadata overlay для session-файлов
+
+Для `SessionCatalog` и viewer v1 источником истины существования сессии считается файловая
+структура `CODEX_HOME/sessions/YYYY/MM/DD/*.jsonl`.
+
+`session_index.jsonl` используется только как metadata overlay:
+
+- файл есть, индекса нет: сессия остаётся в каталоге с `index_status="missing"`;
+- индекс есть, файла нет: запись считается stale и в основной список не попадает;
+- дубли в `session_index.jsonl` по `session_id`: выбирается запись с максимальным `updated_at`,
+  а при равенстве последняя строка в файле;
+- дубли session-файлов для одного `session_id`: primary выбирается по самому свежему `mtime`,
+  остальные фиксируются в diagnostics как `duplicate_session_files`;
+- битые строки `session_index.jsonl` пропускаются fail-soft и не ломают построение каталога.
 
 ### 1.2. Канонический on-disk формат
 
@@ -51,8 +72,8 @@
 | `schema_version` | Версия схемы `events.jsonl`. Сейчас всегда `1`. |
 | `ts` | ISO-время события. Для subagent session берётся из `timestamp`, иначе ставится текущее UTC-время. |
 | `task_id`, `run_id` | Идентификаторы текущего запуска worker. |
-| `seq` | Монотонный номер события внутри run. Общий и для root, и для импортированных subagent session. |
-| `event_type` | Канонический внутренний тип события. Именно по нему работает projector, tree и HTML render. |
+| `seq` | Монотонный номер события внутри run. Общий и для root, и для импортированных subagent session. Для standalone viewer tail это локальный номер внутри session file. |
+| `event_type` | Канонический внутренний тип события. Именно по нему работает projector, tree, HTML render и Tauri viewer. |
 | `raw_type` | Исходный тип записи до нормализации: например `thread.started`, `response_item`, `event_msg`, `stderr`, `invalid_json`. |
 | `parse_status` | Качество разбора: `parsed`, `best_effort`, `unparsed`. |
 | `payload` | Нормализованная полезная нагрузка. |
@@ -367,13 +388,35 @@ Subagent message вообще не добавляется в `events.jsonl`, е�
 | `item_completed` для `Plan` | `response_item.message` |
 | `web_search_end` | `response_item.web_search_call` |
 
-Причина: эти legacy записи часто содержат дополнительные поля, полезные для tree/HTML,
+Причина: эти legacy записи часто содержат дополнительные поля, полезные для tree/view слоя,
 поэтому они не удаляются на ingestion-этапе.
+
+### 7.5. Tail semantics для `SessionReader`
+
+Incremental tail для standalone rollout и live-import subagent sessions работает через
+`TailCursor` и следующие правила:
+
+- если `offset <= file.size` и `file_identity` не изменилась, чтение продолжается с `offset`;
+- если `offset > file.size`, это считается truncate, возвращается `reset=true`, чтение
+  начинается с начала файла;
+- если изменилась `file_identity` (`device` / `inode` / `mtime+size` fallback), это считается
+  rotate/recreate, возвращается `reset=true`, чтение начинается с начала файла;
+- незавершённая JSONL-строка без финального `\n` не эмитится; байты копятся в
+  `TailCursor.pending_fragment` до завершения строки;
+- на границе reset/rotate используется короткое rolling dedup-window по стабильному event key,
+  а при его отсутствии по hash сырой строки, чтобы не дублировать только что импортированные
+  события;
+- `session_ref` в `TailCursor` обязан совпадать с целевой сессией; смена файла для другой
+  сессии требует нового cursor.
 
 ## 8. Правила объединения после ingestion
 
 Дедупликация выше отвечает за содержимое `events.jsonl`. Ниже описано вторичное
-объединение уже нормализованных событий при построении дерева/HTML.
+объединение уже нормализованных событий при построении дерева/HTML и для Tauri viewer.
+
+Источник истины этого слоя теперь находится в `crates/codex-log/src/tree.rs`, а
+`src/bin/events_tree_html.rs` и `apps/codex-log-viewer` используют один и тот же library-level
+view-model.
 
 ### 8.1. Склейка start/result одной операции
 
@@ -479,8 +522,11 @@ HTML renderer рендерит единые карточки для пар:
 
 ## 10. Краткое резюме
 
-Если смотреть на систему как на pipeline, она состоит из трёх шагов:
+Если смотреть на систему как на pipeline, она состоит из четырёх шагов:
 
 1. сырые root/subagent логи приводятся к единой схеме `EventRecord`;
 2. явные дубли либо подавляются, либо помечаются через `payload.duplicate_of`;
-3. tree/HTML слой поверх `EventRecord` выполняет дополнительное семантическое объединение, не меняя исходный `events.jsonl`.
+3. `SessionCatalog` и `SessionReader` добавляют discovery, metadata overlay и incremental tail
+   поверх `CODEX_HOME/sessions` и standalone rollout-файлов;
+4. tree/view слой поверх `EventRecord` выполняет дополнительное семантическое объединение, не
+   меняя исходный `events.jsonl`.

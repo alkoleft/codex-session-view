@@ -2,7 +2,7 @@
 
 **Проект:** `codex-worker-rs`  
 **Версия:** 0.1-draft  
-**Дата:** 2026-04-03  
+**Дата:** 2026-04-07  
 **Статус:** Черновик
 
 ---
@@ -152,10 +152,11 @@ flowchart LR
 **Ключевые технологические решения:**
 
 - Rust как основной язык реализации.
+- Cargo workspace с разделением на orchestration crate, library crate для логов и отдельный desktop viewer.
 - Блокирующий subprocess и файловый I/O с использованием потоков в `v1`.
 - `serde` и JSONL для сериализации событий и артефактов.
 - POSIX-подобная модель file locking и atomic replace для mutable state.
-- Терминальный UI как отдельный слой поверх проектора событий.
+- Терминальный UI и Tauri viewer как отдельные consumer-слои поверх общего `codex-log`.
 
 **Архитектурные паттерны:**
 
@@ -163,6 +164,7 @@ flowchart LR
 - file-based координация состояния;
 - разделение mutable task state и immutable артефактов запуска;
 - каноническая внутренняя event model с несколькими адаптерами входных данных;
+- library-first разделение ingestion/tree слоя от конкретных UI и orchestration consumers;
 - постепенная архитектура: локальный воркер сначала, управляемый воркер позже.
 
 ---
@@ -202,6 +204,17 @@ flowchart TD
 | Хранилище артефактов | Запись prompt, logs, events, summary и task snapshots | File system |
 | Консольный UI | Отрисовка live-статуса и timeline в терминале | Snapshot проектора событий |
 
+### 5.1.1 Workspace split
+
+Текущая реализация разделена на три роли внутри одного репозитория:
+
+- root package `codex-worker-rs` отвечает за `run-next`, task orchestration, запись run artifacts и
+  live sync с subagent sessions;
+- `crates/codex-log` содержит source of truth для `EventRecord`, readers, replay, tree/view-model,
+  `SessionCatalog`, `SessionLoader`, `SessionReader` и `TailCursor`;
+- `apps/codex-log-viewer` это отдельный desktop product на Tauri + React, который читает
+  `CODEX_HOME` напрямую через backend-команды и не зависит от run-dir worker.
+
 ### 5.2 Уровень 2: внутренняя структура runner
 
 ```mermaid
@@ -224,8 +237,9 @@ flowchart LR
 
 - Стадия claim: загрузка snapshot, stale recovery и атомарный перевод следующей задачи в `running`.
 - Стадия исполнения: запуск `codex exec`, передача prompt в `stdin`, параллельное чтение потоков.
-- Стадия ingestion: преобразование сырых событий в канонические `EventRecord`.
-- Стадия синхронизации подчинённых сессий: поиск и дозагрузка связанных session files из `CODEX_HOME`.
+- Стадия ingestion: преобразование сырых событий в канонические `EventRecord` через `codex-log`.
+- Стадия синхронизации подчинённых сессий: поиск session files через `SessionCatalog` и дозагрузка
+  tail-инкрементов через `SessionReader`.
 - Стадия финализации: построение `RunSummary`, запись артефактов, обновление файла задач и архивация при необходимости.
 
 ### 5.3 Уровень 2: подсистема обработки событий
@@ -233,16 +247,21 @@ flowchart LR
 ```mermaid
 flowchart TD
     MAIN[JSON lines из stdout] --> R1[Читатель основного потока]
-    SUB[JSONL из подчинённых сессий] --> R2[Читатель подчинённых сессий]
+    SUB[JSONL из подчинённых сессий] --> CAT[SessionCatalog / SessionLoader]
+    IDX[session_index.jsonl overlay] --> CAT
+    CAT --> R2[Читатель подчинённых сессий]
     R1 --> REC[Канонический EventRecord]
     R2 --> REC
     REC --> PROJ[Проектор событий]
     REC --> EVTLOG[events.jsonl]
     REC --> RAW[raw_unparsed и problem_examples]
     PROJ --> UI[Консольный UI]
+    PROJ --> VIEW[Tauri viewer]
 ```
 
-Подсистема событий изолирует дрейф формата внешнего runtime output от остальной системы. Runner работает уже не с сырыми payload, а с канонической моделью и флагами состояния.
+Подсистема событий изолирует дрейф формата внешнего runtime output от остальной системы.
+Worker и Tauri viewer работают уже не с сырыми payload, а с общими library-level API:
+каталогом сессий, канонической event model и tree/view-model.
 
 ---
 
@@ -353,6 +372,7 @@ flowchart TB
     subgraph Хост
         OP[Разработчик или оператор]
         WK[codex-worker-rs]
+        VW[codex-log-viewer]
         CX[codex CLI]
         TF[Файл задач]
         ART[.codex-worker артефакты]
@@ -360,10 +380,12 @@ flowchart TB
     end
 
     OP --> WK
+    OP --> VW
     WK --> CX
     WK --> TF
     WK --> ART
     WK --> CH
+    VW --> CH
 ```
 
 **Узлы:**
@@ -372,6 +394,7 @@ flowchart TB
 |------|------------|------------|
 | Терминал разработчика / оператора | Запуск воркера и просмотр результата | Локальная оболочка |
 | `codex-worker-rs` | Исполняющий рантайм orchestration | Rust binary |
+| `codex-log-viewer` | Read-only desktop viewer для Codex sessions | Tauri + React |
 | `codex` CLI | Внешний execution engine | Установленный Codex CLI |
 | Файл задач | Изменяемая очередь задач в `v1` | Markdown file |
 | Каталог артефактов | История запусков и диагностика | Local filesystem |
@@ -493,6 +516,11 @@ classDiagram
 
 Это сохраняет прозрачность системы и позволяет позже добавить `control plane`, не отказываясь от file artifacts.
 
+Для `CODEX_HOME` дополнительно действует split между двумя слоями:
+
+- session files в `CODEX_HOME/sessions/**` это source of truth существования сессии;
+- `session_index.jsonl` это только metadata overlay для viewer и runtime discovery.
+
 ### 8.4 Наблюдаемость и телеметрия
 
 Наблюдаемость строится из трёх слоёв:
@@ -543,6 +571,20 @@ classDiagram
 
 Эти части сознательно отложены до post-`v1`.
 
+### 8.8 Trust boundary viewer
+
+`codex-log-viewer` намеренно проектируется как read-only desktop-клиент с жёсткой backend границей:
+
+- frontend использует только пять IPC-команд: `detect_codex_home`, `initialize_codex_home`,
+  `list_sessions`, `load_session`, `tail_session`;
+- после `initialize_codex_home()` backend фиксирует канонический `ResolvedCodexHome`, а чтение до
+  инициализации запрещено;
+- frontend работает только с `session_ref`, а не с произвольными filesystem path;
+- backend сам резолвит канонический путь внутри `${ResolvedCodexHome}/sessions` и отклоняет
+  absolute path, traversal и symlink-escape;
+- capability/permission модель Tauri ограничена локальным окном `main` и только объявленными
+  viewer-командами; `shell` и `process` разрешения не выдаются.
+
 ---
 
 ## 9. Архитектурные решения
@@ -564,6 +606,8 @@ classDiagram
 | Для `v1` сохранить поведенческую совместимость с Python worker | Принято для `v1` | Это минимизирует риск миграции и даёт эталон для тестов |
 | Оставить file artifacts первичным источником истины | Принято | Это поддерживает post-mortem и постепенную эволюцию системы |
 | В первой Rust-версии использовать blocking I/O и потоки | Принято для `v1` | Это проще для паритета и отладки |
+| Вынести log ingestion и tree/view-model в `crates/codex-log` | Принято | Это даёт один source of truth для worker, HTML export и Tauri viewer |
+| Реализовать session viewer как отдельное Tauri desktop app | Принято для viewer v1 | Это позволяет читать `CODEX_HOME` напрямую без привязки к run-dir worker |
 | Отложить внешний `control plane`, общую очередь и telemetry export до post-`v1` | Принято как граница scope | Это не даёт размыть первую поставку |
 
 ### 9.3 Список будущих ADR

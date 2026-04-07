@@ -1,3 +1,7 @@
 target/
 .codex-mount/
 *.code-workspace
+ai-artefacts/
+node_modules/
+dist/
+gen/
