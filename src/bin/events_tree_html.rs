@@ -248,9 +248,9 @@ summary::-webkit-details-marker{display:none;}
 .thread-flow{display:flex;flex-direction:column;margin-top:10px;}
 .thread-flow>*+*{position:relative;margin-top:0;padding-top:16px;}
 .thread-flow>*+*::before{content:"";position:absolute;top:0;left:0;right:0;border-top:1px dashed #98a6b9;}
-.task-lifecycle{position:relative;margin:2px 0;padding-left:28px;}
-.task-lifecycle::before{content:"";position:absolute;top:8px;bottom:8px;left:10px;width:2px;border-radius:999px;background:linear-gradient(180deg,#7c8ea3 0%,#cbd5e1 100%);}
-.task-lifecycle.is-open::before{background:linear-gradient(180deg,#2563eb 0%,rgba(37,99,235,.18) 100%);}
+.task-lifecycle{position:relative;margin:2px 0;padding-left:28px;--task-accent:#2563eb;--task-accent-soft:#dbeafe;--task-accent-fade:rgba(37,99,235,.18);}
+.task-lifecycle::before{content:"";position:absolute;top:8px;bottom:8px;left:10px;width:2px;border-radius:999px;background:linear-gradient(180deg,var(--task-accent) 0%,color-mix(in srgb,var(--task-accent) 26%,#ffffff) 100%);}
+.task-lifecycle.is-open::before{background:linear-gradient(180deg,var(--task-accent) 0%,var(--task-accent-fade) 100%);}
 .task-lifecycle-items{position:relative;}
 .task-lifecycle-items.thread-flow{margin-top:0;}
 .event-footnote{margin:6px calc(50% - 50vw) 0;padding:0 20px;background:linear-gradient(90deg,rgba(253,246,227,.96),rgba(231,240,255,.96));border-top:1px dashed #d8dee9;border-bottom:1px solid #d8dee9;}
@@ -269,8 +269,9 @@ summary::-webkit-details-marker{display:none;}
 .event-card{display:flex;flex-direction:column;gap:8px;padding:10px 0;border:none;border-radius:0;background:transparent;box-shadow:none;}
 .event-card.is-task-started,.event-card.is-task-completed{position:relative;}
 .event-card.is-task-started::before,.event-card.is-task-completed::before{content:"";position:absolute;top:14px;left:-24px;width:10px;height:10px;border-radius:999px;box-shadow:0 0 0 4px rgba(246,243,238,.96);}
-.event-card.is-task-started::before{background:#2563eb;border:2px solid #2563eb;}
-.event-card.is-task-completed::before{background:#f8fffb;border:2px solid #16a34a;}
+.event-card.is-task-started::before{background:var(--task-accent,#2563eb);border:2px solid var(--task-accent,#2563eb);}
+.event-card.is-task-completed::before{background:#f8fffb;border:2px solid var(--task-accent,#2563eb);}
+.task-mode-badge{background:var(--task-accent-soft,#dbeafe);color:var(--task-accent,#2563eb);border-color:color-mix(in srgb,var(--task-accent,#2563eb) 34%,#ffffff);}
 .event-card.is-user-prompt{margin:4px 0;padding:12px 14px;border:1px solid #86efac;border-radius:16px;background:linear-gradient(180deg,#f4fff6,#ecfdf3);box-shadow:inset 0 1px 0 rgba(255,255,255,.92);}
 .event-card.is-user-prompt .badge{background:#dcfce7;color:#166534;border-color:#86efac;}
 .event-card.is-user-prompt .event-ts{color:#15803d;}
@@ -528,15 +529,67 @@ fn render_task_lifecycle_segment(
     last_token_usage: &mut TokenUsage,
     is_closed: bool,
 ) {
+    let start_event = items.first().and_then(timeline_item_event);
     let class_name = if is_closed {
         "task-lifecycle is-closed"
     } else {
         "task-lifecycle is-open"
     };
-    let _ = write!(out, "<section class=\"{}\">", class_name);
+    let style = task_lifecycle_style(start_event);
+    let data_mode = start_event
+        .and_then(|event| event.collaboration_mode_kind.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("unknown");
+    let _ = write!(
+        out,
+        "<section class=\"{}\" data-task-mode=\"{}\" style=\"{}\">",
+        class_name,
+        escape_html(data_mode),
+        escape_html(&style),
+    );
     out.push_str("<div class=\"thread-flow task-lifecycle-items\">");
     render_timeline_items_internal(out, items, depth, last_token_usage, false);
     out.push_str("</div></section>");
+}
+
+fn task_lifecycle_style(start_event: Option<&EventEntry>) -> String {
+    let (accent, soft, fade) =
+        task_mode_palette(start_event.and_then(|event| event.collaboration_mode_kind.as_deref()));
+    format!("--task-accent:{accent};--task-accent-soft:{soft};--task-accent-fade:{fade};")
+}
+
+fn task_mode_palette(mode: Option<&str>) -> (&'static str, &'static str, &'static str) {
+    let normalized = mode
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+
+    match normalized.as_deref() {
+        Some("default") => ("#2563eb", "#dbeafe", "rgba(37,99,235,.18)"),
+        Some("plan") | Some("planning") => ("#d97706", "#fef3c7", "rgba(217,119,6,.18)"),
+        Some("review") | Some("reviewer") => ("#be123c", "#ffe4e6", "rgba(190,18,60,.18)"),
+        Some("implementation") | Some("worker") => ("#0f766e", "#ccfbf1", "rgba(15,118,110,.18)"),
+        Some("approval") => ("#7c3aed", "#ede9fe", "rgba(124,58,237,.18)"),
+        Some(other) => task_mode_fallback_palette(other),
+        None => ("#2563eb", "#dbeafe", "rgba(37,99,235,.18)"),
+    }
+}
+
+fn task_mode_fallback_palette(mode: &str) -> (&'static str, &'static str, &'static str) {
+    const PALETTE: [(&str, &str, &str); 6] = [
+        ("#2563eb", "#dbeafe", "rgba(37,99,235,.18)"),
+        ("#7c3aed", "#ede9fe", "rgba(124,58,237,.18)"),
+        ("#0891b2", "#cffafe", "rgba(8,145,178,.18)"),
+        ("#d97706", "#fef3c7", "rgba(217,119,6,.18)"),
+        ("#16a34a", "#dcfce7", "rgba(22,163,74,.18)"),
+        ("#be123c", "#ffe4e6", "rgba(190,18,60,.18)"),
+    ];
+
+    let hash = mode.bytes().fold(0u64, |acc, byte| {
+        acc.wrapping_mul(16777619).wrapping_add(byte as u64)
+    });
+    PALETTE[(hash as usize) % PALETTE.len()]
 }
 
 fn render_event_node(
@@ -1231,17 +1284,19 @@ fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mu
     }
 
     let subagent_badge = render_subagent_badge(event);
+    let mode_badge = render_task_start_mode_badge(event);
     let meta_row = render_event_meta_row(event);
     let summary_block = render_event_summary_block(event);
     let detail_block = render_event_detail_block(event);
     let card_class = event_card_class(event);
+    let event_label = event_header_label(event);
     let _ = write!(
         out,
         "<article class=\"{}\" data-seq=\"{}\" data-event-id=\"{}\" data-parent-event-id=\"{}\" data-raw-type=\"{}\" data-parse-status=\"{}\">\
          <div class=\"event-header\">\
          <div class=\"event-header-main\">\
          <span class=\"seq-chip\">#{:04}</span>\
-         <span class=\"badge {}\">{}</span>{}\
+         <span class=\"badge {}\">{}</span>{}{}\
          </div>\
          <span class=\"event-ts\">{}</span>\
          </div>\
@@ -1255,7 +1310,8 @@ fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mu
         escape_html(&event.parse_status),
         event.seq,
         category_class(event.category),
-        escape_html(&event.event_type),
+        escape_html(&event_label),
+        mode_badge,
         subagent_badge,
         escape_html(&event.ts),
         meta_row,
@@ -1263,6 +1319,29 @@ fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mu
         detail_block,
         token_footnote,
     );
+}
+
+fn event_header_label(event: &EventEntry) -> String {
+    event.event_type.clone()
+}
+
+fn render_task_start_mode_badge(event: &EventEntry) -> String {
+    if !is_task_started_event(event) {
+        return String::new();
+    }
+    let Some(mode) = event
+        .collaboration_mode_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return String::new();
+    };
+
+    format!(
+        "<span class=\"badge task-mode-badge\">{}</span>",
+        escape_html(mode)
+    )
 }
 
 fn event_card_class(event: &EventEntry) -> &'static str {
@@ -3253,6 +3332,16 @@ mod tests {
                 3,
             ),
             make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "text":"task is progressing"
+                }),
+                4,
+            ),
+            make_event(
                 "task.completed",
                 json!({
                     "actor_type":"subagent",
@@ -3261,13 +3350,20 @@ mod tests {
                     "turn_id":"019d6447-496b-7f73-b7cc-61a0cf42b81f",
                     "last_agent_message":"**Result**\n\n`APPROVED`\n\n- resolved A\n- resolved B\n- resolved C\n"
                 }),
-                4,
+                5,
             ),
         ];
 
         let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
         let html = render_html(&tree);
 
+        assert!(html.contains("class=\"task-lifecycle is-closed\""));
+        assert!(html.contains("data-task-mode=\"default\""));
+        assert!(html.contains("--task-accent:#2563eb;"));
+        assert!(html.contains("class=\"thread-flow task-lifecycle-items\""));
+        assert!(html.contains("class=\"event-card is-task-started\""));
+        assert!(html.contains("class=\"event-card is-task-completed\""));
+        assert!(html.contains("class=\"badge task-mode-badge\">default<"));
         assert!(!html.contains(
             "started: mode=default turn=019d6447-496b-7f73-b7cc-61a0cf42b81f window=256000"
         ));
@@ -3280,9 +3376,96 @@ mod tests {
         assert!(html.contains("class=\"inset-block task-message-block inline-title\""));
         assert!(html.contains("class=\"inset-block-title inline-title\">Last Agent Message<"));
         assert!(html.contains("class=\"message-collapse\""));
+        assert!(html.contains("task is progressing"));
         assert!(html.contains("**Result**"));
         assert!(html.contains("resolved A"));
         assert!(html.contains("resolved C"));
+
+        let lifecycle_pos = html
+            .find("class=\"task-lifecycle is-closed\"")
+            .expect("task lifecycle should be rendered");
+        let progress_pos = html
+            .find("task is progressing")
+            .expect("task progress message should be inside lifecycle");
+        let complete_pos = html
+            .find("class=\"event-card is-task-completed\"")
+            .expect("task completed marker should exist");
+        assert!(lifecycle_pos < progress_pos);
+        assert!(progress_pos < complete_pos);
+    }
+
+    #[test]
+    fn render_html_uses_different_task_lifecycle_colors_for_different_modes() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "agent.session",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread"
+                }),
+                2,
+            ),
+            make_event(
+                "task.started",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "turn_id":"turn-default",
+                    "collaboration_mode_kind":"default"
+                }),
+                3,
+            ),
+            make_event(
+                "task.completed",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "turn_id":"turn-default",
+                    "last_agent_message":"done default"
+                }),
+                4,
+            ),
+            make_event(
+                "task.started",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "turn_id":"turn-review",
+                    "collaboration_mode_kind":"review"
+                }),
+                5,
+            ),
+            make_event(
+                "task.completed",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "turn_id":"turn-review",
+                    "last_agent_message":"done review"
+                }),
+                6,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains("data-task-mode=\"default\""));
+        assert!(html.contains("--task-accent:#2563eb;"));
+        assert!(html.contains("class=\"badge task-mode-badge\">default<"));
+        assert!(html.contains("data-task-mode=\"review\""));
+        assert!(html.contains("--task-accent:#be123c;"));
+        assert!(html.contains("class=\"badge task-mode-badge\">review<"));
+        assert_eq!(
+            count_occurrences(&html, "class=\"task-lifecycle is-closed\""),
+            2
+        );
     }
 
     #[test]
