@@ -5,3 +5,5 @@ ai-artefacts/
 node_modules/
 dist/
 gen/
+.agents
+.codex

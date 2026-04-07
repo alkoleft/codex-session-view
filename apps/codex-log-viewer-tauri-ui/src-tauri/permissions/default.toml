@@ -1,0 +1,9 @@
+[default]
+description = "Разрешает только backend IPC-команды viewer для локального окна приложения."
+permissions = [
+  "allow-detect-codex-home",
+  "allow-initialize-codex-home",
+  "allow-list-sessions",
+  "allow-load-session-preview",
+  "allow-tail-session",
+]

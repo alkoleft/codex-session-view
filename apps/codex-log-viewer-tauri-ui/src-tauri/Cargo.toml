@@ -1,0 +1,24 @@
+[package]
+name = "codex-log-viewer-tauri-ui"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+desktop = ["dep:tauri"]
+
+[lib]
+name = "codex_log_viewer_tauri_ui"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "codex-log-viewer-tauri-ui"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+codex-log-viewer = { path = "../../codex-log-viewer/src-tauri", default-features = false, features = ["desktop"] }
+tauri = { version = "2", optional = true, features = [] }

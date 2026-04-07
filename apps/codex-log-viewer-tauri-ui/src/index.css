@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+:root {
+  --canvas: #f4efe2;
+  --canvas-strong: #fff9f0;
+  --panel: rgba(255, 251, 245, 0.84);
+  --panel-strong: rgba(255, 249, 241, 0.96);
+  --line: rgba(24, 35, 32, 0.12);
+  --line-strong: rgba(24, 35, 32, 0.22);
+  --ink: #182320;
+  --ink-soft: #4d615a;
+  --accent: #af6722;
+  --accent-soft: #f3d0a9;
+  --accent-strong: #d67a1e;
+  --emerald: #2a7661;
+  --plum: #644f8b;
+  --rose: #975264;
+  --shadow: 0 24px 70px rgba(24, 35, 32, 0.12);
+  font-family: "IBM Plex Sans", "Iosevka Aile", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(218, 140, 62, 0.22), transparent 28%),
+    radial-gradient(circle at 88% 12%, rgba(42, 118, 97, 0.17), transparent 24%),
+    linear-gradient(160deg, #f7efe0 0%, #eef4ef 45%, #dbe4e0 100%);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: inherit;
+  color: inherit;
+}
+
+[data-ui-scroll-container] {
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: none;
+}
+
+@layer base {
+  body {
+    @apply select-none;
+  }
+
+  input,
+  textarea,
+  [contenteditable="true"],
+  pre,
+  code,
+  .ui-selectable {
+    @apply select-text;
+  }
+}
+
+@layer components {
+  .ui-panel {
+    @apply rounded-[28px] border backdrop-blur-md;
+    border-color: var(--line);
+    background: var(--panel);
+    box-shadow: var(--shadow);
+  }
+
+  .ui-card {
+    @apply rounded-[22px] border;
+    border-color: var(--line);
+    background: var(--panel-strong);
+  }
+
+  .ui-button {
+    @apply inline-flex items-center gap-2 rounded-full px-4 py-2.5 text-sm font-medium transition;
+    border: 1px solid var(--line-strong);
+    background: rgba(255, 255, 255, 0.72);
+    color: var(--ink);
+  }
+
+  .ui-button:hover:enabled {
+    transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--accent) 40%, white);
+    background: rgba(255, 255, 255, 0.9);
+  }
+
+  .ui-button:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .ui-button-primary {
+    border-color: color-mix(in srgb, var(--accent) 40%, white);
+    background: linear-gradient(135deg, var(--accent-soft), #f7e3cb);
+  }
+
+  .ui-input {
+    @apply w-full rounded-[18px] border px-4 py-3 text-sm outline-none transition;
+    border-color: var(--line);
+    background: rgba(255, 255, 255, 0.84);
+    color: var(--ink);
+  }
+
+  .ui-input:focus {
+    border-color: color-mix(in srgb, var(--accent) 45%, white);
+    box-shadow: 0 0 0 4px rgba(214, 122, 30, 0.12);
+  }
+
+  .ui-eyebrow {
+    @apply text-[0.7rem] font-semibold uppercase tracking-[0.24em];
+    color: var(--accent);
+  }
+
+  .ui-code-pill {
+    @apply rounded-full px-2.5 py-1 text-[0.72rem] font-medium;
+    background: rgba(24, 35, 32, 0.08);
+  }
+}
+
+.tone-system {
+  color: var(--emerald);
+  background: rgba(42, 118, 97, 0.12);
+}
+
+.tone-message {
+  color: var(--plum);
+  background: rgba(100, 79, 139, 0.12);
+}
+
+.tone-tool {
+  color: var(--accent);
+  background: rgba(175, 103, 34, 0.12);
+}
+
+.tone-error {
+  color: var(--rose);
+  background: rgba(151, 82, 100, 0.12);
+}

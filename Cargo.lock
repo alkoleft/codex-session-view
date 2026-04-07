@@ -431,6 +431,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-log-viewer-tauri-ui"
+version = "0.1.0"
+dependencies = [
+ "codex-log-viewer",
+ "tauri",
+ "tauri-build",
+]
+
+[[package]]
 name = "codex-worker-rs"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Codex Log Viewer Tauri UI",
+  "version": "0.1.0",
+  "identifier": "rs.codex.log.viewer.tauriui",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1430",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Codex Log Viewer Tauri UI",
+        "center": true,
+        "width": 1480,
+        "height": 960,
+        "resizable": true,
+        "visible": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: asset:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}
