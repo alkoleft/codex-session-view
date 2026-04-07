@@ -1,5 +1,6 @@
 import { memo, startTransition, useEffect, useRef, useState } from "react";
 import {
+  ExternalLink,
   FolderSearch2,
   Layers3,
   RadioTower,
@@ -558,12 +559,23 @@ export default function App() {
               shell, скрытие окна до первого paint и scroll container, но тот же read-only
               backend contract для каталога сессий, preview и live tail.
             </p>
+            <div className="mt-5 flex flex-wrap gap-3">
+              <a
+                className="ui-button"
+                href="https://github.com/agmmnn/tauri-ui"
+                rel="noreferrer"
+                target="_blank"
+              >
+                <ExternalLink className="h-4 w-4" />
+                Upstream tauri-ui
+              </a>
+            </div>
           </div>
 
           <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
             <MetricCard label="Backend" value={bootStateLabel(bootState)} />
             <MetricCard label="Detected home" value={detectedHome ?? "not found"} />
-            <MetricCard label="Tail mode" value="preview + live tail" />
+            <MetricCard label="Tail mode" value="preview + live tail + debug panel" />
           </div>
         </section>
 

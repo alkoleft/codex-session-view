@@ -3,5 +3,5 @@
   "identifier": "main",
   "description": "Локальное окно tauri-ui viewer получает только read-only IPC к session catalog и preview/tail backend.",
   "windows": ["main"],
-  "permissions": ["default"]
+  "permissions": ["default", "log:default", "opener:default"]
 }

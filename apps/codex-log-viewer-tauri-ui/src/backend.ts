@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { trackedInvoke } from "@/lib/tauri";
 
 export type DetectCodexHomeResponse = {
   detected_home: string | null;
@@ -119,7 +119,7 @@ async function invokeBackend<T>(
   if (!hasTauriRuntime()) {
     throw new Error("Desktop backend is available only inside the Tauri app runtime.");
   }
-  return invoke<T>(command, args);
+  return trackedInvoke<T>(command, args);
 }
 
 export function extractErrorMessage(error: unknown) {
