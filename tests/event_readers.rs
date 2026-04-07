@@ -914,6 +914,77 @@ fn subagent_update_plan_function_call_sample_is_normalized() {
 }
 
 #[test]
+fn subagent_request_user_input_function_call_and_output_normalization() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let call_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"timestamp":"2026-04-06T19:21:22.374Z","type":"response_item","payload":{"type":"function_call","name":"request_user_input","arguments":"{\"questions\":[{\"header\":\"Поиск детей\",\"id\":\"child_lookup\",\"question\":\"Как искать дочерние session-файлы для HTML-дерева, когда вход — один session-файл?\",\"options\":[{\"label\":\"Тот же каталог (Recommended)\",\"description\":\"Искать только рядом с исходным файлом по `receiver_thread_ids`, без глобального сканирования `CODEX_HOME`.\"},{\"label\":\"Весь sessions root\",\"description\":\"Разрешить рекурсивный поиск по всему `.../sessions`, чтобы собрать дерево даже при разнесённых файлах.\"},{\"label\":\"Оба режима\",\"description\":\"По умолчанию искать рядом, но поддержать отдельный флаг для расширенного рекурсивного поиска.\"}]}]}","call_id":"call_4Bs6MMfml19vjtweSvGzdQrW"}}"#,
+    )
+    .expect("json should parse");
+    let call = reader
+        .parse_subagent_session_payload(
+            13,
+            &call_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("request_user_input function_call should produce event");
+    assert_eq!(call.event_type, "user.input.request");
+    assert_eq!(
+        call.payload["tool_name"].as_str(),
+        Some("request_user_input")
+    );
+    assert_eq!(call.payload["phase"].as_str(), Some("started"));
+    assert_eq!(
+        call.payload["input"]["questions"][0]["header"].as_str(),
+        Some("Поиск детей")
+    );
+    assert_eq!(
+        call.payload["input"]["questions"][0]["id"].as_str(),
+        Some("child_lookup")
+    );
+    assert_eq!(
+        call.payload["input"]["questions"][0]["options"][0]["label"].as_str(),
+        Some("Тот же каталог (Recommended)")
+    );
+
+    let output_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"timestamp":"2026-04-06T19:21:46.805Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call_4Bs6MMfml19vjtweSvGzdQrW","output":"{\"answers\":{\"child_lookup\":{\"answers\":[\"Тот же каталог (Recommended)\"]}}}"}}"#,
+    )
+    .expect("json should parse");
+    let output = reader
+        .parse_subagent_session_payload(
+            14,
+            &output_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("request_user_input function_call_output should produce event");
+    assert_eq!(output.event_type, "user.input.request");
+    assert_eq!(output.payload["phase"].as_str(), Some("completed"));
+    assert_eq!(
+        output.payload["tool_name"].as_str(),
+        Some("request_user_input")
+    );
+    assert_eq!(
+        output.payload["output"]["answers"]["child_lookup"]["answers"][0].as_str(),
+        Some("Тот же каталог (Recommended)")
+    );
+}
+
+#[test]
 fn subagent_write_stdin_function_call_and_output_normalization() {
     let mut reader = make_reader();
     let mut call_names = HashMap::new();

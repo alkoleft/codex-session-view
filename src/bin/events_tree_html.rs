@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,7 +8,8 @@ use clap::Parser;
 use codex_worker_rs::error::{AppError, AppResult};
 use codex_worker_rs::events::projector::EventSummaryCategory;
 use codex_worker_rs::events::types::{
-    COLLAB_SPAWN_AGENT, INFO_TOKENS, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT,
+    COLLAB_SPAWN_AGENT, INFO_TOKENS, MESSAGE_USER, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT,
+    USER_INPUT_REQUEST,
 };
 
 #[path = "events_tree_shared.rs"]
@@ -17,6 +19,7 @@ use events_tree_shared::{
     build_event_tree, build_event_tree_with_standalone_startup_metadata, is_rollout_jsonl_family,
     is_run_input, load_records_from_run_input, load_records_from_standalone_rollout,
     validate_standalone_rollout_root, EventEntry, EventNode, EventTree, ThreadNode, TimelineItem,
+    UserInputAnswerEntry, UserInputOptionEntry, UserInputQuestionEntry, UserInputRequestEntry,
 };
 
 #[derive(Debug, Parser)]
@@ -215,6 +218,24 @@ h1{margin:0;font-size:26px;line-height:1.1;}
 .plan-step-status.is-completed{background:#e8f7ec;color:#166534;border-color:#b7e4c7;}
 .plan-step-status.is-in-progress{background:#e6f0ff;color:#1d4ed8;border-color:#bfdbfe;}
 .plan-step-status.is-pending{background:#fff7d6;color:#92400e;border-color:#fde68a;}
+.user-input-questions{display:flex;flex-direction:column;gap:10px;}
+.user-input-question{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid #d8dee9;border-radius:12px;background:#f8fafc;}
+.user-input-question-head{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;}
+.user-input-question-tag{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;border:1px solid #d8dee9;background:#fff;color:#475569;font-size:11px;}
+.user-input-question-tag-label{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#94a3b8;}
+.user-input-question-text{color:#0f172a;white-space:pre-wrap;word-break:break-word;}
+.user-input-options{display:flex;flex-direction:column;gap:8px;}
+.user-input-option{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border:1px solid #d8dee9;border-radius:10px;background:#fff;}
+.user-input-option.is-selected{background:#e8f7ec;border-color:#b7e4c7;}
+.user-input-option-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;}
+.user-input-option-label{font-weight:700;color:#0f172a;white-space:pre-wrap;word-break:break-word;}
+.user-input-option-description{color:#475569;white-space:pre-wrap;word-break:break-word;}
+.user-input-answer-list{display:flex;flex-wrap:wrap;gap:6px;}
+.user-input-answer-chip{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;border:1px solid #d8dee9;background:#fff;color:#334155;font-size:12px;}
+.user-input-answer-chip.is-selected{background:#dcfce7;border-color:#86efac;color:#166534;}
+.user-input-extra-answers{display:flex;flex-direction:column;gap:8px;}
+.user-input-extra-answer{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;padding:8px 10px;border:1px solid #d8dee9;border-radius:10px;background:#fff;}
+.user-input-extra-answer-id{font-size:11px;font-weight:700;color:#64748b;}
 .tree{margin-top:20px;}
 .children{margin:12px 0 0 22px;padding-left:14px;border-left:2px solid #d8dee9;}
 details.thread{margin:12px 0;border:1px solid #d8dee9;border-radius:16px;background:#fff;box-shadow:0 8px 18px rgba(15,23,42,.04);}
@@ -240,6 +261,12 @@ summary::-webkit-details-marker{display:none;}
 .diff-pos{color:#166534;}
 .diff-neg{color:#b91c1c;}
 .event-card{display:flex;flex-direction:column;gap:8px;padding:10px 0;border:none;border-radius:0;background:transparent;box-shadow:none;}
+.event-card.is-user-prompt{margin:4px 0;padding:12px 14px;border:1px solid #86efac;border-radius:16px;background:linear-gradient(180deg,#f4fff6,#ecfdf3);box-shadow:inset 0 1px 0 rgba(255,255,255,.92);}
+.event-card.is-user-prompt .badge{background:#dcfce7;color:#166534;border-color:#86efac;}
+.event-card.is-user-prompt .event-ts{color:#15803d;}
+.event-card.is-user-prompt .event-meta-value{color:#166534;}
+.event-card.is-user-prompt .summary-text{color:#14532d;}
+.event-card.is-user-prompt .event-section-label{color:#16a34a;}
 .event-header{display:flex;justify-content:space-between;align-items:flex-start;gap:8px 12px;flex-wrap:wrap;}
 .event-header-main{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;}
 .event-ts{font-size:12px;color:#64748b;white-space:nowrap;}
@@ -488,6 +515,29 @@ fn render_event_node(
         }
         return;
     }
+    if let Some(user_input_result_index) = paired_user_input_request_result_child_index(node) {
+        let user_input_result = match &node.children[user_input_result_index] {
+            TimelineItem::Event(child) => child,
+            TimelineItem::Thread(_) => {
+                unreachable!("user input result child must be an event")
+            }
+        };
+        render_combined_user_input_request_operation_card(
+            out,
+            &node.event,
+            &user_input_result.event,
+        );
+
+        let combined_children =
+            merged_user_input_request_operation_children(node, user_input_result_index);
+        if !combined_children.is_empty() {
+            let _ = depth;
+            out.push_str("<div class=\"children\">");
+            render_timeline_items(out, &combined_children, depth + 1, last_token_usage);
+            out.push_str("</div>");
+        }
+        return;
+    }
 
     render_event_card(out, &node.event, last_token_usage);
     if !node.children.is_empty() {
@@ -633,6 +683,86 @@ fn spawn_agent_result_preference(event: &EventEntry) -> (u8, u8, u8, u8, u8, u8,
         ),
         event.seq,
     )
+}
+
+fn paired_user_input_request_result_child_index(node: &EventNode) -> Option<usize> {
+    if node.event.event_type != USER_INPUT_REQUEST || node.event.phase.as_deref() != Some("started")
+    {
+        return None;
+    }
+
+    node.children
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| match item {
+            TimelineItem::Event(child)
+                if child.event.event_type == USER_INPUT_REQUEST
+                    && child.event.phase.as_deref() == Some("completed")
+                    && shell_operation_ids_match(&node.event, &child.event) =>
+            {
+                Some((index, user_input_request_result_preference(&child.event)))
+            }
+            TimelineItem::Event(_) | TimelineItem::Thread(_) => None,
+        })
+        .max_by_key(|(_, score)| *score)
+        .map(|(index, _)| index)
+}
+
+fn merged_user_input_request_operation_children(
+    node: &EventNode,
+    user_input_result_index: usize,
+) -> Vec<TimelineItem> {
+    let preferred_result = match &node.children[user_input_result_index] {
+        TimelineItem::Event(child) => &child.event,
+        TimelineItem::Thread(_) => unreachable!("user input result child must be an event"),
+    };
+    let mut children = Vec::new();
+    for (index, item) in node.children.iter().enumerate() {
+        if index == user_input_result_index {
+            if let TimelineItem::Event(child) = item {
+                children.extend(child.children.clone());
+            }
+            continue;
+        }
+        if is_redundant_response_item_user_input_request_result(item, &node.event, preferred_result)
+        {
+            continue;
+        }
+        children.push(item.clone());
+    }
+    children
+}
+
+fn user_input_request_result_preference(event: &EventEntry) -> (u8, usize, usize, u64) {
+    let request = event.user_input_request.as_ref();
+    (
+        u8::from(event.duplicate_of.as_deref() == Some(RESPONSE_ITEM_FUNCTION_CALL_OUTPUT)),
+        request
+            .map(total_user_input_request_answer_count)
+            .unwrap_or_default(),
+        request
+            .map(|entry| entry.questions.len())
+            .unwrap_or_default(),
+        event.seq,
+    )
+}
+
+fn is_redundant_response_item_user_input_request_result(
+    item: &TimelineItem,
+    call: &EventEntry,
+    preferred_result: &EventEntry,
+) -> bool {
+    let TimelineItem::Event(child) = item else {
+        return false;
+    };
+
+    child.event.event_id != preferred_result.event_id
+        && child.event.event_type == USER_INPUT_REQUEST
+        && child.event.phase.as_deref() == Some("completed")
+        && child.event.raw_type == "response_item"
+        && child.event.duplicate_of.is_none()
+        && shell_operation_ids_match(call, &child.event)
+        && preferred_result.raw_type != "response_item"
 }
 
 fn is_redundant_response_item_spawn_result(
@@ -905,9 +1035,10 @@ fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mu
     let meta_row = render_event_meta_row(event);
     let summary_block = render_event_summary_block(event);
     let detail_block = render_event_detail_block(event);
+    let card_class = event_card_class(event);
     let _ = write!(
         out,
-        "<article class=\"event-card\" data-seq=\"{}\" data-event-id=\"{}\" data-parent-event-id=\"{}\" data-raw-type=\"{}\" data-parse-status=\"{}\">\
+        "<article class=\"{}\" data-seq=\"{}\" data-event-id=\"{}\" data-parent-event-id=\"{}\" data-raw-type=\"{}\" data-parse-status=\"{}\">\
          <div class=\"event-header\">\
          <div class=\"event-header-main\">\
          <span class=\"seq-chip\">#{:04}</span>\
@@ -917,6 +1048,7 @@ fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mu
          </div>\
          {}{}{}\
          </article>{}",
+        card_class,
         event.seq,
         escape_html(&event.event_id),
         escape_html(event.parent_event_id.as_deref().unwrap_or("")),
@@ -932,6 +1064,14 @@ fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mu
         detail_block,
         token_footnote,
     );
+}
+
+fn event_card_class(event: &EventEntry) -> &'static str {
+    if event.event_type == MESSAGE_USER {
+        "event-card is-user-prompt"
+    } else {
+        "event-card"
+    }
 }
 
 fn render_combined_shell_operation_card(out: &mut String, call: &EventEntry, result: &EventEntry) {
@@ -1038,6 +1178,60 @@ fn render_combined_spawn_agent_operation_card(
     );
 }
 
+fn render_combined_user_input_request_operation_card(
+    out: &mut String,
+    call: &EventEntry,
+    result: &EventEntry,
+) {
+    let subagent_badge = {
+        let badge = render_subagent_badge(call);
+        if badge.is_empty() {
+            render_subagent_badge(result)
+        } else {
+            badge
+        }
+    };
+    let meta_row = render_combined_user_input_request_meta_row(call, result);
+    let detail_block = render_combined_user_input_request_operation_detail_block(call, result);
+    let seq_label = format!("#{:04}, #{:04}", call.seq, result.seq);
+    let event_label = call.event_type.clone();
+    let timestamp_label = if call.ts == result.ts {
+        call.ts.clone()
+    } else {
+        format!("{} -> {}", call.ts, result.ts)
+    };
+    let event_ids = format!("{},{}", call.event_id, result.event_id);
+    let raw_types = format!("{},{}", call.raw_type, result.raw_type);
+    let parse_statuses = format!("{},{}", call.parse_status, result.parse_status);
+    let _ = write!(
+        out,
+        "<article class=\"event-card\" data-seq=\"{},{}\" data-event-id=\"{}\" data-event-ids=\"{}\" data-parent-event-id=\"{}\" data-raw-type=\"{}\" data-parse-status=\"{}\">\
+         <div class=\"event-header\">\
+         <div class=\"event-header-main\">\
+         <span class=\"seq-chip\">{}</span>\
+         <span class=\"badge {}\">{}</span>{}\
+         </div>\
+         <span class=\"event-ts\">{}</span>\
+         </div>\
+         {}{}\
+         </article>",
+        call.seq,
+        result.seq,
+        escape_html(&call.event_id),
+        escape_html(&event_ids),
+        escape_html(call.parent_event_id.as_deref().unwrap_or("")),
+        escape_html(&raw_types),
+        escape_html(&parse_statuses),
+        escape_html(&seq_label),
+        category_class(call.category),
+        escape_html(&event_label),
+        subagent_badge,
+        escape_html(&timestamp_label),
+        meta_row,
+        detail_block,
+    );
+}
+
 fn render_combined_shell_operation_detail_block(call: &EventEntry, result: &EventEntry) -> String {
     render_shell_operation_block(
         call.shell_command
@@ -1058,6 +1252,16 @@ fn render_combined_spawn_agent_operation_detail_block(
         return String::new();
     };
     render_spawn_agent_operation_block(&data)
+        .map(|block| format!("<div class=\"event-detail\">{block}</div>"))
+        .unwrap_or_default()
+}
+
+fn render_combined_user_input_request_operation_detail_block(
+    call: &EventEntry,
+    result: &EventEntry,
+) -> String {
+    merged_user_input_request_entry(call, result)
+        .and_then(|entry| render_user_input_request_operation_block(&entry))
         .map(|block| format!("<div class=\"event-detail\">{block}</div>"))
         .unwrap_or_default()
 }
@@ -1083,6 +1287,9 @@ fn render_event_detail_block(event: &EventEntry) -> String {
     }
     if let Some(spawn_agent_block) = render_spawn_agent_block(event) {
         return format!("<div class=\"event-detail\">{spawn_agent_block}</div>");
+    }
+    if let Some(user_input_request_block) = render_user_input_request_block(event) {
+        return format!("<div class=\"event-detail\">{user_input_request_block}</div>");
     }
 
     if let Some(plan_block) = render_plan_update_block(event) {
@@ -1157,6 +1364,257 @@ fn render_plan_update_block(event: &EventEntry) -> Option<String> {
     }
 
     Some(render_inset_block("Plan", &body, None, "plan-block", true))
+}
+
+fn render_user_input_request_block(event: &EventEntry) -> Option<String> {
+    let request = event.user_input_request.as_ref()?;
+    render_user_input_request_operation_block(request)
+}
+
+fn render_user_input_request_operation_block(request: &UserInputRequestEntry) -> Option<String> {
+    if request.questions.is_empty() && request.extra_answers.is_empty() {
+        return None;
+    }
+
+    let mut body = String::new();
+    if !request.questions.is_empty() {
+        body.push_str(
+            "<div><span class=\"event-section-label\">questions</span><div class=\"user-input-questions\">",
+        );
+        for question in &request.questions {
+            body.push_str(&render_user_input_question_block(question));
+        }
+        body.push_str("</div></div>");
+    }
+    if !request.extra_answers.is_empty() {
+        body.push_str(
+            "<div><span class=\"event-section-label\">answers</span><div class=\"user-input-extra-answers\">",
+        );
+        for answer in &request.extra_answers {
+            let _ = write!(
+                body,
+                "<div class=\"user-input-extra-answer\"><span class=\"user-input-extra-answer-id\">{}</span>{}</div>",
+                escape_html(&answer.id),
+                render_user_input_answer_chips(&answer.answers, false),
+            );
+        }
+        body.push_str("</div></div>");
+    }
+
+    Some(render_inset_block(
+        "User Input",
+        &body,
+        None,
+        "user-input-block",
+        true,
+    ))
+}
+
+fn render_user_input_question_block(question: &UserInputQuestionEntry) -> String {
+    let mut out = String::from("<div class=\"user-input-question\">");
+    let mut head = String::new();
+    if let Some(header) = question.header.as_deref().filter(|value| !value.is_empty()) {
+        let _ = write!(
+            head,
+            "<span class=\"user-input-question-tag\"><span class=\"user-input-question-tag-label\">header</span>{}</span>",
+            escape_html(header),
+        );
+    }
+    if let Some(id) = question.id.as_deref().filter(|value| !value.is_empty()) {
+        let _ = write!(
+            head,
+            "<span class=\"user-input-question-tag\"><span class=\"user-input-question-tag-label\">id</span><code>{}</code></span>",
+            escape_html(id),
+        );
+    }
+    if !head.is_empty() {
+        let _ = write!(out, "<div class=\"user-input-question-head\">{head}</div>");
+    }
+    if let Some(prompt) = question
+        .question
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let prompt_body = if should_collapse_text_content(prompt) {
+            render_collapsible_text_block(prompt)
+        } else {
+            format!(
+                "<div class=\"summary-text user-input-question-text\">{}</div>",
+                escape_html(prompt)
+            )
+        };
+        out.push_str(&prompt_body);
+    }
+    if !question.options.is_empty() {
+        out.push_str("<div class=\"user-input-options\">");
+        for option in &question.options {
+            let is_selected = question
+                .answers
+                .iter()
+                .any(|answer| answer.trim() == option.label.trim());
+            out.push_str(&render_user_input_option_block(option, is_selected));
+        }
+        out.push_str("</div>");
+    }
+
+    let unmatched_answers = question
+        .answers
+        .iter()
+        .filter(|answer| {
+            !question
+                .options
+                .iter()
+                .any(|option| option.label.trim() == answer.trim())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unmatched_answers.is_empty() {
+        let _ = write!(
+            out,
+            "<div><span class=\"event-section-label\">answers</span>{}</div>",
+            render_user_input_answer_chips(&unmatched_answers, true),
+        );
+    }
+    out.push_str("</div>");
+    out
+}
+
+fn render_user_input_option_block(option: &UserInputOptionEntry, is_selected: bool) -> String {
+    let selected_chip = if is_selected {
+        "<span class=\"user-input-answer-chip is-selected\">selected</span>"
+    } else {
+        ""
+    };
+    let description = option
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|description| {
+            if should_collapse_text_content(description) {
+                render_collapsible_text_block(description)
+            } else {
+                format!(
+                    "<div class=\"user-input-option-description\">{}</div>",
+                    escape_html(description)
+                )
+            }
+        })
+        .unwrap_or_default();
+    format!(
+        "<div class=\"user-input-option{}\"><div class=\"user-input-option-head\"><span class=\"user-input-option-label\">{}</span>{}</div>{}</div>",
+        if is_selected { " is-selected" } else { "" },
+        escape_html(&option.label),
+        selected_chip,
+        description,
+    )
+}
+
+fn render_user_input_answer_chips(answers: &[String], selected: bool) -> String {
+    let mut out = String::from("<div class=\"user-input-answer-list\">");
+    for answer in answers.iter().filter(|answer| !answer.trim().is_empty()) {
+        let _ = write!(
+            out,
+            "<span class=\"user-input-answer-chip{}\">{}</span>",
+            if selected { " is-selected" } else { "" },
+            escape_html(answer),
+        );
+    }
+    out.push_str("</div>");
+    out
+}
+
+fn merged_user_input_request_entry(
+    call: &EventEntry,
+    result: &EventEntry,
+) -> Option<UserInputRequestEntry> {
+    let call_request = call.user_input_request.as_ref();
+    let result_request = result.user_input_request.as_ref();
+    let Some(base_request) = call_request.or(result_request) else {
+        return None;
+    };
+
+    let mut answers_by_id = BTreeMap::new();
+    if let Some(request) = call_request {
+        collect_user_input_answers(request, &mut answers_by_id);
+    }
+    if let Some(request) = result_request {
+        collect_user_input_answers(request, &mut answers_by_id);
+    }
+
+    let mut matched_answer_ids = Vec::new();
+    let mut questions = if !base_request.questions.is_empty() {
+        base_request.questions.clone()
+    } else {
+        result_request
+            .map(|request| request.questions.clone())
+            .unwrap_or_default()
+    };
+    for question in &mut questions {
+        if let Some(id) = question.id.as_ref() {
+            if let Some(answers) = answers_by_id.get(id) {
+                question.answers = answers.clone();
+                matched_answer_ids.push(id.clone());
+            }
+        }
+    }
+
+    let extra_answers = answers_by_id
+        .into_iter()
+        .filter(|(id, answers)| {
+            !matched_answer_ids.iter().any(|matched| matched == id) && !answers.is_empty()
+        })
+        .map(|(id, answers)| UserInputAnswerEntry { id, answers })
+        .collect::<Vec<_>>();
+
+    Some(UserInputRequestEntry {
+        questions,
+        extra_answers,
+    })
+}
+
+fn collect_user_input_answers(
+    request: &UserInputRequestEntry,
+    answers_by_id: &mut BTreeMap<String, Vec<String>>,
+) {
+    for question in &request.questions {
+        let Some(id) = question.id.as_ref() else {
+            continue;
+        };
+        merge_user_input_answer_values(
+            answers_by_id.entry(id.clone()).or_default(),
+            &question.answers,
+        );
+    }
+    for answer in &request.extra_answers {
+        merge_user_input_answer_values(
+            answers_by_id.entry(answer.id.clone()).or_default(),
+            &answer.answers,
+        );
+    }
+}
+
+fn merge_user_input_answer_values(target: &mut Vec<String>, source: &[String]) {
+    for answer in source {
+        if answer.trim().is_empty() || target.iter().any(|known| known == answer) {
+            continue;
+        }
+        target.push(answer.clone());
+    }
+}
+
+fn total_user_input_request_answer_count(request: &UserInputRequestEntry) -> usize {
+    request
+        .questions
+        .iter()
+        .map(|question| question.answers.len())
+        .sum::<usize>()
+        + request
+            .extra_answers
+            .iter()
+            .map(|answer| answer.answers.len())
+            .sum::<usize>()
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1397,6 +1855,9 @@ fn should_skip_event_summary(event: &EventEntry) -> bool {
     if event.event_type == COLLAB_SPAWN_AGENT && event.spawn_agent.is_some() {
         return true;
     }
+    if event.event_type == USER_INPUT_REQUEST && event.user_input_request.is_some() {
+        return true;
+    }
     let summary = event.summary.trim();
     summary.is_empty() || (event.summary_pairs.is_empty() && summary == event.event_type)
 }
@@ -1420,6 +1881,18 @@ fn render_event_meta_row(event: &EventEntry) -> String {
         }
         if let Some(phase) = event.phase.as_deref().filter(|value| !value.is_empty()) {
             items.push(render_event_meta_item("phase", &escape_html(phase)));
+        }
+    }
+    if event.event_type == USER_INPUT_REQUEST {
+        if let Some(request) = event.user_input_request.as_ref() {
+            items.push(render_event_meta_item(
+                "questions",
+                &escape_html(&request.questions.len().to_string()),
+            ));
+            items.push(render_event_meta_item(
+                "answers",
+                &escape_html(&total_user_input_request_answer_count(request).to_string()),
+            ));
         }
     }
     if let Some(body_size_bytes) = message_size_bytes_for_event(event) {
@@ -1454,6 +1927,46 @@ fn render_combined_shell_meta_row(call: &EventEntry, result: &EventEntry) -> Str
         items.push(render_event_meta_item(
             "output size",
             &escape_html(&format_body_size_bytes(body_size_bytes)),
+        ));
+    }
+    if call.parse_status != "parsed" {
+        items.push(render_event_meta_item(
+            "call parse",
+            &escape_html(&call.parse_status),
+        ));
+        items.push(render_event_meta_item(
+            "call raw",
+            &escape_html(&call.raw_type),
+        ));
+    }
+    if result.parse_status != "parsed" {
+        items.push(render_event_meta_item(
+            "result parse",
+            &escape_html(&result.parse_status),
+        ));
+        items.push(render_event_meta_item(
+            "result raw",
+            &escape_html(&result.raw_type),
+        ));
+    }
+
+    if items.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"event-meta\">{}</div>", items.join(""))
+    }
+}
+
+fn render_combined_user_input_request_meta_row(call: &EventEntry, result: &EventEntry) -> String {
+    let mut items = Vec::new();
+    if let Some(request) = merged_user_input_request_entry(call, result) {
+        items.push(render_event_meta_item(
+            "questions",
+            &escape_html(&request.questions.len().to_string()),
+        ));
+        items.push(render_event_meta_item(
+            "answers",
+            &escape_html(&total_user_input_request_answer_count(&request).to_string()),
         ));
     }
     if call.parse_status != "parsed" {
@@ -2008,6 +2521,33 @@ mod tests {
     }
 
     #[test]
+    fn render_html_highlights_user_prompt_card() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "message.user",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "role":"user",
+                    "direction":"input_text",
+                    "text":"покажи дерево событий"
+                }),
+                2,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains(".event-card.is-user-prompt{"));
+        assert!(html.contains("class=\"event-card is-user-prompt\""));
+        assert!(html.contains("class=\"badge cat-subagent\">message.user<"));
+        assert!(html.contains(">покажи дерево событий<"));
+    }
+
+    #[test]
     fn render_html_shows_runtime_context_requisites() {
         let events = vec![
             make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
@@ -2087,6 +2627,176 @@ mod tests {
         assert!(html.contains("Build approved executable TODO checklist from the plan"));
         assert!(html.contains("plan-step-status is-in-progress\">in progress<"));
         assert!(html.contains("plan-step-status is-pending\">pending<"));
+    }
+
+    #[test]
+    fn render_html_collapses_request_user_input_call_and_result_into_single_card() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "user.input.request",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "tool_name":"request_user_input",
+                    "tool_use_id":"rui-1",
+                    "phase":"started",
+                    "input":{
+                        "questions":[
+                            {
+                                "header":"Поиск детей",
+                                "id":"child_lookup",
+                                "question":"Как искать дочерние session-файлы для HTML-дерева, когда вход — один session-файл?",
+                                "options":[
+                                    {
+                                        "label":"Тот же каталог (Recommended)",
+                                        "description":"Искать только рядом с исходным файлом по `receiver_thread_ids`, без глобального сканирования `CODEX_HOME`."
+                                    },
+                                    {
+                                        "label":"Весь sessions root",
+                                        "description":"Разрешить рекурсивный поиск по всему `.../sessions`, чтобы собрать дерево даже при разнесённых файлах."
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }),
+                2,
+            ),
+            make_event(
+                "user.input.request",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "tool_name":"request_user_input",
+                    "tool_use_id":"rui-1",
+                    "phase":"completed",
+                    "output":{
+                        "answers":{
+                            "child_lookup":{
+                                "answers":["Тот же каталог (Recommended)"]
+                            }
+                        }
+                    }
+                }),
+                3,
+            ),
+            make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "text":"after request"
+                }),
+                4,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains("data-seq=\"2,3\""));
+        assert!(html.contains("data-event-ids=\"run-1:2,run-1:3\""));
+        assert!(html.contains(">#0002, #0003<"));
+        assert!(html.contains("class=\"inset-block user-input-block inline-title\""));
+        assert!(html.contains("class=\"inset-block-title inline-title\">User Input<"));
+        assert!(html.contains("event-meta-label\">questions<"));
+        assert!(html.contains("event-meta-value\">1<"));
+        assert!(html.contains("event-meta-label\">answers<"));
+        assert!(html.contains("class=\"user-input-question-tag-label\">header<"));
+        assert!(html.contains(">Поиск детей<"));
+        assert!(html.contains("class=\"user-input-question-tag-label\">id<"));
+        assert!(html.contains("<code>child_lookup</code>"));
+        assert!(html.contains(
+            "Как искать дочерние session-файлы для HTML-дерева, когда вход — один session-файл?"
+        ));
+        assert!(html.contains("Тот же каталог (Recommended)"));
+        assert!(html.contains("class=\"user-input-option is-selected\""));
+        assert!(html.contains("class=\"user-input-answer-chip is-selected\">selected<"));
+        assert!(!html.contains("data-seq=\"3\""));
+        assert!(!html.contains("data-event-id=\"run-1:3\""));
+
+        let request_pos = html
+            .find("data-seq=\"2,3\"")
+            .expect("collapsed request card should be rendered");
+        let message_pos = html
+            .find("data-seq=\"4\"")
+            .expect("later message should be rendered");
+        assert!(request_pos < message_pos);
+    }
+
+    #[test]
+    fn render_html_merges_plan_item_completed_and_response_message_into_message_plan() {
+        let plan_text = "# HTML-просмотр дерева событий по session-файлу\n\n## Summary\n\nДобавить поддержку session-файла.";
+        let wrapped_plan = format!("<proposed_plan>\n{plan_text}\n</proposed_plan>");
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_raw_event(
+                "plan.update",
+                "event_msg",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "tool_name":"update_plan",
+                    "tool_use_id":"turn-1-plan",
+                    "phase":"completed",
+                    "status":"completed",
+                    "duplicate_of":"response_item.message",
+                    "output":{
+                        "item_type":"Plan",
+                        "item_id":"turn-1-plan",
+                        "text":plan_text,
+                        "turn_id":"turn-1"
+                    }
+                }),
+                2,
+            ),
+            make_raw_event(
+                "message.assistant",
+                "response_item",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "role":"assistant",
+                    "direction":"output_text",
+                    "phase":"final_answer",
+                    "text":wrapped_plan
+                }),
+                3,
+            ),
+            make_event(
+                "message.assistant",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "role":"assistant",
+                    "direction":"output_text",
+                    "phase":"commentary",
+                    "text":"after plan"
+                }),
+                4,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains("badge cat-assistant\">message.plan<"));
+        assert!(html.contains("event-meta-label\">role<"));
+        assert!(html.contains("event-meta-value\">assistant<"));
+        assert!(html.contains("event-meta-label\">phase<"));
+        assert!(html.contains("event-meta-value\">final_answer<"));
+        assert!(html.contains("HTML-просмотр дерева событий по session-файлу"));
+        assert!(!html.contains("&lt;proposed_plan&gt;"));
+        assert!(!html.contains(">plan.update<"));
+        assert!(!html.contains("data-event-id=\"run-1:3\""));
+        assert!(html.contains("data-event-id=\"run-1:2\""));
     }
 
     #[test]

@@ -11,8 +11,8 @@ use crate::events::types::{
     CONTEXT_COMPACTED, CONTEXT_COMPACTED_DUPLICATE, ERROR, FILE_CHANGE, INFO_TOKENS, MCP_CALL,
     MCP_RESULT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, PLAN_UPDATE,
     RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE,
-    TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_OPEN,
-    WEB_SEARCH,
+    TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT,
+    USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -545,6 +545,27 @@ impl EventProjector {
                     Some(EventSummaryCategory::Default),
                 );
             }
+            USER_INPUT_REQUEST if actor_type(event) == "subagent" => {
+                let thread_id = thread_id(event).unwrap_or_else(|| "unknown".to_string());
+                let parent_thread_id = payload_string(payload, "parent_thread_id");
+                let detail = user_input_request_detail(payload, true);
+                let line = if detail.is_empty() {
+                    "user input request".to_string()
+                } else {
+                    format!("user input request: {detail}")
+                };
+                self.assign_subagent_color(&thread_id);
+                self.append_agent_line(&thread_id, &line, parent_thread_id.as_deref());
+                if payload_phase(payload).as_deref() == Some("started") {
+                    self.ensure_agent(&thread_id, parent_thread_id.as_deref())
+                        .status = "working".to_string();
+                }
+                self.set_pending_response_category(
+                    &thread_id,
+                    parent_thread_id.as_deref(),
+                    Some(EventSummaryCategory::Default),
+                );
+            }
             STDIN_WRITE if actor_type(event) == "subagent" => {
                 let thread_id = thread_id(event).unwrap_or_else(|| "unknown".to_string());
                 let parent_thread_id = payload_string(payload, "parent_thread_id");
@@ -930,6 +951,20 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
                 format!("plan update: {detail}")
             }
         }
+        USER_INPUT_REQUEST => {
+            let detail = user_input_request_detail(payload, full);
+            if actor_type(event) == "subagent" {
+                if detail.is_empty() {
+                    "user input request".to_string()
+                } else {
+                    format!("user input request: {detail}")
+                }
+            } else if detail.is_empty() {
+                "user input request".to_string()
+            } else {
+                format!("user input request: {detail}")
+            }
+        }
         PATCH_APPLY => {
             let detail = patch_apply_detail(payload, full);
             if detail.is_empty() {
@@ -1091,7 +1126,7 @@ pub fn categorize_event(event: &EventRecord) -> EventSummaryCategory {
         TOOL_CALL | TOOL_RESULT | SHELL_CALL | SHELL_RESULT | MCP_CALL | MCP_RESULT
         | STDIN_WRITE | WEB_SEARCH | WEB_OPEN | COLLAB_SPAWN_AGENT | COLLAB_SEND_INPUT
         | COLLAB_WAIT | COLLAB_CLOSE_AGENT | COLLAB_RESUME_AGENT => tool_event_category(payload),
-        PLAN_UPDATE => EventSummaryCategory::Default,
+        PLAN_UPDATE | USER_INPUT_REQUEST => EventSummaryCategory::Default,
         PATCH_APPLY | FILE_CHANGE => EventSummaryCategory::File,
         TODO_UPDATE => EventSummaryCategory::Todo,
         STDERR_LINE | ERROR | AGENT_FAILED | AGENT_ABORTED | RAW_UNPARSED => {
@@ -1303,6 +1338,7 @@ fn is_root_toolish_event_type(event_type: &str) -> bool {
             | WEB_SEARCH
             | WEB_OPEN
             | PLAN_UPDATE
+            | USER_INPUT_REQUEST
             | COLLAB_SPAWN_AGENT
             | COLLAB_WAIT
     )
@@ -1470,6 +1506,63 @@ fn plan_update_detail(payload: Option<&Map<String, Value>>, full: bool) -> Strin
         if let Some(plan) = container.get("plan").and_then(Value::as_array) {
             parts.push(format!("steps={}", plan.len()));
         }
+    }
+
+    parts.join(" ")
+}
+
+fn user_input_request_detail(payload: Option<&Map<String, Value>>, full: bool) -> String {
+    let mut parts = Vec::new();
+    if let Some(phase) = payload_string(payload, "phase") {
+        if !phase.is_empty() {
+            parts.push(format!("phase={phase}"));
+        }
+    }
+
+    let input = payload
+        .and_then(|obj| obj.get("input"))
+        .and_then(Value::as_object);
+    let output = payload
+        .and_then(|obj| obj.get("output"))
+        .and_then(Value::as_object);
+
+    if let Some(questions) = input
+        .and_then(|obj| obj.get("questions"))
+        .and_then(Value::as_array)
+    {
+        parts.push(format!("questions={}", questions.len()));
+        if let Some(first_question) = questions
+            .first()
+            .and_then(Value::as_object)
+            .and_then(|question| question.get("header").or_else(|| question.get("question")))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            parts.push(format!("first={}", summary_text(first_question, 80, full)));
+        }
+    }
+
+    if let Some(answer_count) = output
+        .and_then(|obj| obj.get("answers"))
+        .and_then(Value::as_object)
+        .map(|answers| {
+            answers
+                .values()
+                .map(|value| match value {
+                    Value::Object(answer) => answer
+                        .get("answers")
+                        .and_then(Value::as_array)
+                        .map(Vec::len)
+                        .unwrap_or(0),
+                    Value::Array(answer) => answer.len(),
+                    Value::String(text) => usize::from(!text.trim().is_empty()),
+                    _ => 0,
+                })
+                .sum::<usize>()
+        })
+    {
+        parts.push(format!("answers={answer_count}"));
     }
 
     parts.join(" ")

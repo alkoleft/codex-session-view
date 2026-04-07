@@ -536,6 +536,40 @@ fn summarize_event_formats_subagent_plan_update() {
 }
 
 #[test]
+fn summarize_event_formats_request_user_input() {
+    let summary = summarize_event(&make_event(
+        "user.input.request",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "phase": "completed",
+            "tool_name": "request_user_input",
+            "input": {
+                "questions": [
+                    {
+                        "header": "Поиск детей",
+                        "id": "child_lookup",
+                        "question": "Как искать дочерние session-файлы?"
+                    }
+                ]
+            },
+            "output": {
+                "answers": {
+                    "child_lookup": {
+                        "answers": ["Тот же каталог (Recommended)"]
+                    }
+                }
+            }
+        }),
+    ));
+
+    assert_eq!(
+        summary,
+        "user input request: phase=completed questions=1 first=Поиск детей answers=1"
+    );
+}
+
+#[test]
 fn summarize_event_formats_commentary_patch_and_context_events() {
     let commentary = summarize_event(&make_event(
         "message.commentary",

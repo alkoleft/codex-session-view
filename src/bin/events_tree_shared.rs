@@ -15,9 +15,10 @@ use codex_worker_rs::events::types::{
     AGENT_SESSION_FOREIGN, AGENT_STARTED, COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT,
     COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT, CONTEXT_COMPACTED,
     CONTEXT_COMPACTED_DUPLICATE, FILE_CHANGE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
-    MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, PLAN_UPDATE,
-    RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED,
-    TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
+    MESSAGE_COMMENTARY, MESSAGE_PLAN, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE,
+    PLAN_UPDATE, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE,
+    TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT,
+    USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
 };
 use codex_worker_rs::models::EventRecord;
 use serde_json::{Map, Value};
@@ -41,6 +42,33 @@ pub struct SpawnAgentEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserInputOptionEntry {
+    pub label: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserInputQuestionEntry {
+    pub header: Option<String>,
+    pub id: Option<String>,
+    pub question: Option<String>,
+    pub options: Vec<UserInputOptionEntry>,
+    pub answers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserInputAnswerEntry {
+    pub id: String,
+    pub answers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserInputRequestEntry {
+    pub questions: Vec<UserInputQuestionEntry>,
+    pub extra_answers: Vec<UserInputAnswerEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventEntry {
     pub event_id: String,
     pub parent_event_id: Option<String>,
@@ -59,9 +87,11 @@ pub struct EventEntry {
     pub message_role: Option<String>,
     pub message_direction: Option<String>,
     pub message_text: Option<String>,
+    pub plan_message_text: Option<String>,
     pub plan_explanation: Option<String>,
     pub plan_steps: Vec<PlanStepEntry>,
     pub spawn_agent: Option<SpawnAgentEntry>,
+    pub user_input_request: Option<UserInputRequestEntry>,
     pub runtime_context_pairs: Vec<(String, String)>,
     pub tool_name: Option<String>,
     pub receiver_thread_ids: Vec<String>,
@@ -328,6 +358,10 @@ pub fn build_event_tree_with_standalone_startup_metadata(
             orphan_events.push(entry);
         }
     }
+    for events in events_by_thread.values_mut() {
+        *events = merge_plan_message_duplicates(std::mem::take(events));
+    }
+    orphan_events = merge_plan_message_duplicates(orphan_events);
 
     let mut all_thread_ids = BTreeSet::new();
     all_thread_ids.insert(root_thread_id.clone());
@@ -901,6 +935,105 @@ fn assign_follow_up_parent_ids(events: &mut [EventEntry]) {
     }
 }
 
+fn merge_plan_message_duplicates(events: Vec<EventEntry>) -> Vec<EventEntry> {
+    let mut merged = Vec::with_capacity(events.len());
+    let mut index = 0usize;
+
+    while index < events.len() {
+        let current = &events[index];
+        if is_event_msg_plan_message(current) {
+            if let Some(next) = events.get(index + 1) {
+                if is_response_plan_message(next)
+                    && plan_message_text_matches(
+                        current.plan_message_text.as_deref(),
+                        next.plan_message_text.as_deref(),
+                    )
+                {
+                    merged.push(merge_plan_message_pair(current, next));
+                    index += 2;
+                    continue;
+                }
+            }
+            merged.push(convert_to_plan_message_entry(current, None));
+            index += 1;
+            continue;
+        }
+
+        if is_response_plan_message(current) {
+            merged.push(convert_to_plan_message_entry(current, None));
+            index += 1;
+            continue;
+        }
+
+        merged.push(current.clone());
+        index += 1;
+    }
+
+    merged
+}
+
+fn is_event_msg_plan_message(event: &EventEntry) -> bool {
+    event.event_type == PLAN_UPDATE
+        && event.raw_type == "event_msg"
+        && event.plan_message_text.is_some()
+        && event.duplicate_of.as_deref() == Some("response_item.message")
+}
+
+fn is_response_plan_message(event: &EventEntry) -> bool {
+    event.raw_type == "response_item"
+        && event.event_type.starts_with("message.")
+        && event.plan_message_text.is_some()
+}
+
+fn plan_message_text_matches(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            let left = left.trim();
+            let right = right.trim();
+            !left.is_empty() && left == right
+        }
+        _ => false,
+    }
+}
+
+fn merge_plan_message_pair(event_msg: &EventEntry, response_item: &EventEntry) -> EventEntry {
+    convert_to_plan_message_entry(event_msg, Some(response_item))
+}
+
+fn convert_to_plan_message_entry(
+    source: &EventEntry,
+    response_item: Option<&EventEntry>,
+) -> EventEntry {
+    let mut entry = source.clone();
+    let text = source
+        .plan_message_text
+        .as_ref()
+        .or_else(|| response_item.and_then(|event| event.plan_message_text.as_ref()))
+        .cloned();
+    entry.event_type = MESSAGE_PLAN.to_string();
+    entry.summary = text.clone().unwrap_or_default();
+    entry.category = EventSummaryCategory::Assistant;
+    entry.message_text = text;
+    entry.message_role = response_item
+        .and_then(|event| event.message_role.clone())
+        .or_else(|| entry.message_role.clone())
+        .or_else(|| Some("assistant".to_string()));
+    entry.message_direction = response_item
+        .and_then(|event| event.message_direction.clone())
+        .or_else(|| entry.message_direction.clone())
+        .or_else(|| Some("output_text".to_string()));
+    entry.phase = response_item
+        .and_then(|event| event.phase.clone())
+        .or_else(|| entry.phase.clone());
+    entry.plan_message_text = entry.message_text.clone();
+    entry.plan_explanation = None;
+    entry.plan_steps.clear();
+    entry.tool_name = None;
+    entry.operation_id = None;
+    entry.duplicate_of = None;
+    entry
+}
+
 fn anchor_event_id_for_child(events: &[EventEntry], child: &FlatThreadNode) -> Option<String> {
     let child_first_seq = flat_thread_first_seq(child);
     events
@@ -969,6 +1102,7 @@ fn is_barrier_event(event: &EventEntry) -> bool {
             | WEB_SEARCH
             | WEB_OPEN
             | PLAN_UPDATE
+            | USER_INPUT_REQUEST
             | PATCH_APPLY
             | COLLAB_SPAWN_AGENT
             | COLLAB_SEND_INPUT
@@ -1020,6 +1154,7 @@ fn operation_kind(event: &EventEntry) -> Option<&'static str> {
         WEB_SEARCH => Some("web.search"),
         WEB_OPEN => Some("web.open"),
         PLAN_UPDATE => Some("plan.update"),
+        USER_INPUT_REQUEST => Some("user.input.request"),
         PATCH_APPLY => Some("patch.apply"),
         COLLAB_SPAWN_AGENT => Some("collab.spawn_agent"),
         COLLAB_SEND_INPUT => Some("collab.send_input"),
@@ -1035,10 +1170,9 @@ fn operation_kind(event: &EventEntry) -> Option<&'static str> {
 fn is_operation_start(event: &EventEntry) -> bool {
     match event.event_type.as_str() {
         TOOL_CALL | SHELL_CALL | MCP_CALL => true,
-        STDIN_WRITE | WEB_SEARCH | WEB_OPEN | PLAN_UPDATE | PATCH_APPLY | COLLAB_SPAWN_AGENT
-        | COLLAB_SEND_INPUT | COLLAB_WAIT | COLLAB_CLOSE_AGENT | COLLAB_RESUME_AGENT => {
-            event.phase.as_deref() == Some("started")
-        }
+        STDIN_WRITE | WEB_SEARCH | WEB_OPEN | PLAN_UPDATE | USER_INPUT_REQUEST | PATCH_APPLY
+        | COLLAB_SPAWN_AGENT | COLLAB_SEND_INPUT | COLLAB_WAIT | COLLAB_CLOSE_AGENT
+        | COLLAB_RESUME_AGENT => event.phase.as_deref() == Some("started"),
         FILE_CHANGE | TODO_UPDATE => event.phase.as_deref() == Some("started"),
         _ => false,
     }
@@ -1084,6 +1218,13 @@ fn format_event_entry(
     };
     let (plan_explanation, plan_steps) = extract_plan_update_content(&event.event_type, payload);
     let spawn_agent = extract_spawn_agent_entry(&event.event_type, payload);
+    let user_input_request = extract_user_input_request_entry(&event.event_type, payload);
+    let message_text = payload
+        .and_then(|obj| obj.get("text"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let plan_message_text =
+        extract_plan_message_text(&event.event_type, payload, message_text.as_deref());
     EventEntry {
         event_id: format!("{}:{}", event.run_id, event.seq),
         parent_event_id: None,
@@ -1113,13 +1254,12 @@ fn format_event_entry(
             .and_then(|obj| obj.get("direction"))
             .and_then(Value::as_str)
             .map(str::to_string),
-        message_text: payload
-            .and_then(|obj| obj.get("text"))
-            .and_then(Value::as_str)
-            .map(str::to_string),
+        message_text,
+        plan_message_text,
         plan_explanation,
         plan_steps,
         spawn_agent,
+        user_input_request,
         runtime_context_pairs: extract_runtime_context_pairs(&event.event_type, payload),
         tool_name: payload
             .and_then(|obj| obj.get("tool_name").or_else(|| obj.get("tool")))
@@ -1292,6 +1432,42 @@ fn extract_plan_step(value: &Value) -> Option<PlanStepEntry> {
     }
 }
 
+fn extract_plan_message_text(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+    message_text: Option<&str>,
+) -> Option<String> {
+    match event_type {
+        event_type if event_type.starts_with("message.") => message_text
+            .and_then(strip_proposed_plan_wrapper)
+            .map(str::to_string),
+        PLAN_UPDATE => payload
+            .and_then(|obj| obj.get("output"))
+            .and_then(Value::as_object)
+            .filter(|output| {
+                output.get("item_type").and_then(Value::as_str) == Some("Plan")
+                    || output.get("text").and_then(Value::as_str).is_some()
+            })
+            .and_then(|output| output.get("text"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        _ => None,
+    }
+}
+
+fn strip_proposed_plan_wrapper(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    let start_tag = "<proposed_plan>";
+    let end_tag = "</proposed_plan>";
+    let inner = trimmed
+        .strip_prefix(start_tag)?
+        .strip_suffix(end_tag)?
+        .trim();
+    (!inner.is_empty()).then_some(inner)
+}
+
 fn extract_spawn_agent_entry(
     event_type: &str,
     payload: Option<&serde_json::Map<String, Value>>,
@@ -1448,6 +1624,191 @@ fn extract_spawn_agent_entry(
         receiver_role,
         receiver_status,
     })
+}
+
+fn extract_user_input_request_entry(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<UserInputRequestEntry> {
+    if event_type != USER_INPUT_REQUEST {
+        return None;
+    }
+
+    let payload = payload?;
+    let input = payload.get("input").and_then(Value::as_object);
+    let output = payload.get("output").and_then(Value::as_object);
+    let answers_by_id = extract_user_input_answers_by_id(output);
+    let mut matched_answer_ids = BTreeSet::new();
+    let questions = input
+        .and_then(|obj| obj.get("questions"))
+        .and_then(Value::as_array)
+        .map(|questions| {
+            questions
+                .iter()
+                .filter_map(|question| {
+                    extract_user_input_question(question, &answers_by_id, &mut matched_answer_ids)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let extra_answers = answers_by_id
+        .into_iter()
+        .filter(|(id, answers)| !matched_answer_ids.contains(id) && !answers.is_empty())
+        .map(|(id, answers)| UserInputAnswerEntry { id, answers })
+        .collect::<Vec<_>>();
+
+    if questions.is_empty() && extra_answers.is_empty() {
+        None
+    } else {
+        Some(UserInputRequestEntry {
+            questions,
+            extra_answers,
+        })
+    }
+}
+
+fn extract_user_input_question(
+    value: &Value,
+    answers_by_id: &BTreeMap<String, Vec<String>>,
+    matched_answer_ids: &mut BTreeSet<String>,
+) -> Option<UserInputQuestionEntry> {
+    let object = value.as_object()?;
+    let header = object
+        .get("header")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let question = object
+        .get("question")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let options = object
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|options| {
+            options
+                .iter()
+                .filter_map(extract_user_input_option)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let answers = id
+        .as_ref()
+        .and_then(|id| answers_by_id.get(id))
+        .cloned()
+        .unwrap_or_default();
+    if let Some(id) = id.as_ref() {
+        matched_answer_ids.insert(id.clone());
+    }
+
+    if header.is_none()
+        && id.is_none()
+        && question.is_none()
+        && options.is_empty()
+        && answers.is_empty()
+    {
+        None
+    } else {
+        Some(UserInputQuestionEntry {
+            header,
+            id,
+            question,
+            options,
+            answers,
+        })
+    }
+}
+
+fn extract_user_input_option(value: &Value) -> Option<UserInputOptionEntry> {
+    match value {
+        Value::Object(object) => {
+            let label = object
+                .get("label")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)?;
+            let description = object
+                .get("description")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            Some(UserInputOptionEntry { label, description })
+        }
+        Value::String(text) => {
+            let label = text.trim();
+            (!label.is_empty()).then(|| UserInputOptionEntry {
+                label: label.to_string(),
+                description: None,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn extract_user_input_answers_by_id(
+    output: Option<&serde_json::Map<String, Value>>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut answers_by_id = BTreeMap::new();
+    let Some(output) = output else {
+        return answers_by_id;
+    };
+    let Some(answers) = output.get("answers").and_then(Value::as_object) else {
+        return answers_by_id;
+    };
+    for (id, raw_answers) in answers {
+        let values = extract_user_input_answer_values(raw_answers);
+        if !values.is_empty() {
+            answers_by_id.insert(id.clone(), values);
+        }
+    }
+    answers_by_id
+}
+
+fn extract_user_input_answer_values(value: &Value) -> Vec<String> {
+    match value {
+        Value::Object(object) => object
+            .get("answers")
+            .map(extract_user_input_answer_values)
+            .unwrap_or_default(),
+        Value::Array(values) => values
+            .iter()
+            .filter_map(|value| match value {
+                Value::String(text) => {
+                    let text = text.trim();
+                    (!text.is_empty()).then(|| text.to_string())
+                }
+                _ => {
+                    let rendered = render_payload_value(value);
+                    let rendered = rendered.trim();
+                    (!rendered.is_empty()).then(|| rendered.to_string())
+                }
+            })
+            .collect(),
+        Value::String(text) => {
+            let text = text.trim();
+            (!text.is_empty())
+                .then(|| vec![text.to_string()])
+                .unwrap_or_default()
+        }
+        _ => {
+            let rendered = render_payload_value(value);
+            let rendered = rendered.trim();
+            (!rendered.is_empty())
+                .then(|| vec![rendered.to_string()])
+                .unwrap_or_default()
+        }
+    }
 }
 
 fn first_receiver_thread_id(payload: &serde_json::Map<String, Value>) -> Option<&str> {
@@ -2550,6 +2911,65 @@ mod tests {
         assert_eq!(plan_update_completed.event.event_type, "plan.update");
         assert_eq!(
             plan_update_completed.event.parent_event_id.as_deref(),
+            Some("run-1:2")
+        );
+    }
+
+    #[test]
+    fn build_event_tree_nests_user_input_request_completed_under_started() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "user.input.request",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "tool_name":"request_user_input",
+                    "tool_use_id":"rui-1",
+                    "phase":"started",
+                    "input":{"questions":[{"id":"child_lookup","question":"How?"}]}
+                }),
+                2,
+            ),
+            make_event(
+                "user.input.request",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "tool_name":"request_user_input",
+                    "tool_use_id":"rui-1",
+                    "phase":"completed",
+                    "output":{"answers":{"child_lookup":{"answers":["same dir"]}}}
+                }),
+                3,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let root = &tree.roots[0];
+        let root_started = match &root.items[0] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected root thread.started event"),
+        };
+        let sub_thread = match &root_started.children[0] {
+            TimelineItem::Thread(thread) => thread,
+            TimelineItem::Event(_) => panic!("expected child thread"),
+        };
+        let request_started = match &sub_thread.items[0] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected request_user_input start event"),
+        };
+        let request_completed = match &request_started.children[0] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected request_user_input completion child"),
+        };
+
+        assert_eq!(request_started.event.event_type, "user.input.request");
+        assert_eq!(request_completed.event.event_type, "user.input.request");
+        assert_eq!(
+            request_completed.event.parent_event_id.as_deref(),
             Some("run-1:2")
         );
     }
