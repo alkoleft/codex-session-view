@@ -205,11 +205,35 @@ h1{margin:0;font-size:26px;line-height:1.1;}
 .inset-block-body{display:flex;flex-direction:column;gap:10px;min-width:0;}
 .inset-block-footer{display:flex;justify-content:flex-end;align-items:center;margin-top:8px;font-size:12px;color:#64748b;}
 .inset-block .message-collapse{width:100%;}
-.shell-block-command{white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.45;color:#0f172a;}
+.inset-block.user-input-block{margin-top:4px;padding:0;border:none;border-radius:0;background:transparent;box-shadow:none;}
+.inset-block.user-input-block .inset-block-body{gap:14px;}
+.inset-block.user-input-block .inset-block-footer{margin-top:12px;}
+.runtime-context-collapse{border:none;border-radius:0;background:transparent;}
+.runtime-context-collapse[open]{background:transparent;}
+.runtime-context-collapse>summary{cursor:pointer;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:10px 16px;padding:2px 0 0;color:#64748b;}
+.runtime-context-collapse>summary::-webkit-details-marker{display:none;}
+.runtime-context-summary-main{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;min-width:0;}
+.runtime-context-summary-item{display:inline-flex;align-items:baseline;gap:6px;min-width:0;}
+.runtime-context-summary-label{font-size:11px;color:#94a3b8;}
+.runtime-context-summary-value{color:#334155;font-size:12px;font-weight:600;white-space:pre-wrap;word-break:break-word;}
+.runtime-context-toggle{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:#fff;border:1px solid #d8dee9;color:#475569;font-size:12px;font-weight:600;flex-shrink:0;margin-left:auto;}
+.runtime-context-collapse[open] .runtime-context-toggle-closed{display:none;}
+.runtime-context-collapse:not([open]) .runtime-context-toggle-open{display:none;}
+.runtime-context-summary-meta{font-size:12px;color:#94a3b8;}
+.runtime-context-panel{padding:8px 0 0;}
+.shell-block-compact{display:flex;flex-direction:column;gap:10px;}
+.shell-block-summary{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;}
+.shell-block-summary-main{min-width:0;flex:1 1 320px;}
+.shell-block-actions{display:flex;align-items:center;gap:8px;flex-shrink:0;margin-left:auto;}
+.shell-block-command{min-width:0;white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.45;color:#0f172a;}
+.shell-block-output-wrap{padding-top:8px;border-top:1px dashed #d2dae4;}
 .shell-block-output{color:#475569;}
-.shell-block-empty{color:#94a3b8;}
-.shell-block-status{display:inline-flex;align-items:center;gap:6px;}
-.shell-block-status.is-failure{color:#b91c1c;}
+.shell-block-toggle{display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:#fff;border:1px solid #d8dee9;color:#475569;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;}
+.shell-block-toggle:hover{background:#f8fafc;}
+.shell-block-compact[data-expanded="false"] .shell-block-output-wrap{display:none;}
+.shell-block-status{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;background:#f8fafc;border:1px solid #d8dee9;color:#475569;font-size:12px;font-weight:600;}
+.shell-block-status.is-success{background:#ecfdf3;color:#166534;border-color:#bbf7d0;}
+.shell-block-status.is-failure{background:#fef2f2;color:#b91c1c;border-color:#fecaca;}
 .plan-explanation{color:#334155;}
 .plan-steps{display:flex;flex-direction:column;gap:8px;}
 .plan-step{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border:1px solid #d8dee9;border-radius:12px;background:#f8fafc;}
@@ -219,23 +243,25 @@ h1{margin:0;font-size:26px;line-height:1.1;}
 .plan-step-status.is-completed{background:#e8f7ec;color:#166534;border-color:#b7e4c7;}
 .plan-step-status.is-in-progress{background:#e6f0ff;color:#1d4ed8;border-color:#bfdbfe;}
 .plan-step-status.is-pending{background:#fff7d6;color:#92400e;border-color:#fde68a;}
-.user-input-questions{display:flex;flex-direction:column;gap:10px;}
-.user-input-question{display:flex;flex-direction:column;gap:8px;padding:10px;border:1px solid #d8dee9;border-radius:12px;background:#f8fafc;}
-.user-input-question-head{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;}
-.user-input-question-tag{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;border:1px solid #d8dee9;background:#fff;color:#475569;font-size:11px;}
+.user-input-questions{display:flex;flex-direction:column;gap:14px;}
+.user-input-question{display:flex;flex-direction:column;gap:12px;padding:14px 14px 12px;border:1px solid #e2e8f0;border-radius:16px;background:linear-gradient(180deg,rgba(251,253,255,.98),rgba(248,250,252,.92));box-shadow:inset 0 1px 0 rgba(255,255,255,.85);}
+.user-input-question-top{display:flex;flex-wrap:wrap;align-items:flex-start;gap:10px 14px;}
+.user-input-question-main{flex:1 1 420px;min-width:0;}
+.user-input-question-head{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:6px 8px;align-items:center;flex:0 1 auto;margin-left:auto;}
+.user-input-question-tag{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;border:none;background:rgba(255,255,255,.78);color:#64748b;font-size:11px;box-shadow:inset 0 0 0 1px rgba(203,213,225,.72);}
 .user-input-question-tag-label{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#94a3b8;}
-.user-input-question-text{color:#0f172a;white-space:pre-wrap;word-break:break-word;}
-.user-input-options{display:flex;flex-direction:column;gap:8px;}
-.user-input-option{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border:1px solid #d8dee9;border-radius:10px;background:#fff;}
-.user-input-option.is-selected{background:#e8f7ec;border-color:#b7e4c7;}
+.user-input-question-text{color:#0f172a;white-space:pre-wrap;word-break:break-word;font-size:14px;font-weight:700;line-height:1.45;}
+.user-input-options{display:flex;flex-direction:column;gap:10px;}
+.user-input-option{display:flex;flex-direction:column;gap:6px;padding:10px 12px;border:none;border-radius:12px;background:rgba(248,250,252,.92);}
+.user-input-option.is-selected{background:linear-gradient(180deg,#eefcf3,#e5f9ed);box-shadow:inset 3px 0 0 #22c55e;}
 .user-input-option-head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap;}
 .user-input-option-label{font-weight:700;color:#0f172a;white-space:pre-wrap;word-break:break-word;}
 .user-input-option-description{color:#475569;white-space:pre-wrap;word-break:break-word;}
 .user-input-answer-list{display:flex;flex-wrap:wrap;gap:6px;}
-.user-input-answer-chip{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;border:1px solid #d8dee9;background:#fff;color:#334155;font-size:12px;}
-.user-input-answer-chip.is-selected{background:#dcfce7;border-color:#86efac;color:#166534;}
-.user-input-extra-answers{display:flex;flex-direction:column;gap:8px;}
-.user-input-extra-answer{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;padding:8px 10px;border:1px solid #d8dee9;border-radius:10px;background:#fff;}
+.user-input-answer-chip{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;border:none;background:#f1f5f9;color:#475569;font-size:12px;box-shadow:inset 0 0 0 1px rgba(203,213,225,.72);}
+.user-input-answer-chip.is-selected{background:#dcfce7;color:#166534;box-shadow:inset 0 0 0 1px #86efac;}
+.user-input-extra-answers{display:flex;flex-direction:column;gap:10px;}
+.user-input-extra-answer{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap;padding:10px 12px;border:none;border-radius:12px;background:rgba(248,250,252,.92);}
 .user-input-extra-answer-id{font-size:11px;font-weight:700;color:#64748b;}
 .tree{margin-top:20px;}
 .children{margin:12px 0 0 22px;padding-left:14px;border-left:2px solid #d8dee9;}
@@ -248,15 +274,21 @@ summary::-webkit-details-marker{display:none;}
 .thread-flow{display:flex;flex-direction:column;margin-top:10px;}
 .thread-flow>*+*{position:relative;margin-top:0;padding-top:16px;}
 .thread-flow>*+*::before{content:"";position:absolute;top:0;left:0;right:0;border-top:1px dashed #98a6b9;}
-.task-lifecycle{position:relative;margin:2px 0;padding-left:28px;--task-accent:#2563eb;--task-accent-soft:#dbeafe;--task-accent-fade:rgba(37,99,235,.18);}
-.task-lifecycle::before{content:"";position:absolute;top:8px;bottom:8px;left:10px;width:2px;border-radius:999px;background:linear-gradient(180deg,var(--task-accent) 0%,color-mix(in srgb,var(--task-accent) 26%,#ffffff) 100%);}
+.task-lifecycle{position:relative;margin:8px 0;padding:12px 14px 12px 32px;--task-accent:#2563eb;--task-accent-soft:#dbeafe;--task-accent-fade:rgba(37,99,235,.18);background:linear-gradient(180deg,color-mix(in srgb,var(--task-accent-soft) 46%,#ffffff) 0%,rgba(255,255,255,.98) 100%);border:1px solid color-mix(in srgb,var(--task-accent) 18%,#d8dee9);border-radius:18px;box-shadow:0 10px 20px rgba(15,23,42,.03);}
+.task-lifecycle::before{content:"";position:absolute;top:14px;bottom:14px;left:13px;width:2px;border-radius:999px;background:linear-gradient(180deg,var(--task-accent) 0%,color-mix(in srgb,var(--task-accent) 26%,#ffffff) 100%);}
+.task-lifecycle.is-open{background:linear-gradient(180deg,color-mix(in srgb,var(--task-accent-soft) 56%,#ffffff) 0%,rgba(255,255,255,.96) 100%);}
 .task-lifecycle.is-open::before{background:linear-gradient(180deg,var(--task-accent) 0%,var(--task-accent-fade) 100%);}
-.task-lifecycle-items{position:relative;}
+.task-lifecycle-items{position:relative;z-index:1;}
 .task-lifecycle-items.thread-flow{margin-top:0;}
-.event-footnote{margin:6px calc(50% - 50vw) 0;padding:0 20px;background:linear-gradient(90deg,rgba(253,246,227,.96),rgba(231,240,255,.96));border-top:1px dashed #d8dee9;border-bottom:1px solid #d8dee9;}
-.event-footnote-content{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline;padding:8px 0 10px;}
+.task-lifecycle-items.thread-flow>*+*::before{border-top-color:color-mix(in srgb,var(--task-accent) 18%,#cbd5e1);}
+.event-footnote{margin:6px calc(50% - 50vw) 0;padding:0 20px;background:linear-gradient(90deg,rgba(248,250,252,.96),rgba(241,245,249,.94));border-top:1px solid rgba(203,213,225,.82);border-bottom:1px solid rgba(203,213,225,.94);}
+.event-footnote-summary{display:flex;justify-content:space-between;align-items:center;gap:8px 12px;padding:6px 0;}
+.event-footnote-summary-main{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;min-width:0;}
+.event-footnote-details{padding:0 0 8px;}
+.event-footnote-content{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline;padding-top:8px;border-top:1px dashed rgba(148,163,184,.45);}
+.event-footnote[data-expanded="false"] .event-footnote-details{display:none;}
 .event-footnote-seq{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:#fff;border:1px solid #d8dee9;color:#334155;font-size:11px;}
-.event-footnote-title{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#475569;}
+.event-footnote-title{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;}
 .event-footnote-pair{display:inline-flex;align-items:baseline;gap:6px;}
 .event-footnote-label{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;}
 .event-footnote-value{font-size:12px;font-weight:400;color:#0f172a;}
@@ -264,6 +296,8 @@ summary::-webkit-details-marker{display:none;}
 .event-footnote-pair.is-total .event-footnote-label{font-size:10px;font-weight:700;}
 .event-footnote-pair.is-total .event-footnote-value{font-size:12px;font-weight:400;}
 .event-footnote-pair.is-total .event-footnote-diff{font-size:13px;font-weight:800;}
+.event-footnote-toggle{padding:3px 9px;border-radius:999px;border:1px solid #cbd5e1;background:#fff;color:#475569;font:inherit;font-size:11px;cursor:pointer;flex-shrink:0;}
+.event-footnote-toggle:hover{background:#f8fafc;}
 .diff-pos{color:#166534;}
 .diff-neg{color:#b91c1c;}
 .event-card{display:flex;flex-direction:column;gap:8px;padding:10px 0;border:none;border-radius:0;background:transparent;box-shadow:none;}
@@ -287,6 +321,10 @@ summary::-webkit-details-marker{display:none;}
 .event-meta-value{min-width:0;color:#475569;white-space:pre-wrap;word-break:break-word;}
 .event-summary{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:none;}
 .event-detail{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px dashed #d2dae4;}
+.event-highlight{display:flex;flex-wrap:wrap;gap:8px 10px;align-items:baseline;padding:10px 12px;border-radius:14px;border:1px solid #d8dee9;background:#f8fafc;}
+.event-highlight-collab{background:linear-gradient(180deg,#fbfdff,#f2f6fb);border-color:#d7deea;}
+.event-highlight-prefix{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;background:#eef2ff;color:#334155;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;}
+.event-highlight-text{min-width:0;color:#0f172a;font-weight:600;white-space:pre-wrap;word-break:break-word;}
 .event-section-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#94a3b8;}
 .seq-chip{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;background:#0f172a;color:#fff;font-weight:700;font-size:12px;}
 .summary-text{white-space:pre-wrap;word-break:break-word;color:#0f172a;}
@@ -312,10 +350,10 @@ summary::-webkit-details-marker{display:none;}
 .empty{margin-top:10px;padding:12px;border:1px dashed #d8dee9;border-radius:12px;color:#64748b;background:#fafaf9;}
 @media (max-width:1200px){.hero-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
 @media (max-width:980px){.hero-source{min-width:0;width:100%;}.event-footnote{padding:0 16px;}}
-@media (max-width:640px){.page{padding:16px;}.hero{padding:16px;}.hero-grid{grid-template-columns:1fr;}.thread-body{padding:0 12px 12px;}.children{margin-left:16px;padding-left:12px;}.task-lifecycle{padding-left:24px;}.task-lifecycle::before{left:8px;}.event-card.is-task-started::before,.event-card.is-task-completed::before{left:-20px;}}
+@media (max-width:640px){.page{padding:16px;}.hero{padding:16px;}.hero-grid{grid-template-columns:1fr;}.thread-body{padding:0 12px 12px;}.children{margin-left:16px;padding-left:12px;}.task-lifecycle{padding:10px 12px 10px 28px;}.task-lifecycle::before{left:12px;}.event-card.is-task-started::before,.event-card.is-task-completed::before{left:-20px;}}
 code{background:#f8fafc;padding:2px 6px;border-radius:6px;border:1px solid #e2e8f0;}"#;
 
-const PAGE_SCRIPT: &str = r#"function toggleMessageBlock(button){var block=button.closest('.message-collapse');if(!block){return;}var expanded=block.getAttribute('data-expanded')==='true';var nextState=expanded?'false':'true';block.setAttribute('data-expanded',nextState);button.setAttribute('aria-expanded',nextState);button.textContent=expanded?'see full':'collapse';}"#;
+const PAGE_SCRIPT: &str = r#"function toggleMessageBlock(button){var block=button.closest('.message-collapse');if(!block){return;}var expanded=block.getAttribute('data-expanded')==='true';var nextState=expanded?'false':'true';block.setAttribute('data-expanded',nextState);button.setAttribute('aria-expanded',nextState);button.textContent=expanded?'see full':'collapse';}function toggleTokenFootnote(button){var footnote=button.closest('.event-footnote');if(!footnote){return;}var expanded=footnote.getAttribute('data-expanded')==='true';var nextState=expanded?'false':'true';footnote.setAttribute('data-expanded',nextState);button.setAttribute('aria-expanded',nextState);button.textContent=expanded?'details':'hide details';}function toggleShellOutput(button){var block=button.closest('.shell-block-compact');if(!block){return;}var expanded=block.getAttribute('data-expanded')==='true';var nextState=expanded?'false':'true';block.setAttribute('data-expanded',nextState);button.setAttribute('aria-expanded',nextState);button.textContent=expanded?'show output':'hide output';}"#;
 
 fn render_html(tree: &EventTree) -> String {
     let mut out = String::new();
@@ -1527,7 +1565,7 @@ fn render_combined_collab_operation_card(out: &mut String, call: &EventEntry, re
         }
     };
     let meta_row = render_combined_collab_operation_meta_row(call, result);
-    let summary_block = render_event_summary_block(result);
+    let summary_block = render_combined_collab_operation_summary_block(result);
     let detail_block = render_combined_collab_operation_detail_block(call, result);
     let seq_label = format!("#{:04}, #{:04}", call.seq, result.seq);
     let event_label = call.event_type.clone();
@@ -1567,6 +1605,12 @@ fn render_combined_collab_operation_card(out: &mut String, call: &EventEntry, re
         summary_block,
         detail_block,
     );
+}
+
+fn render_combined_collab_operation_summary_block(result: &EventEntry) -> String {
+    render_collab_operation_highlight_block(result)
+        .map(|highlight| format!("<div class=\"event-summary\">{highlight}</div>"))
+        .unwrap_or_else(|| render_event_summary_block(result))
 }
 
 fn render_combined_shell_operation_detail_block(call: &EventEntry, result: &EventEntry) -> String {
@@ -1621,6 +1665,83 @@ fn render_event_summary_block(event: &EventEntry) -> String {
         "<div class=\"event-summary\">{}</div>",
         render_summary_block(event)
     )
+}
+
+fn render_collab_operation_highlight_block(event: &EventEntry) -> Option<String> {
+    let (prefix, text) = collab_operation_highlight(event)?;
+    Some(format!(
+        "<div class=\"event-highlight event-highlight-collab\"><span class=\"event-highlight-prefix\">{}</span><span class=\"event-highlight-text\">{}</span></div>",
+        escape_html(&prefix),
+        escape_html(&text),
+    ))
+}
+
+fn collab_operation_highlight(event: &EventEntry) -> Option<(String, String)> {
+    let mut best: Option<(usize, usize, String, String)> = None;
+
+    for (index, state) in collab_operation_states(event).into_iter().enumerate() {
+        let Some(text) = collab_operation_highlight_text(&state.text) else {
+            continue;
+        };
+        let prefix = state
+            .label
+            .as_deref()
+            .map(normalize_collab_operation_highlight_prefix)
+            .unwrap_or("result")
+            .to_string();
+        let score = collab_operation_highlight_priority(state.label.as_deref());
+        let should_replace = match best.as_ref() {
+            Some((best_score, best_index, _, _)) => {
+                score > *best_score || (score == *best_score && index < *best_index)
+            }
+            None => true,
+        };
+        if should_replace {
+            best = Some((score, index, prefix, text));
+        }
+    }
+
+    best.map(|(_, _, prefix, text)| (prefix, text))
+}
+
+fn collab_operation_highlight_priority(label: Option<&str>) -> usize {
+    match label {
+        Some("completed" | "failed" | "error" | "cancelled") => 4,
+        Some("status" | "message") => 3,
+        Some(_) => 2,
+        None => 1,
+    }
+}
+
+fn normalize_collab_operation_highlight_prefix(label: &str) -> &str {
+    label.trim()
+}
+
+fn collab_operation_highlight_text(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let line = strip_list_marker(line).trim();
+    if line.is_empty() {
+        return None;
+    }
+    Some(truncate_message_preview(line, 140))
+}
+
+fn strip_list_marker(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    for prefix in ["- ", "* ", "• ", "— "] {
+        if let Some(rest) = trimmed.strip_prefix(prefix) {
+            return rest.trim_start();
+        }
+    }
+    for separator in [". ", ") "] {
+        if let Some(index) = trimmed.find(separator) {
+            let (head, tail) = trimmed.split_at(index);
+            if !head.is_empty() && head.chars().all(|ch| ch.is_ascii_digit()) {
+                return tail[separator.len()..].trim_start();
+            }
+        }
+    }
+    trimmed
 }
 
 fn render_event_detail_block(event: &EventEntry) -> String {
@@ -1790,6 +1911,7 @@ fn render_user_input_request_operation_block(request: &UserInputRequestEntry) ->
 fn render_user_input_question_block(question: &UserInputQuestionEntry) -> String {
     let mut out = String::from("<div class=\"user-input-question\">");
     let mut head = String::new();
+    let mut prompt_body = String::new();
     if let Some(header) = question.header.as_deref().filter(|value| !value.is_empty()) {
         let _ = write!(
             head,
@@ -1804,16 +1926,13 @@ fn render_user_input_question_block(question: &UserInputQuestionEntry) -> String
             escape_html(id),
         );
     }
-    if !head.is_empty() {
-        let _ = write!(out, "<div class=\"user-input-question-head\">{head}</div>");
-    }
     if let Some(prompt) = question
         .question
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let prompt_body = if should_collapse_text_content(prompt) {
+        prompt_body = if should_collapse_text_content(prompt) {
             render_collapsible_text_block(prompt)
         } else {
             format!(
@@ -1821,7 +1940,19 @@ fn render_user_input_question_block(question: &UserInputQuestionEntry) -> String
                 escape_html(prompt)
             )
         };
-        out.push_str(&prompt_body);
+    }
+    if !prompt_body.is_empty() || !head.is_empty() {
+        out.push_str("<div class=\"user-input-question-top\">");
+        if !prompt_body.is_empty() {
+            let _ = write!(
+                out,
+                "<div class=\"user-input-question-main\">{prompt_body}</div>"
+            );
+        }
+        if !head.is_empty() {
+            let _ = write!(out, "<div class=\"user-input-question-head\">{head}</div>");
+        }
+        out.push_str("</div>");
     }
     if !question.options.is_empty() {
         out.push_str("<div class=\"user-input-options\">");
@@ -2408,18 +2539,32 @@ fn render_runtime_context_block(event: &EventEntry) -> Option<String> {
         return None;
     }
 
-    let mut out = String::from("<table class=\"kv-table\"><tbody>");
+    let mut table = String::from("<table class=\"kv-table\"><tbody>");
     for (label, value) in &event.runtime_context_pairs {
         let rendered_value = render_runtime_context_value(label, value);
         let _ = write!(
-            out,
+            table,
             "<tr class=\"kv-table-row\"><th class=\"kv-table-label\">{}</th><td class=\"{}\">{}</td></tr>",
             escape_html(label),
             "kv-table-value",
             rendered_value,
         );
     }
-    out.push_str("</tbody></table>");
+    table.push_str("</tbody></table>");
+    let summary = render_runtime_context_summary(event);
+    let out = format!(
+        "<details class=\"runtime-context-collapse\">\
+         <summary>\
+         <div class=\"runtime-context-summary-main\">{}</div>\
+         <span class=\"runtime-context-toggle\">\
+         <span class=\"runtime-context-toggle-closed\">show details</span>\
+         <span class=\"runtime-context-toggle-open\">hide details</span>\
+         </span>\
+         </summary>\
+         <div class=\"runtime-context-panel\">{}</div>\
+         </details>",
+        summary, table,
+    );
 
     Some(render_inset_block(
         "runtime.context",
@@ -2436,6 +2581,57 @@ fn render_runtime_context_value(label: &str, value: &str) -> String {
     }
 
     format!("<code>{}</code>", escape_html(value))
+}
+
+fn render_runtime_context_summary(event: &EventEntry) -> String {
+    let mut items = Vec::new();
+    for (label, value) in [
+        ("model", runtime_context_pair_value(event, "model")),
+        ("effort", runtime_context_pair_value(event, "effort")),
+        (
+            "approval_policy",
+            runtime_context_pair_value(event, "approval_policy"),
+        ),
+        ("sandbox_policy.type", runtime_context_sandbox_type(event)),
+    ] {
+        let Some(value) = value.filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        items.push(format!(
+            "<span class=\"runtime-context-summary-item\"><span class=\"runtime-context-summary-label\">{}</span><span class=\"runtime-context-summary-value\">{}</span></span>",
+            escape_html(label),
+            escape_html(&value),
+        ));
+    }
+    if items.is_empty() {
+        return format!(
+            "<span class=\"runtime-context-summary-meta\">{} fields</span>",
+            event.runtime_context_pairs.len()
+        );
+    }
+    items.join("")
+}
+
+fn runtime_context_pair_value(event: &EventEntry, label: &str) -> Option<String> {
+    event
+        .runtime_context_pairs
+        .iter()
+        .find(|(key, _)| key == label)
+        .map(|(_, value)| value.clone())
+}
+
+fn runtime_context_sandbox_type(event: &EventEntry) -> Option<String> {
+    let value = runtime_context_pair_value(event, "sandbox_policy")?;
+    serde_json::from_str::<serde_json::Value>(&value)
+        .ok()
+        .and_then(|parsed| {
+            parsed
+                .as_object()
+                .and_then(|object| object.get("type"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+        .or(Some(value))
 }
 
 fn is_runtime_context_collapsible_key(label: &str) -> bool {
@@ -2744,23 +2940,32 @@ fn render_shell_operation_block(
             )
         })
         .unwrap_or_default();
-    let output = match output {
-        Some(output) if should_collapse_text_content(output) => {
-            render_collapsible_text_block(output)
-        }
+    let has_output = output.is_some_and(|output| !output.is_empty());
+    let output = match output.filter(|output| !output.is_empty()) {
         Some(output) => format!(
             "<div class=\"summary-text shell-block-output\">{}</div>",
             escape_html(output)
         ),
-        None => "<div class=\"summary-text shell-block-output shell-block-empty\">Нет вывода</div>"
-            .to_string(),
+        None => String::new(),
     };
-    let footer = render_shell_result_status(exit_code);
-    let body = format!("{command}<div class=\"shell-block-output-wrap\">{output}</div>");
+    let status = render_shell_result_status(exit_code);
+    let toggle = if has_output {
+        "<button class=\"shell-block-toggle\" type=\"button\" aria-expanded=\"false\" onclick=\"toggleShellOutput(this)\">show output</button>"
+    } else {
+        ""
+    };
+    let output_wrap = if has_output {
+        format!("<div class=\"shell-block-output-wrap\">{output}</div>")
+    } else {
+        String::new()
+    };
+    let body = format!(
+        "<div class=\"shell-block-compact\" data-expanded=\"false\"><div class=\"shell-block-summary\"><div class=\"shell-block-summary-main\">{command}</div><div class=\"shell-block-actions\">{status}{toggle}</div></div>{output_wrap}</div>"
+    );
     Some(render_inset_block(
         "Shell",
         &body,
-        Some(&footer),
+        None,
         "shell-block",
         true,
     ))
@@ -2789,16 +2994,8 @@ fn render_token_footnote(event: &EventEntry, last_token_usage: &mut TokenUsage) 
     *last_token_usage = current_usage;
 
     let mut out = String::new();
-    let _ = write!(
-        out,
-        "<div class=\"event-footnote\" data-footnote-event-type=\"{}\" data-footnote-event-id=\"{}\">\
-         <div class=\"event-footnote-content\">\
-         <span class=\"event-footnote-seq\">#{:04}</span>\
-         <span class=\"event-footnote-title\">token consumption</span>",
-        escape_html(&event.event_type),
-        escape_html(&event.event_id),
-        event.seq,
-    );
+    let mut detail_pairs = String::new();
+    let mut summary_pair = None;
     for (label, value, diff_value, pair_class) in [
         ("input", event.input_tokens, diff.input_tokens, ""),
         (
@@ -2819,18 +3016,54 @@ fn render_token_footnote(event: &EventEntry, last_token_usage: &mut TokenUsage) 
         let Some(value) = value else {
             continue;
         };
+        let pair_html = render_token_footnote_pair(label, value, diff_value, pair_class);
+        if summary_pair.is_none() {
+            summary_pair = Some(pair_html.clone());
+        }
+        if label == "total" {
+            summary_pair = Some(pair_html.clone());
+        }
+        detail_pairs.push_str(&pair_html);
+    }
+    let _ = write!(
+        out,
+        "<div class=\"event-footnote\" data-footnote-event-type=\"{}\" data-footnote-event-id=\"{}\" data-expanded=\"false\">\
+         <div class=\"event-footnote-summary\">\
+         <div class=\"event-footnote-summary-main\">\
+         <span class=\"event-footnote-seq\">#{:04}</span>\
+         <span class=\"event-footnote-title\">token consumption</span>{}\
+         </div>\
+         <button class=\"event-footnote-toggle\" type=\"button\" aria-expanded=\"false\" onclick=\"toggleTokenFootnote(this)\">details</button>\
+         </div>",
+        escape_html(&event.event_type),
+        escape_html(&event.event_id),
+        event.seq,
+        summary_pair.unwrap_or_default(),
+    );
+    if !detail_pairs.is_empty() {
         let _ = write!(
             out,
-            "<span class=\"event-footnote-pair{}\"><span class=\"event-footnote-label\">{}</span><span class=\"event-footnote-diff {}\">Δ {}</span><span class=\"event-footnote-value\">{}</span></span>",
-            pair_class,
-            escape_html(label),
-            diff_class(diff_value),
-            escape_html(&format_signed_number(diff_value)),
-            escape_html(&format_chart_number(value)),
+            "<div class=\"event-footnote-details\"><div class=\"event-footnote-content\">{detail_pairs}</div></div>"
         );
     }
-    out.push_str("</div></div>");
+    out.push_str("</div>");
     out
+}
+
+fn render_token_footnote_pair(
+    label: &str,
+    value: u64,
+    diff_value: i128,
+    pair_class: &str,
+) -> String {
+    format!(
+        "<span class=\"event-footnote-pair{}\"><span class=\"event-footnote-label\">{}</span><span class=\"event-footnote-diff {}\">Δ {}</span><span class=\"event-footnote-value\">{}</span></span>",
+        pair_class,
+        escape_html(label),
+        diff_class(diff_value),
+        escape_html(&format_signed_number(diff_value)),
+        escape_html(&format_chart_number(value)),
+    )
 }
 
 fn token_usage_from_event(event: &EventEntry) -> TokenUsage {
@@ -3253,6 +3486,17 @@ mod tests {
         assert!(html.contains(">runtime.context<"));
         assert!(html.contains("class=\"inset-block runtime-context-block inline-title\""));
         assert!(html.contains("class=\"inset-block-title inline-title\">runtime.context<"));
+        assert!(html.contains("class=\"runtime-context-collapse\"><summary>"));
+        assert!(html.contains("class=\"runtime-context-summary-main\""));
+        assert!(html.contains("class=\"runtime-context-summary-label\">model<"));
+        assert!(html.contains("class=\"runtime-context-summary-value\">gpt-5.4<"));
+        assert!(html.contains("class=\"runtime-context-summary-label\">effort<"));
+        assert!(html.contains("class=\"runtime-context-summary-value\">medium<"));
+        assert!(html.contains("class=\"runtime-context-summary-label\">approval_policy<"));
+        assert!(html.contains("class=\"runtime-context-summary-value\">never<"));
+        assert!(html.contains("class=\"runtime-context-summary-label\">sandbox_policy.type<"));
+        assert!(html.contains("class=\"runtime-context-summary-value\">workspace-write<"));
+        assert!(html.contains("class=\"runtime-context-toggle-closed\">show details<"));
         assert!(html.contains("class=\"kv-table-label\">cwd<"));
         assert!(html.contains("class=\"kv-table-value\"><code>/workspace</code>"));
         assert!(html.contains("class=\"kv-table-label\">sandbox_policy<"));
@@ -3545,6 +3789,8 @@ mod tests {
         assert!(html.contains("event-meta-label\">questions<"));
         assert!(html.contains("event-meta-value\">1<"));
         assert!(html.contains("event-meta-label\">answers<"));
+        assert!(html.contains("class=\"user-input-question-top\""));
+        assert!(html.contains("class=\"user-input-question-main\""));
         assert!(html.contains("class=\"user-input-question-tag-label\">header<"));
         assert!(html.contains(">Поиск детей<"));
         assert!(html.contains("class=\"user-input-question-tag-label\">id<"));
@@ -3745,6 +3991,9 @@ mod tests {
         assert!(!html.contains("class=\"badge cat-default\">info.tokens<"));
         assert!(!html.contains("class=\"summary-structured\""));
         assert!(html.contains("event-footnote-title\">token consumption<"));
+        assert!(html.contains("class=\"event-footnote-summary\""));
+        assert!(html.contains("class=\"event-footnote-toggle\""));
+        assert!(html.contains("onclick=\"toggleTokenFootnote(this)\""));
         assert!(html.contains("event-footnote-label\">input<"));
         assert!(html.contains("event-footnote-label\">cached input<"));
         assert!(html.contains("event-footnote-value\">11 877<"));
@@ -3859,6 +4108,7 @@ mod tests {
         assert!(html.contains("data-footnote-event-id=\"run-1:7\""));
         assert!(html.contains("data-footnote-event-id=\"run-1:9\""));
         assert!(html.contains("event-footnote-title\">token consumption<"));
+        assert!(html.contains("data-footnote-event-id=\"run-1:3\" data-expanded=\"false\""));
         assert!(!html.contains("class=\"badge cat-default\">info.tokens<"));
         assert!(html.contains("event-footnote-label\">input<"));
         assert!(html.contains("class=\"event-footnote-pair is-total\""));
@@ -3925,9 +4175,11 @@ mod tests {
         assert!(html.contains("class=\"inset-block shell-block inline-title\""));
         assert!(html.contains("class=\"inset-block-title inline-title\">Shell<"));
         assert!(html.contains("$ printf &#39;shell-output-line\\n&#39;"));
-        assert!(html.contains("class=\"summary-text message-preview\""));
-        assert!(html.contains("onclick=\"toggleMessageBlock(this)\""));
-        assert!(html.contains(">see full<"));
+        assert!(html.contains("class=\"shell-block-compact\" data-expanded=\"false\""));
+        assert!(html.contains("class=\"shell-block-actions\""));
+        assert!(html.contains("class=\"shell-block-toggle\""));
+        assert!(html.contains("onclick=\"toggleShellOutput(this)\""));
+        assert!(html.contains(">show output<"));
         assert!(html.contains("shell-output-line"));
         assert!(!html.contains(
             "<span class=\"event-key\">summary</span><div class=\"summary-text\">command ok"
@@ -3959,6 +4211,8 @@ mod tests {
         assert!(html.contains("class=\"inset-block shell-block inline-title\""));
         assert!(html.contains("class=\"inset-block-title inline-title\">Shell<"));
         assert!(html.contains("$ printf &#39;a\\nb\\n&#39;"));
+        assert!(html.contains("class=\"shell-block-toggle\""));
+        assert!(html.contains(">show output<"));
         assert!(html.contains("a\nb"));
         assert!(html.contains("&#10003; Успех"));
         assert!(!html.contains(
@@ -3990,8 +4244,9 @@ mod tests {
 
         assert!(html.contains("class=\"inset-block shell-block inline-title\""));
         assert!(html.contains("$ git diff --stat"));
-        assert!(html.contains("Нет вывода"));
         assert!(html.contains("&#10003; Успех"));
+        assert!(!html.contains("class=\"shell-block-toggle\""));
+        assert!(!html.contains("Нет вывода"));
     }
 
     #[test]
@@ -4041,6 +4296,8 @@ mod tests {
         assert!(html.contains("event-meta-label\">output size<"));
         assert!(html.contains("event-meta-value\">6 B<"));
         assert!(html.contains("<strong>$ printf &#39;merged\\n&#39;</strong>"));
+        assert!(html.contains("class=\"shell-block-toggle\""));
+        assert!(html.contains(">show output<"));
         assert!(!html.contains("data-seq=\"3\""));
         assert!(!html.contains("data-event-id=\"run-1:3\""));
         assert_eq!(count_occurrences(&html, "class=\"event-card\""), 3);
@@ -4113,6 +4370,8 @@ mod tests {
         assert!(html.contains("data-seq=\"2,4\""));
         assert!(html.contains(">#0002, #0004<"));
         assert!(html.contains("<strong>$ printf &#39;rich\\n&#39;</strong>"));
+        assert!(html.contains("class=\"shell-block-toggle\""));
+        assert!(html.contains(">show output<"));
         assert!(html.contains("class=\"summary-text shell-block-output\">rich"));
         assert!(!html.contains("data-seq=\"3\""));
         assert!(!html.contains("data-event-id=\"run-1:3\""));
@@ -4318,6 +4577,9 @@ mod tests {
         assert!(html.contains("event-meta-label\">updates<"));
         assert!(html.contains("class=\"inset-block user-input-block inline-title\""));
         assert!(html.contains("class=\"inset-block-title inline-title\">Subagent Close<"));
+        assert!(html.contains("class=\"event-highlight event-highlight-collab\""));
+        assert!(html.contains("class=\"event-highlight-prefix\">completed<"));
+        assert!(html.contains("class=\"event-highlight-text\">Scope issues<"));
         assert!(html.contains("class=\"user-input-question-tag-label\">thread<"));
         assert!(html.contains("<code>sub-1</code>"));
         assert!(html.contains("class=\"user-input-question-tag-label\">status<"));
