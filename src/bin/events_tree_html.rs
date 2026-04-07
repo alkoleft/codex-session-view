@@ -8,8 +8,9 @@ use clap::Parser;
 use codex_worker_rs::error::{AppError, AppResult};
 use codex_worker_rs::events::projector::EventSummaryCategory;
 use codex_worker_rs::events::types::{
-    COLLAB_SPAWN_AGENT, INFO_TOKENS, MESSAGE_USER, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT,
-    USER_INPUT_REQUEST,
+    COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT,
+    INFO_TOKENS, MESSAGE_USER, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, TASK_COMPLETED,
+    TASK_STARTED, USER_INPUT_REQUEST,
 };
 
 #[path = "events_tree_shared.rs"]
@@ -538,6 +539,22 @@ fn render_event_node(
         }
         return;
     }
+    if let Some(collab_result_index) = paired_collab_operation_result_child_index(node) {
+        let collab_result = match &node.children[collab_result_index] {
+            TimelineItem::Event(child) => child,
+            TimelineItem::Thread(_) => unreachable!("collab result child must be an event"),
+        };
+        render_combined_collab_operation_card(out, &node.event, &collab_result.event);
+
+        let combined_children = merged_collab_operation_children(node, collab_result_index);
+        if !combined_children.is_empty() {
+            let _ = depth;
+            out.push_str("<div class=\"children\">");
+            render_timeline_items(out, &combined_children, depth + 1, last_token_usage);
+            out.push_str("</div>");
+        }
+        return;
+    }
 
     render_event_card(out, &node.event, last_token_usage);
     if !node.children.is_empty() {
@@ -763,6 +780,87 @@ fn is_redundant_response_item_user_input_request_result(
         && child.event.duplicate_of.is_none()
         && shell_operation_ids_match(call, &child.event)
         && preferred_result.raw_type != "response_item"
+}
+
+fn paired_collab_operation_result_child_index(node: &EventNode) -> Option<usize> {
+    if !is_pairable_collab_operation_event(&node.event)
+        || node.event.phase.as_deref() != Some("started")
+    {
+        return None;
+    }
+
+    node.children
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| match item {
+            TimelineItem::Event(child)
+                if child.event.event_type == node.event.event_type
+                    && child.event.phase.as_deref() == Some("completed")
+                    && shell_operation_ids_match(&node.event, &child.event) =>
+            {
+                Some((index, collab_operation_result_preference(&child.event)))
+            }
+            TimelineItem::Event(_) | TimelineItem::Thread(_) => None,
+        })
+        .max_by_key(|(_, score)| *score)
+        .map(|(index, _)| index)
+}
+
+fn merged_collab_operation_children(
+    node: &EventNode,
+    collab_result_index: usize,
+) -> Vec<TimelineItem> {
+    let preferred_result = match &node.children[collab_result_index] {
+        TimelineItem::Event(child) => &child.event,
+        TimelineItem::Thread(_) => unreachable!("collab result child must be an event"),
+    };
+    let mut children = Vec::new();
+    for (index, item) in node.children.iter().enumerate() {
+        if index == collab_result_index {
+            if let TimelineItem::Event(child) = item {
+                children.extend(child.children.clone());
+            }
+            continue;
+        }
+        if is_redundant_response_item_collab_result(item, &node.event, preferred_result) {
+            continue;
+        }
+        children.push(item.clone());
+    }
+    children
+}
+
+fn collab_operation_result_preference(event: &EventEntry) -> (u8, usize, u64) {
+    (
+        u8::from(event.duplicate_of.as_deref() == Some(RESPONSE_ITEM_FUNCTION_CALL_OUTPUT)),
+        collab_operation_state_count(event),
+        event.seq,
+    )
+}
+
+fn is_redundant_response_item_collab_result(
+    item: &TimelineItem,
+    call: &EventEntry,
+    preferred_result: &EventEntry,
+) -> bool {
+    let TimelineItem::Event(child) = item else {
+        return false;
+    };
+
+    child.event.event_id != preferred_result.event_id
+        && is_pairable_collab_operation_event(&child.event)
+        && child.event.phase.as_deref() == Some("completed")
+        && child.event.raw_type == "response_item"
+        && child.event.duplicate_of.is_none()
+        && shell_operation_ids_match(call, &child.event)
+        && preferred_result.raw_type != "response_item"
+}
+
+fn is_pairable_collab_operation_event(event: &EventEntry) -> bool {
+    matches!(
+        event.event_type.as_str(),
+        COLLAB_SEND_INPUT | COLLAB_WAIT | COLLAB_CLOSE_AGENT | COLLAB_RESUME_AGENT
+    )
 }
 
 fn is_redundant_response_item_spawn_result(
@@ -1232,6 +1330,58 @@ fn render_combined_user_input_request_operation_card(
     );
 }
 
+fn render_combined_collab_operation_card(out: &mut String, call: &EventEntry, result: &EventEntry) {
+    let subagent_badge = {
+        let badge = render_subagent_badge(call);
+        if badge.is_empty() {
+            render_subagent_badge(result)
+        } else {
+            badge
+        }
+    };
+    let meta_row = render_combined_collab_operation_meta_row(call, result);
+    let summary_block = render_event_summary_block(result);
+    let detail_block = render_combined_collab_operation_detail_block(call, result);
+    let seq_label = format!("#{:04}, #{:04}", call.seq, result.seq);
+    let event_label = call.event_type.clone();
+    let timestamp_label = if call.ts == result.ts {
+        call.ts.clone()
+    } else {
+        format!("{} -> {}", call.ts, result.ts)
+    };
+    let event_ids = format!("{},{}", call.event_id, result.event_id);
+    let raw_types = format!("{},{}", call.raw_type, result.raw_type);
+    let parse_statuses = format!("{},{}", call.parse_status, result.parse_status);
+    let _ = write!(
+        out,
+        "<article class=\"event-card\" data-seq=\"{},{}\" data-event-id=\"{}\" data-event-ids=\"{}\" data-parent-event-id=\"{}\" data-raw-type=\"{}\" data-parse-status=\"{}\">\
+         <div class=\"event-header\">\
+         <div class=\"event-header-main\">\
+         <span class=\"seq-chip\">{}</span>\
+         <span class=\"badge {}\">{}</span>{}\
+         </div>\
+         <span class=\"event-ts\">{}</span>\
+         </div>\
+         {}{}{}\
+         </article>",
+        call.seq,
+        result.seq,
+        escape_html(&call.event_id),
+        escape_html(&event_ids),
+        escape_html(call.parent_event_id.as_deref().unwrap_or("")),
+        escape_html(&raw_types),
+        escape_html(&parse_statuses),
+        escape_html(&seq_label),
+        category_class(call.category),
+        escape_html(&event_label),
+        subagent_badge,
+        escape_html(&timestamp_label),
+        meta_row,
+        summary_block,
+        detail_block,
+    );
+}
+
 fn render_combined_shell_operation_detail_block(call: &EventEntry, result: &EventEntry) -> String {
     render_shell_operation_block(
         call.shell_command
@@ -1266,6 +1416,15 @@ fn render_combined_user_input_request_operation_detail_block(
         .unwrap_or_default()
 }
 
+fn render_combined_collab_operation_detail_block(
+    _call: &EventEntry,
+    result: &EventEntry,
+) -> String {
+    render_collab_operation_block(result)
+        .map(|block| format!("<div class=\"event-detail\">{block}</div>"))
+        .unwrap_or_default()
+}
+
 fn render_event_summary_block(event: &EventEntry) -> String {
     if event.event_type == SHELL_RESULT || should_skip_event_summary(event) {
         return String::new();
@@ -1282,6 +1441,10 @@ fn render_event_detail_block(event: &EventEntry) -> String {
         return format!("<div class=\"event-detail\">{runtime_context_block}</div>");
     }
 
+    if let Some(task_message_block) = render_task_message_block(event) {
+        return format!("<div class=\"event-detail\">{task_message_block}</div>");
+    }
+
     if let Some(shell_block) = render_shell_result_block(event) {
         return format!("<div class=\"event-detail\">{shell_block}</div>");
     }
@@ -1290,6 +1453,9 @@ fn render_event_detail_block(event: &EventEntry) -> String {
     }
     if let Some(user_input_request_block) = render_user_input_request_block(event) {
         return format!("<div class=\"event-detail\">{user_input_request_block}</div>");
+    }
+    if let Some(collab_operation_block) = render_collab_operation_block(event) {
+        return format!("<div class=\"event-detail\">{collab_operation_block}</div>");
     }
 
     if let Some(plan_block) = render_plan_update_block(event) {
@@ -1311,6 +1477,30 @@ fn render_event_detail_block(event: &EventEntry) -> String {
             )
         })
         .unwrap_or_default()
+}
+
+fn render_task_message_block(event: &EventEntry) -> Option<String> {
+    if !is_task_completed_event(event) {
+        return None;
+    }
+
+    let message = event
+        .last_agent_message
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let body = if should_collapse_text_content(message) {
+        render_collapsible_text_block(message)
+    } else {
+        format!("<div class=\"summary-text\">{}</div>", escape_html(message))
+    };
+    Some(render_inset_block(
+        "Last Agent Message",
+        &body,
+        None,
+        "task-message-block",
+        true,
+    ))
 }
 
 fn render_plan_update_block(event: &EventEntry) -> Option<String> {
@@ -1617,6 +1807,223 @@ fn total_user_input_request_answer_count(request: &UserInputRequestEntry) -> usi
             .sum::<usize>()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CollabOperationStateEntry {
+    thread_id: Option<String>,
+    label: Option<String>,
+    text: String,
+}
+
+fn render_collab_operation_block(event: &EventEntry) -> Option<String> {
+    if !is_pairable_collab_operation_event(event) {
+        return None;
+    }
+
+    let states = collab_operation_states(event);
+    if states.is_empty() {
+        return None;
+    }
+
+    let mut body = String::new();
+    for state in states {
+        let mut header_parts = Vec::new();
+        if let Some(thread_id) = state.thread_id.as_deref().filter(|value| !value.is_empty()) {
+            header_parts.push(format!(
+                "<span class=\"user-input-question-tag\"><span class=\"user-input-question-tag-label\">thread</span><code>{}</code></span>",
+                escape_html(thread_id),
+            ));
+        }
+        if let Some(label) = state.label.as_deref().filter(|value| !value.is_empty()) {
+            header_parts.push(format!(
+                "<span class=\"user-input-question-tag\"><span class=\"user-input-question-tag-label\">status</span>{}</span>",
+                escape_html(label),
+            ));
+        }
+        let content = if should_collapse_text_content(&state.text) {
+            render_collapsible_text_block(&state.text)
+        } else {
+            format!(
+                "<div class=\"summary-text\">{}</div>",
+                escape_html(&state.text)
+            )
+        };
+        let header_html = if header_parts.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "<div class=\"user-input-question-head\">{}</div>",
+                header_parts.join("")
+            )
+        };
+        let _ = write!(
+            body,
+            "<div class=\"user-input-question\">{}{}</div>",
+            header_html, content,
+        );
+    }
+
+    Some(render_inset_block(
+        collab_operation_block_title(event),
+        &body,
+        None,
+        "user-input-block",
+        true,
+    ))
+}
+
+fn collab_operation_block_title(event: &EventEntry) -> &'static str {
+    match event.event_type.as_str() {
+        COLLAB_SEND_INPUT => "Subagent Input",
+        COLLAB_WAIT => "Subagent Wait",
+        COLLAB_CLOSE_AGENT => "Subagent Close",
+        COLLAB_RESUME_AGENT => "Subagent Resume",
+        _ => "Subagent Result",
+    }
+}
+
+fn collab_operation_state_count(event: &EventEntry) -> usize {
+    collab_operation_states(event).len()
+}
+
+fn collab_operation_states(event: &EventEntry) -> Vec<CollabOperationStateEntry> {
+    let Some(output) = event.output_value.as_ref() else {
+        return Vec::new();
+    };
+
+    let fallback_thread_id = event.receiver_thread_ids.first().map(String::as_str);
+    let mut states = Vec::new();
+
+    if let Some(output_obj) = output.as_object() {
+        if let Some(statuses) = output_obj
+            .get("statuses")
+            .and_then(serde_json::Value::as_object)
+        {
+            for (thread_id, value) in statuses {
+                collect_collab_operation_state_entries(
+                    &mut states,
+                    Some(thread_id.as_str()),
+                    None,
+                    value,
+                );
+            }
+        }
+        if let Some(agent_statuses) = output_obj
+            .get("agent_statuses")
+            .and_then(serde_json::Value::as_array)
+        {
+            for entry in agent_statuses {
+                let Some(entry_obj) = entry.as_object() else {
+                    continue;
+                };
+                let thread_id = entry_obj
+                    .get("thread_id")
+                    .and_then(serde_json::Value::as_str);
+                if let Some(status) = entry_obj.get("status") {
+                    collect_collab_operation_state_entries(&mut states, thread_id, None, status);
+                }
+                if let Some(message) = entry_obj.get("message") {
+                    collect_collab_operation_state_entries(
+                        &mut states,
+                        thread_id,
+                        Some("message"),
+                        message,
+                    );
+                }
+            }
+        }
+        if let Some(status) = output_obj.get("status") {
+            collect_collab_operation_state_entries(&mut states, fallback_thread_id, None, status);
+        }
+        if let Some(previous_status) = output_obj.get("previous_status") {
+            collect_collab_operation_state_entries(
+                &mut states,
+                fallback_thread_id,
+                Some("previous status"),
+                previous_status,
+            );
+        }
+        if let Some(agents_states) = output_obj
+            .get("agents_states")
+            .and_then(serde_json::Value::as_object)
+        {
+            for (thread_id, value) in agents_states {
+                collect_collab_operation_state_entries(
+                    &mut states,
+                    Some(thread_id.as_str()),
+                    None,
+                    value,
+                );
+            }
+        }
+    }
+
+    if states.is_empty() {
+        collect_collab_operation_state_entries(&mut states, fallback_thread_id, None, output);
+    }
+
+    let mut deduped = Vec::new();
+    for state in states {
+        if deduped
+            .iter()
+            .any(|known: &CollabOperationStateEntry| known == &state)
+        {
+            continue;
+        }
+        deduped.push(state);
+    }
+    deduped
+}
+
+fn collect_collab_operation_state_entries(
+    out: &mut Vec<CollabOperationStateEntry>,
+    thread_id: Option<&str>,
+    label: Option<&str>,
+    value: &serde_json::Value,
+) {
+    match value {
+        serde_json::Value::Null => {}
+        serde_json::Value::String(text) => {
+            let text = text.trim();
+            if text.is_empty() {
+                return;
+            }
+            out.push(CollabOperationStateEntry {
+                thread_id: thread_id.map(str::to_string),
+                label: label.map(str::to_string),
+                text: text.to_string(),
+            });
+        }
+        serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            out.push(CollabOperationStateEntry {
+                thread_id: thread_id.map(str::to_string),
+                label: label.map(str::to_string),
+                text: value.to_string(),
+            });
+        }
+        serde_json::Value::Object(object) => {
+            for (key, nested) in object {
+                if matches!(
+                    key.as_str(),
+                    "agent_nickname"
+                        | "agent_role"
+                        | "model"
+                        | "reasoning_effort"
+                        | "thread_id"
+                        | "session_path"
+                ) {
+                    continue;
+                }
+                collect_collab_operation_state_entries(out, thread_id, Some(key.as_str()), nested);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for nested in values {
+                collect_collab_operation_state_entries(out, thread_id, label, nested);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct SpawnAgentRenderData {
     prompt: Option<String>,
@@ -1852,6 +2259,9 @@ fn should_skip_event_summary(event: &EventEntry) -> bool {
     if event.event_type == RUNTIME_CONTEXT {
         return true;
     }
+    if is_task_started_event(event) {
+        return true;
+    }
     if event.event_type == COLLAB_SPAWN_AGENT && event.spawn_agent.is_some() {
         return true;
     }
@@ -1862,8 +2272,44 @@ fn should_skip_event_summary(event: &EventEntry) -> bool {
     summary.is_empty() || (event.summary_pairs.is_empty() && summary == event.event_type)
 }
 
+fn is_task_started_event(event: &EventEntry) -> bool {
+    event.event_type == TASK_STARTED
+        || (event.event_type == "agent.meta" && event.meta_type.as_deref() == Some("task_started"))
+}
+
+fn is_task_completed_event(event: &EventEntry) -> bool {
+    event.event_type == TASK_COMPLETED
+        || (event.event_type == "agent.meta" && event.meta_type.as_deref() == Some("task_complete"))
+}
+
 fn render_event_meta_row(event: &EventEntry) -> String {
     let mut items = Vec::new();
+    if is_task_started_event(event) {
+        if let Some(mode) = event
+            .collaboration_mode_kind
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            items.push(render_event_meta_item("mode", &escape_html(mode)));
+        }
+        if let Some(turn_id) = event.turn_id.as_deref().filter(|value| !value.is_empty()) {
+            items.push(render_event_meta_item("turn", &escape_html(turn_id)));
+        }
+        if let Some(window) = event
+            .model_context_window
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            items.push(render_event_meta_item(
+                "context window",
+                &escape_html(window),
+            ));
+        }
+    } else if is_task_completed_event(event) {
+        if let Some(turn_id) = event.turn_id.as_deref().filter(|value| !value.is_empty()) {
+            items.push(render_event_meta_item("turn", &escape_html(turn_id)));
+        }
+    }
     if event.event_type.starts_with("message.") {
         if let Some(role) = event
             .message_role
@@ -1967,6 +2413,48 @@ fn render_combined_user_input_request_meta_row(call: &EventEntry, result: &Event
         items.push(render_event_meta_item(
             "answers",
             &escape_html(&total_user_input_request_answer_count(&request).to_string()),
+        ));
+    }
+    if call.parse_status != "parsed" {
+        items.push(render_event_meta_item(
+            "call parse",
+            &escape_html(&call.parse_status),
+        ));
+        items.push(render_event_meta_item(
+            "call raw",
+            &escape_html(&call.raw_type),
+        ));
+    }
+    if result.parse_status != "parsed" {
+        items.push(render_event_meta_item(
+            "result parse",
+            &escape_html(&result.parse_status),
+        ));
+        items.push(render_event_meta_item(
+            "result raw",
+            &escape_html(&result.raw_type),
+        ));
+    }
+
+    if items.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"event-meta\">{}</div>", items.join(""))
+    }
+}
+
+fn render_combined_collab_operation_meta_row(call: &EventEntry, result: &EventEntry) -> String {
+    let mut items = Vec::new();
+    if !result.receiver_thread_ids.is_empty() {
+        items.push(render_event_meta_item(
+            "agents",
+            &escape_html(&result.receiver_thread_ids.len().to_string()),
+        ));
+    }
+    if collab_operation_state_count(result) > 0 {
+        items.push(render_event_meta_item(
+            "updates",
+            &escape_html(&collab_operation_state_count(result).to_string()),
         ));
     }
     if call.parse_status != "parsed" {
@@ -2627,6 +3115,66 @@ mod tests {
         assert!(html.contains("Build approved executable TODO checklist from the plan"));
         assert!(html.contains("plan-step-status is-in-progress\">in progress<"));
         assert!(html.contains("plan-step-status is-pending\">pending<"));
+    }
+
+    #[test]
+    fn render_html_shows_task_started_and_task_completed_fields() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "agent.session",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "agent_role":"reviewer",
+                    "agent_nickname":"Ada"
+                }),
+                2,
+            ),
+            make_event(
+                "task.started",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "turn_id":"019d6447-496b-7f73-b7cc-61a0cf42b81f",
+                    "model_context_window":256000,
+                    "collaboration_mode_kind":"default"
+                }),
+                3,
+            ),
+            make_event(
+                "task.completed",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "turn_id":"019d6447-496b-7f73-b7cc-61a0cf42b81f",
+                    "last_agent_message":"**Result**\n\n`APPROVED`\n\n- resolved A\n- resolved B\n- resolved C\n"
+                }),
+                4,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(!html.contains(
+            "started: mode=default turn=019d6447-496b-7f73-b7cc-61a0cf42b81f window=256000"
+        ));
+        assert!(html.contains("event-meta-label\">mode<"));
+        assert!(html.contains("event-meta-value\">default<"));
+        assert!(html.contains("event-meta-label\">turn<"));
+        assert!(html.contains("019d6447-496b-7f73-b7cc-61a0cf42b81f"));
+        assert!(html.contains("event-meta-label\">context window<"));
+        assert!(html.contains("event-meta-value\">256000<"));
+        assert!(html.contains("class=\"inset-block task-message-block inline-title\""));
+        assert!(html.contains("class=\"inset-block-title inline-title\">Last Agent Message<"));
+        assert!(html.contains("class=\"message-collapse\""));
+        assert!(html.contains("**Result**"));
+        assert!(html.contains("resolved A"));
+        assert!(html.contains("resolved C"));
     }
 
     #[test]
@@ -3403,6 +3951,98 @@ mod tests {
             .find("data-seq=\"6\"")
             .expect("later message should be rendered");
         assert!(spawn_pos < message_pos);
+    }
+
+    #[test]
+    fn render_html_collapses_close_agent_call_and_result_into_single_card() {
+        let status_text =
+            "- Scope issues\n  - План расширяет scope.\n\n- Missing verification\n  - Нет теста.";
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "collab.close_agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"close_agent",
+                    "tool_use_id":"close-1",
+                    "phase":"started",
+                    "input":{"target":"sub-1"},
+                    "receiver_thread_ids":["sub-1"]
+                }),
+                2,
+            ),
+            make_raw_event(
+                "collab.close_agent",
+                "response_item",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"close_agent",
+                    "tool_use_id":"close-1",
+                    "phase":"completed",
+                    "output":{"previous_status":{"completed":status_text}}
+                }),
+                3,
+            ),
+            make_raw_event(
+                "collab.close_agent",
+                "event_msg",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"close_agent",
+                    "tool_use_id":"close-1",
+                    "phase":"completed",
+                    "status":"completed",
+                    "receiver_thread_ids":["sub-1"],
+                    "duplicate_of":"response_item.function_call_output",
+                    "output":{
+                        "type":"collab_close_end",
+                        "receiver_thread_id":"sub-1",
+                        "status":{"completed":status_text}
+                    }
+                }),
+                4,
+            ),
+            make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "text":"after close"
+                }),
+                5,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains("data-seq=\"2,4\""));
+        assert!(html.contains("data-event-ids=\"run-1:2,run-1:4\""));
+        assert!(html.contains(">#0002, #0004<"));
+        assert!(html.contains("event-meta-label\">agents<"));
+        assert!(html.contains("event-meta-value\">1<"));
+        assert!(html.contains("event-meta-label\">updates<"));
+        assert!(html.contains("class=\"inset-block user-input-block inline-title\""));
+        assert!(html.contains("class=\"inset-block-title inline-title\">Subagent Close<"));
+        assert!(html.contains("class=\"user-input-question-tag-label\">thread<"));
+        assert!(html.contains("<code>sub-1</code>"));
+        assert!(html.contains("class=\"user-input-question-tag-label\">status<"));
+        assert!(html.contains(">completed<"));
+        assert!(html.contains("Scope issues"));
+        assert!(html.contains("Missing verification"));
+        assert!(!html.contains("data-seq=\"3\""));
+        assert!(!html.contains("data-event-id=\"run-1:3\""));
+
+        let close_pos = html
+            .find("data-seq=\"2,4\"")
+            .expect("collapsed close card should be rendered");
+        let message_pos = html
+            .find("data-seq=\"5\"")
+            .expect("later message should be rendered");
+        assert!(close_pos < message_pos);
     }
 
     #[test]

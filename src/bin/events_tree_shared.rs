@@ -84,6 +84,10 @@ pub struct EventEntry {
     pub summary: String,
     pub category: EventSummaryCategory,
     pub meta_type: Option<String>,
+    pub turn_id: Option<String>,
+    pub model_context_window: Option<String>,
+    pub collaboration_mode_kind: Option<String>,
+    pub last_agent_message: Option<String>,
     pub message_role: Option<String>,
     pub message_direction: Option<String>,
     pub message_text: Option<String>,
@@ -98,6 +102,7 @@ pub struct EventEntry {
     pub operation_id: Option<String>,
     pub phase: Option<String>,
     pub aggregated_output: Option<String>,
+    pub output_value: Option<Value>,
     pub shell_command: Option<String>,
     pub shell_exit_code: Option<i32>,
     pub summary_pairs: Vec<(String, String)>,
@@ -873,7 +878,10 @@ fn assign_operation_parent_ids(events: &mut [EventEntry]) {
                     | WEB_SEARCH
                     | WEB_OPEN
                     | COLLAB_SPAWN_AGENT
+                    | COLLAB_SEND_INPUT
                     | COLLAB_WAIT
+                    | COLLAB_CLOSE_AGENT
+                    | COLLAB_RESUME_AGENT
             )
         {
             if let Some(parent_event_id) = started_by_operation.get(&key) {
@@ -1246,6 +1254,15 @@ fn format_event_entry(
             .and_then(|obj| obj.get("meta_type"))
             .and_then(Value::as_str)
             .map(str::to_string),
+        turn_id: extract_payload_scalar_string(payload, "turn_id"),
+        model_context_window: extract_payload_scalar_string(payload, "model_context_window"),
+        collaboration_mode_kind: extract_payload_scalar_string(payload, "collaboration_mode_kind"),
+        last_agent_message: payload
+            .and_then(|obj| obj.get("last_agent_message"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         message_role: payload
             .and_then(|obj| obj.get("role"))
             .and_then(Value::as_str)
@@ -1293,6 +1310,7 @@ fn format_event_entry(
                 _ => None,
             }),
         aggregated_output: extract_command_aggregated_output(&event.event_type, payload),
+        output_value: payload.and_then(|obj| obj.get("output")).cloned(),
         shell_command: extract_shell_command(&event.event_type, payload),
         shell_exit_code: extract_shell_exit_code(&event.event_type, payload),
         summary_pairs: extract_summary_pairs(&event.event_type, payload),
@@ -1305,6 +1323,26 @@ fn format_event_entry(
             "reasoning_output_tokens",
         ),
         total_tokens: extract_token_value(&event.event_type, payload, "total_tokens"),
+    }
+}
+
+fn extract_payload_scalar_string(
+    payload: Option<&serde_json::Map<String, Value>>,
+    key: &str,
+) -> Option<String> {
+    let value = payload.and_then(|obj| obj.get(key))?;
+    match value {
+        Value::Null => None,
+        Value::String(text) => {
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.to_string())
+        }
+        Value::Bool(_) | Value::Number(_) => Some(value.to_string()),
+        _ => {
+            let rendered = render_payload_value(value);
+            let rendered = rendered.trim();
+            (!rendered.is_empty()).then(|| rendered.to_string())
+        }
     }
 }
 
@@ -2971,6 +3009,79 @@ mod tests {
         assert_eq!(
             request_completed.event.parent_event_id.as_deref(),
             Some("run-1:2")
+        );
+    }
+
+    #[test]
+    fn build_event_tree_nests_close_agent_completed_under_started() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "agent.session",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "agent_role":"reviewer",
+                    "agent_nickname":"Ada"
+                }),
+                2,
+            ),
+            make_event(
+                "collab.close_agent",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "tool_name":"close_agent",
+                    "tool_use_id":"close-1",
+                    "phase":"started",
+                    "input":{"target":"peer-1"},
+                    "receiver_thread_ids":["peer-1"]
+                }),
+                3,
+            ),
+            make_event(
+                "collab.close_agent",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "tool_name":"close_agent",
+                    "tool_use_id":"close-1",
+                    "phase":"completed",
+                    "status":"completed",
+                    "receiver_thread_ids":["peer-1"],
+                    "output":{"previous_status":{"completed":"closed"}}
+                }),
+                4,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let root = &tree.roots[0];
+        let root_started = match &root.items[0] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected root thread.started event"),
+        };
+        let sub_thread = match &root_started.children[0] {
+            TimelineItem::Thread(thread) => thread,
+            TimelineItem::Event(_) => panic!("expected child thread"),
+        };
+        let close_started = match &sub_thread.items[1] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected close_agent start event"),
+        };
+        let close_completed = match &close_started.children[0] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected close_agent completion child"),
+        };
+
+        assert_eq!(close_started.event.event_type, "collab.close_agent");
+        assert_eq!(close_completed.event.event_type, "collab.close_agent");
+        assert_eq!(
+            close_completed.event.parent_event_id.as_deref(),
+            Some("run-1:3")
         );
     }
 

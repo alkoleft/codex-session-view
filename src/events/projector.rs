@@ -789,12 +789,11 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
                     full,
                 ),
                 "task_started" => {
-                    let mode =
-                        payload_string(payload, "collaboration_mode_kind").unwrap_or_default();
-                    if mode.is_empty() {
+                    let detail = task_started_detail(payload, full);
+                    if detail.is_empty() {
                         "started".to_string()
                     } else {
-                        format!("started: mode={mode}")
+                        format!("started: {detail}")
                     }
                 }
                 "task_complete" => {
@@ -826,11 +825,11 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
             full,
         ),
         TASK_STARTED => {
-            let mode = payload_string(payload, "collaboration_mode_kind").unwrap_or_default();
-            if mode.is_empty() {
+            let detail = task_started_detail(payload, full);
+            if detail.is_empty() {
                 "started".to_string()
             } else {
-                format!("started: mode={mode}")
+                format!("started: {detail}")
             }
         }
         TASK_COMPLETED => {
@@ -1863,6 +1862,32 @@ fn subagent_state_detail(payload: Option<&Map<String, Value>>, full: bool) -> St
         }
         if !state_parts.is_empty() {
             details.push(format!("states={}", state_parts.join(",")));
+        }
+    }
+    details.join(" ")
+}
+
+fn task_started_detail(payload: Option<&Map<String, Value>>, full: bool) -> String {
+    let mut details = Vec::new();
+    if let Some(mode) = payload_string(payload, "collaboration_mode_kind") {
+        let mode = mode.trim();
+        if !mode.is_empty() {
+            details.push(format!("mode={mode}"));
+        }
+    }
+    if let Some(turn_id) = payload_string(payload, "turn_id") {
+        let turn_id = turn_id.trim();
+        if !turn_id.is_empty() {
+            details.push(format!("turn={}", summary_text(turn_id, 80, full)));
+        }
+    }
+    if let Some(window) = payload
+        .and_then(|obj| obj.get("model_context_window"))
+        .map(json_scalar_to_string)
+    {
+        let window = window.trim();
+        if !window.is_empty() && window != "null" {
+            details.push(format!("window={window}"));
         }
     }
     details.join(" ")

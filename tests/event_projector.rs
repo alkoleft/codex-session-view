@@ -488,11 +488,28 @@ fn summarize_event_formats_subagent_task_started() {
             "actor_type": "subagent",
             "thread_id": "sub-1",
             "meta_type": "task_started",
-            "collaboration_mode_kind": "default"
+            "collaboration_mode_kind": "default",
+            "turn_id": "turn-1",
+            "model_context_window": 256000
         }),
     ));
 
-    assert_eq!(summary, "started: mode=default");
+    assert_eq!(summary, "started: mode=default turn=turn-1 window=256000");
+}
+
+#[test]
+fn summarize_event_formats_subagent_task_complete() {
+    let summary = summarize_event(&make_event(
+        "task.completed",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "turn_id": "turn-1",
+            "last_agent_message": "**Result** APPROVED"
+        }),
+    ));
+
+    assert_eq!(summary, "done: **Result** APPROVED");
 }
 
 #[test]
