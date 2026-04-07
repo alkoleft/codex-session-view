@@ -9,10 +9,10 @@ use crate::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_META, AGENT_SESSION, AGENT_SESSION_FOREIGN,
     COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT,
     CONTEXT_COMPACTED, CONTEXT_COMPACTED_DUPLICATE, ERROR, FILE_CHANGE, INFO_TOKENS, MCP_CALL,
-    MCP_RESULT, MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY,
-    PATCH_APPLY_DUPLICATE, PLAN_UPDATE, RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT,
-    STDERR_LINE, STDIN_WRITE, TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL,
-    TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
+    MCP_RESULT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, PLAN_UPDATE,
+    RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE,
+    TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_OPEN,
+    WEB_SEARCH,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,7 +331,7 @@ impl EventProjector {
     pub fn display_category(&self, event: &EventRecord) -> EventSummaryCategory {
         let fallback = categorize_event(event);
         match event.event_type.as_str() {
-            MESSAGE_AGENT | MESSAGE_COMMENTARY => thread_id(event)
+            event_type if is_non_user_message_event_type(event_type) => thread_id(event)
                 .or_else(|| self.snapshot.root_thread_id.clone())
                 .and_then(|thread_id| {
                     self.snapshot
@@ -372,25 +372,19 @@ impl EventProjector {
                 self.snapshot.root_thread_id = Some(thread_id.clone());
                 self.ensure_agent(&thread_id, None).status = "running".to_string();
             }
-            MESSAGE_AGENT => {
+            event_type if is_non_user_message_event_type(event_type) => {
                 let thread_id = thread_id(event).or_else(|| self.snapshot.root_thread_id.clone());
                 if let Some(thread_id) = thread_id {
                     let text = payload_string(payload, "text").unwrap_or_default();
                     let parent_thread_id = payload_string(payload, "parent_thread_id");
                     self.append_agent_line(&thread_id, &text, parent_thread_id.as_deref());
-                    self.set_pending_response_category(
-                        &thread_id,
-                        parent_thread_id.as_deref(),
-                        None,
-                    );
-                }
-            }
-            MESSAGE_COMMENTARY => {
-                let thread_id = thread_id(event).or_else(|| self.snapshot.root_thread_id.clone());
-                if let Some(thread_id) = thread_id {
-                    let text = payload_string(payload, "text").unwrap_or_default();
-                    let parent_thread_id = payload_string(payload, "parent_thread_id");
-                    self.append_agent_line(&thread_id, &text, parent_thread_id.as_deref());
+                    if !is_commentary_message_event(event_type, payload) {
+                        self.set_pending_response_category(
+                            &thread_id,
+                            parent_thread_id.as_deref(),
+                            None,
+                        );
+                    }
                 }
             }
             AGENT_COMPLETED => {
@@ -734,36 +728,11 @@ pub fn summarize_event_full(event: &EventRecord) -> String {
 fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
     let payload = event.payload.as_object();
     match event.event_type.as_str() {
-        MESSAGE_AGENT => {
-            let role = payload_string(payload, "role")
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| "assistant".to_string());
-            format!(
-                "{role}: {}{}",
-                summary_text(
-                    &payload_string(payload, "text").unwrap_or_default(),
-                    100,
-                    full
-                ),
-                text_links_suffix(payload)
-            )
-        }
-        MESSAGE_COMMENTARY => {
-            let role = payload_string(payload, "role")
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| "commentary".to_string());
-            format!(
-                "{role}: {}{}",
-                summary_text(
-                    &payload_string(payload, "text").unwrap_or_default(),
-                    100,
-                    full
-                ),
-                text_links_suffix(payload)
-            )
-        }
+        event_type if is_non_user_message_event_type(event_type) => summary_text(
+            &payload_string(payload, "text").unwrap_or_default(),
+            100,
+            full,
+        ),
         AGENT_SESSION => {
             let details = agent_session_detail(payload, full);
             if details.is_empty() {
@@ -793,32 +762,11 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
             let meta_type =
                 payload_string(payload, "meta_type").unwrap_or_else(|| "meta".to_string());
             match meta_type.as_str() {
-                "message" => {
-                    let role =
-                        payload_string(payload, "role").unwrap_or_else(|| "unknown".to_string());
-                    let text = summary_text(
-                        &payload_string(payload, "text").unwrap_or_default(),
-                        100,
-                        full,
-                    );
-                    if text.is_empty() {
-                        role
-                    } else {
-                        format!("{role}: {text}")
-                    }
-                }
-                "user_message" => {
-                    let text = summary_text(
-                        &payload_string(payload, "text").unwrap_or_default(),
-                        100,
-                        full,
-                    );
-                    if text.is_empty() {
-                        "user".to_string()
-                    } else {
-                        format!("user: {text}")
-                    }
-                }
+                "message" | "user_message" => summary_text(
+                    &payload_string(payload, "text").unwrap_or_default(),
+                    100,
+                    full,
+                ),
                 "task_started" => {
                     let mode =
                         payload_string(payload, "collaboration_mode_kind").unwrap_or_default();
@@ -851,18 +799,11 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
                 _ => format!("meta {meta_type}"),
             }
         }
-        MESSAGE_USER => {
-            let text = summary_text(
-                &payload_string(payload, "text").unwrap_or_default(),
-                100,
-                full,
-            );
-            if text.is_empty() {
-                "user".to_string()
-            } else {
-                format!("user: {text}")
-            }
-        }
+        MESSAGE_USER => summary_text(
+            &payload_string(payload, "text").unwrap_or_default(),
+            100,
+            full,
+        ),
         TASK_STARTED => {
             let mode = payload_string(payload, "collaboration_mode_kind").unwrap_or_default();
             if mode.is_empty() {
@@ -1132,9 +1073,11 @@ pub fn load_event_records(path: &Path) -> std::io::Result<Vec<EventRecord>> {
 pub fn categorize_event(event: &EventRecord) -> EventSummaryCategory {
     let payload = event.payload.as_object();
     match event.event_type.as_str() {
-        MESSAGE_AGENT => EventSummaryCategory::Assistant,
-        MESSAGE_COMMENTARY
-        | AGENT_SESSION
+        event_type if is_commentary_message_event(event_type, payload) => {
+            EventSummaryCategory::Subagent
+        }
+        event_type if is_non_user_message_event_type(event_type) => EventSummaryCategory::Assistant,
+        AGENT_SESSION
         | AGENT_SESSION_FOREIGN
         | AGENT_META
         | MESSAGE_USER
@@ -1156,6 +1099,16 @@ pub fn categorize_event(event: &EventRecord) -> EventSummaryCategory {
         }
         _ => EventSummaryCategory::Default,
     }
+}
+
+fn is_non_user_message_event_type(event_type: &str) -> bool {
+    event_type.starts_with("message.") && event_type != MESSAGE_USER
+}
+
+fn is_commentary_message_event(event_type: &str, payload: Option<&Map<String, Value>>) -> bool {
+    is_non_user_message_event_type(event_type)
+        && (event_type == MESSAGE_COMMENTARY
+            || payload_phase(payload).as_deref() == Some("commentary"))
 }
 
 fn format_tool_event(
@@ -1662,7 +1615,10 @@ fn runtime_context_detail(payload: Option<&Map<String, Value>>, full: bool) -> S
             parts.push(format!("model={model}"));
         }
     }
-    if let Some(mode) = payload_string(payload, "collaboration_mode_kind") {
+    if let Some(mode) = payload_object(payload, "collaboration_mode")
+        .and_then(|obj| obj.get("mode"))
+        .and_then(Value::as_str)
+    {
         if !mode.is_empty() {
             parts.push(format!("mode={mode}"));
         }

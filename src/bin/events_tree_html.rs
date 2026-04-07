@@ -6,7 +6,9 @@ use std::process::Command;
 use clap::Parser;
 use codex_worker_rs::error::{AppError, AppResult};
 use codex_worker_rs::events::projector::EventSummaryCategory;
-use codex_worker_rs::events::types::{INFO_TOKENS, SHELL_RESULT};
+use codex_worker_rs::events::types::{
+    COLLAB_SPAWN_AGENT, INFO_TOKENS, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT,
+};
 
 #[path = "events_tree_shared.rs"]
 mod events_tree_shared;
@@ -154,116 +156,137 @@ fn open_in_browser(path: &Path) -> AppResult<()> {
     )))
 }
 
+const PAGE_STYLE: &str = r#"body{margin:0;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#f6f3ee;color:#1f2937;}
+.page{max-width:1280px;margin:0 auto;padding:20px;}
+.hero{display:flex;flex-direction:column;gap:14px;background:linear-gradient(135deg,#fcf7ea,#eff5ff);border:1px solid #d8dee9;border-radius:18px;padding:18px 20px;box-shadow:0 10px 28px rgba(15,23,42,.06);}
+.hero-head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;}
+.hero-title{display:flex;flex-direction:column;gap:4px;min-width:0;}
+h1{margin:0;font-size:26px;line-height:1.1;}
+.hero-lead{color:#475569;max-width:68ch;font-size:13px;}
+.hero-source{display:flex;flex-direction:column;gap:4px;min-width:min(360px,100%);max-width:100%;padding:10px 12px;border:1px solid #d8dee9;border-radius:14px;background:rgba(255,255,255,.74);}
+.hero-source-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;}
+.hero-source-path{white-space:pre-wrap;word-break:break-word;color:#334155;font-size:13px;}
+.hero-source-path code{background:none;border:none;padding:0;color:inherit;}
+.hero-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;}
+.hero-card{display:flex;flex-direction:column;gap:6px;min-width:0;padding:10px 12px;border:1px solid #d8dee9;border-radius:14px;background:rgba(255,255,255,.82);}
+.hero-card-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;}
+.hero-card-value{font-size:14px;font-weight:700;color:#0f172a;white-space:pre-wrap;word-break:break-word;}
+.hero-card-value code{background:none;border:none;padding:0;color:inherit;font-size:inherit;}
+.hero-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
+.hero-metric{display:flex;flex-direction:column;gap:2px;padding-top:2px;border-top:1px dashed #d8dee9;}
+.hero-metric-label{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;}
+.hero-metric-value{font-size:18px;font-weight:800;color:#0f172a;line-height:1.1;}
+.hero-startup{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;}
+.hero-base{display:flex;flex-direction:column;gap:8px;}
+.hero-base .inset-block{margin-top:0;}
+.hero-startup-card{display:flex;flex-direction:column;gap:8px;min-width:0;padding:10px 12px;border:1px solid #d8dee9;border-radius:14px;background:rgba(255,255,255,.66);}
+.hero-startup-value{color:#334155;white-space:pre-wrap;word-break:break-word;font-size:13px;}
+.hero-startup-value code{background:none;border:none;padding:0;color:inherit;font-size:inherit;}
+.hero-startup-rows{display:flex;flex-direction:column;gap:8px;}
+.hero-startup-row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding-top:8px;border-top:1px dashed #d8dee9;}
+.hero-startup-row:first-child{padding-top:0;border-top:none;}
+.hero-startup-row-label{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;flex:0 0 auto;}
+.hero-startup-row-value{min-width:0;text-align:right;color:#0f172a;white-space:pre-wrap;word-break:break-word;font-size:13px;}
+.hero-startup-row-value code{background:none;border:none;padding:0;color:inherit;font-size:inherit;}
+.kv-table{width:100%;border-collapse:collapse;table-layout:fixed;}
+.kv-table-row+.kv-table-row{border-top:1px dashed #d8dee9;}
+.kv-table-label{width:32%;padding:8px 10px 8px 0;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;text-align:left;vertical-align:top;}
+.kv-table-value{padding:8px 0 8px 10px;text-align:left;color:#0f172a;white-space:pre-wrap;word-break:break-word;font-size:13px;vertical-align:top;}
+.kv-table-value code{background:none;border:none;padding:0;color:inherit;font-size:inherit;}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;background:#fff;border:1px solid #d8dee9;color:#334155;font-size:12px;}
+.inset-block{position:relative;margin-top:8px;padding:16px 12px 12px;border:1px solid #d8dee9;border-radius:14px;background:rgba(255,255,255,.94);box-shadow:inset 0 1px 0 rgba(255,255,255,.85);}
+.inset-block.inline-title{padding-top:12px;}
+.inset-block-title{position:absolute;top:0;left:12px;transform:translateY(-50%);display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:#ece8df;border:1px solid #d8dee9;color:#475569;font-size:12px;font-weight:600;}
+.inset-block-title.inline-title{display:block;position:static;transform:none;margin-bottom:10px;padding:0;border:none;border-radius:0;background:none;font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;}
+.inset-block-body{display:flex;flex-direction:column;gap:10px;min-width:0;}
+.inset-block-footer{display:flex;justify-content:flex-end;align-items:center;margin-top:8px;font-size:12px;color:#64748b;}
+.inset-block .message-collapse{width:100%;}
+.shell-block-command{white-space:pre-wrap;word-break:break-word;font-size:14px;line-height:1.45;color:#0f172a;}
+.shell-block-output{color:#475569;}
+.shell-block-empty{color:#94a3b8;}
+.shell-block-status{display:inline-flex;align-items:center;gap:6px;}
+.shell-block-status.is-failure{color:#b91c1c;}
+.plan-explanation{color:#334155;}
+.plan-steps{display:flex;flex-direction:column;gap:8px;}
+.plan-step{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border:1px solid #d8dee9;border-radius:12px;background:#f8fafc;}
+.plan-step-index{flex:0 0 auto;min-width:20px;color:#94a3b8;font-size:12px;font-weight:700;line-height:1.6;}
+.plan-step-text{flex:1 1 auto;white-space:pre-wrap;word-break:break-word;color:#0f172a;}
+.plan-step-status{flex:0 0 auto;display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;border:1px solid #d8dee9;background:#fff;color:#475569;font-size:11px;text-transform:uppercase;letter-spacing:.04em;}
+.plan-step-status.is-completed{background:#e8f7ec;color:#166534;border-color:#b7e4c7;}
+.plan-step-status.is-in-progress{background:#e6f0ff;color:#1d4ed8;border-color:#bfdbfe;}
+.plan-step-status.is-pending{background:#fff7d6;color:#92400e;border-color:#fde68a;}
+.tree{margin-top:20px;}
+.children{margin:12px 0 0 22px;padding-left:14px;border-left:2px solid #d8dee9;}
+details.thread{margin:12px 0;border:1px solid #d8dee9;border-radius:16px;background:#fff;box-shadow:0 8px 18px rgba(15,23,42,.04);}
+details.thread[open]{background:#fffdfa;}
+details.thread>summary{cursor:pointer;list-style:none;padding:14px 16px;display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;}
+summary::-webkit-details-marker{display:none;}
+.thread-id{font-size:15px;font-weight:700;color:#0f172a;}
+.thread-body{padding:0 16px 16px;}
+.thread-flow{display:flex;flex-direction:column;margin-top:10px;}
+.thread-flow>*+*{position:relative;margin-top:0;padding-top:16px;}
+.thread-flow>*+*::before{content:"";position:absolute;top:0;left:0;right:0;border-top:1px dashed #98a6b9;}
+.event-footnote{margin:6px calc(50% - 50vw) 0;padding:0 20px;background:linear-gradient(90deg,rgba(253,246,227,.96),rgba(231,240,255,.96));border-top:1px dashed #d8dee9;border-bottom:1px solid #d8dee9;}
+.event-footnote-content{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline;padding:8px 0 10px;}
+.event-footnote-seq{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:#fff;border:1px solid #d8dee9;color:#334155;font-size:11px;}
+.event-footnote-title{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#475569;}
+.event-footnote-pair{display:inline-flex;align-items:baseline;gap:6px;}
+.event-footnote-label{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;}
+.event-footnote-value{font-size:12px;font-weight:400;color:#0f172a;}
+.event-footnote-diff{font-size:13px;font-weight:800;color:#64748b;}
+.event-footnote-pair.is-total .event-footnote-label{font-size:10px;font-weight:700;}
+.event-footnote-pair.is-total .event-footnote-value{font-size:12px;font-weight:400;}
+.event-footnote-pair.is-total .event-footnote-diff{font-size:13px;font-weight:800;}
+.diff-pos{color:#166534;}
+.diff-neg{color:#b91c1c;}
+.event-card{display:flex;flex-direction:column;gap:8px;padding:10px 0;border:none;border-radius:0;background:transparent;box-shadow:none;}
+.event-header{display:flex;justify-content:space-between;align-items:flex-start;gap:8px 12px;flex-wrap:wrap;}
+.event-header-main{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;}
+.event-ts{font-size:12px;color:#64748b;white-space:nowrap;}
+.event-meta{display:flex;flex-wrap:wrap;gap:8px 12px;font-size:12px;color:#64748b;}
+.event-meta-item{display:inline-flex;align-items:baseline;gap:6px;min-width:0;}
+.event-meta-label{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#94a3b8;}
+.event-meta-value{min-width:0;color:#475569;white-space:pre-wrap;word-break:break-word;}
+.event-summary{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:none;}
+.event-detail{display:flex;flex-direction:column;gap:6px;padding-top:8px;border-top:1px dashed #d2dae4;}
+.event-section-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#94a3b8;}
+.seq-chip{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;background:#0f172a;color:#fff;font-weight:700;font-size:12px;}
+.summary-text{white-space:pre-wrap;word-break:break-word;color:#0f172a;}
+.message-collapse{display:flex;flex-direction:column;align-items:flex-start;gap:8px;}
+.message-toggle{padding:4px 10px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;color:#334155;font:inherit;font-size:12px;cursor:pointer;}
+.message-toggle:hover{background:#eef2f7;}
+.message-collapse[data-expanded="false"] .message-full{display:none;}
+.message-collapse[data-expanded="true"] .message-preview{display:none;}
+.summary-structured{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline;color:#0f172a;}
+.summary-title{font-weight:700;color:#334155;}
+.summary-pair{display:inline-flex;align-items:baseline;gap:6px;}
+.summary-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;}
+.summary-value{font-weight:700;color:#111827;}
+.badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid transparent;}
+.cat-default{background:#eef2f7;color:#334155;border-color:#d8dee9;}
+.cat-assistant{background:#e8f7ec;color:#166534;border-color:#b7e4c7;}
+.cat-command{background:#e6f0ff;color:#1d4ed8;border-color:#bfdbfe;}
+.cat-search{background:#e6fffb;color:#0f766e;border-color:#99f6e4;}
+.cat-subagent{background:#f8e8ff;color:#86198f;border-color:#f0abfc;}
+.cat-file{background:#fff7d6;color:#92400e;border-color:#fde68a;}
+.cat-todo{background:#ecfeff;color:#155e75;border-color:#a5f3fc;}
+.cat-error{background:#fee2e2;color:#b91c1c;border-color:#fecaca;}
+.empty{margin-top:10px;padding:12px;border:1px dashed #d8dee9;border-radius:12px;color:#64748b;background:#fafaf9;}
+@media (max-width:1200px){.hero-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media (max-width:980px){.hero-source{min-width:0;width:100%;}.event-footnote{padding:0 16px;}}
+@media (max-width:640px){.page{padding:16px;}.hero{padding:16px;}.hero-grid{grid-template-columns:1fr;}.thread-body{padding:0 12px 12px;}.children{margin-left:16px;padding-left:12px;}}
+code{background:#f8fafc;padding:2px 6px;border-radius:6px;border:1px solid #e2e8f0;}"#;
+
+const PAGE_SCRIPT: &str = r#"function toggleMessageBlock(button){var block=button.closest('.message-collapse');if(!block){return;}var expanded=block.getAttribute('data-expanded')==='true';var nextState=expanded?'false':'true';block.setAttribute('data-expanded',nextState);button.setAttribute('aria-expanded',nextState);button.textContent=expanded?'see full':'collapse';}"#;
+
 fn render_html(tree: &EventTree) -> String {
     let mut out = String::new();
     out.push_str("<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\">");
     out.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
     out.push_str("<title>Events Tree</title><style>");
-    out.push_str(
-        "body{margin:0;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;background:#f4f1ea;color:#1f2937;}\
-        .page{max-width:1440px;margin:0 auto;padding:24px;}\
-        .hero{display:flex;flex-direction:column;gap:18px;background:linear-gradient(135deg,#fdf6e3,#e7f0ff);border:1px solid #d8dee9;border-radius:18px;padding:24px;box-shadow:0 12px 32px rgba(15,23,42,.08);}\
-        .hero-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;flex-wrap:wrap;}\
-        .hero-title{display:flex;flex-direction:column;gap:6px;min-width:0;}\
-        h1{margin:0;font-size:28px;line-height:1.2;}\
-        .hero-lead{color:#475569;max-width:72ch;}\
-        .hero-source{display:flex;flex-direction:column;gap:6px;min-width:min(420px,100%);max-width:100%;padding:12px 14px;border:1px solid #d8dee9;border-radius:16px;background:rgba(255,255,255,.72);}\
-        .hero-source-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;}\
-        .hero-source-path{white-space:pre-wrap;word-break:break-word;color:#334155;}\
-        .hero-source-path code{background:none;border:none;padding:0;color:inherit;}\
-        .hero-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;}\
-        .hero-card{display:flex;flex-direction:column;gap:8px;min-width:0;padding:14px 16px;border:1px solid #d8dee9;border-radius:16px;background:rgba(255,255,255,.78);}\
-        .hero-card-label{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;}\
-        .hero-card-value{font-size:16px;font-weight:700;color:#0f172a;white-space:pre-wrap;word-break:break-word;}\
-        .hero-card-value code{background:none;border:none;padding:0;color:inherit;font-size:inherit;}\
-        .hero-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}\
-        .hero-metric{display:flex;flex-direction:column;gap:2px;padding-top:4px;border-top:1px dashed #d8dee9;}\
-        .hero-metric-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;}\
-        .hero-metric-value{font-size:22px;font-weight:800;color:#0f172a;line-height:1.1;}\
-        .hero-startup{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;}\
-        .hero-base{display:flex;flex-direction:column;gap:8px;}\
-        .hero-base .inset-block{margin-top:0;}\
-        .hero-startup-card{display:flex;flex-direction:column;gap:8px;min-width:0;padding:12px 14px;border:1px solid #d8dee9;border-radius:14px;background:rgba(255,255,255,.62);}\
-        .hero-startup-value{color:#334155;white-space:pre-wrap;word-break:break-word;}\
-        .hero-startup-value code{background:none;border:none;padding:0;color:inherit;font-size:inherit;}\
-        .hero-startup-rows{display:flex;flex-direction:column;gap:8px;}\
-        .hero-startup-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding-top:8px;border-top:1px dashed #d8dee9;}\
-        .hero-startup-row:first-child{padding-top:0;border-top:none;}\
-        .hero-startup-row-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;flex:0 0 auto;}\
-        .hero-startup-row-value{min-width:0;text-align:right;color:#0f172a;white-space:pre-wrap;word-break:break-word;}\
-        .hero-startup-row-value code{background:none;border:none;padding:0;color:inherit;font-size:inherit;}\
-        .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:#fff;border:1px solid #d8dee9;color:#334155;}\
-        .inset-block{position:relative;margin-top:8px;padding:18px 14px 12px;border:1px solid #d8dee9;border-radius:14px;background:rgba(255,255,255,.94);box-shadow:inset 0 1px 0 rgba(255,255,255,.85);}\
-        .inset-block.inline-title{padding-top:14px;}\
-        .inset-block-title{position:absolute;top:0;left:14px;transform:translateY(-50%);display:inline-flex;align-items:center;padding:3px 10px;border-radius:999px;background:#ece8df;border:1px solid #d8dee9;color:#475569;font-size:12px;font-weight:600;}\
-        .inset-block-title.inline-title{display:block;position:static;transform:none;margin-bottom:14px;padding:0;border:none;border-radius:0;background:none;font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#64748b;}\
-        .inset-block-body{display:flex;flex-direction:column;gap:10px;min-width:0;}\
-        .inset-block-footer{display:flex;justify-content:flex-end;align-items:center;margin-top:8px;font-size:12px;color:#64748b;}\
-        .inset-block .message-collapse{width:100%;}\
-        .shell-block-command{white-space:pre-wrap;word-break:break-word;font-size:15px;line-height:1.45;color:#0f172a;}\
-        .shell-block-output{color:#475569;}\
-        .shell-block-empty{color:#94a3b8;}\
-        .shell-block-status{display:inline-flex;align-items:center;gap:6px;}\
-        .shell-block-status.is-failure{color:#b91c1c;}\
-        .tree{margin-top:24px;}\
-        .children{margin:16px 0 0 28px;padding-left:18px;border-left:3px solid #d8dee9;}\
-        details.thread{margin:14px 0;border:1px solid #d8dee9;border-radius:16px;background:#fff;box-shadow:0 10px 24px rgba(15,23,42,.05);}\
-        details.thread[open]{background:#fffdf8;}\
-        summary{cursor:pointer;list-style:none;padding:16px 18px;display:flex;flex-wrap:wrap;gap:10px 12px;align-items:center;}\
-        summary::-webkit-details-marker{display:none;}\
-        .thread-id{font-size:16px;font-weight:700;color:#0f172a;}\
-        .thread-body{padding:0 18px 18px;}\
-        .thread-flow{display:flex;flex-direction:column;gap:10px;margin-top:12px;}\
-        .event-footnote{margin:8px calc(50% - 50vw) 0;padding:0 24px;background:linear-gradient(90deg,rgba(253,246,227,.96),rgba(231,240,255,.96));border-top:1px dashed #d8dee9;border-bottom:1px solid #d8dee9;}\
-        .event-footnote-content{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:baseline;padding:10px 0 12px;}\
-        .event-footnote-seq{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;background:#fff;border:1px solid #d8dee9;color:#334155;font-size:12px;}\
-        .event-footnote-title{font-size:11px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:#475569;}\
-        .event-footnote-pair{display:inline-flex;align-items:baseline;gap:6px;}\
-        .event-footnote-label{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;}\
-        .event-footnote-value{font-size:13px;font-weight:400;color:#0f172a;}\
-        .event-footnote-diff{font-size:14px;font-weight:800;color:#64748b;}\
-        .event-footnote-pair.is-total .event-footnote-label{font-size:11px;font-weight:700;}\
-        .event-footnote-pair.is-total .event-footnote-value{font-size:13px;font-weight:400;}\
-        .event-footnote-pair.is-total .event-footnote-diff{font-size:14px;font-weight:800;}\
-        .diff-pos{color:#166534;}\
-        .diff-neg{color:#b91c1c;}\
-        .event-card{display:grid;grid-template-columns:88px 168px 170px 150px 110px;gap:10px;align-items:start;padding:12px 14px;border:1px solid #e5e7eb;border-radius:14px;background:#fff;box-shadow:0 6px 18px rgba(15,23,42,.04);}\
-        .event-card.has-subagent{grid-template-columns:88px 168px 180px 170px 150px 110px;}\
-        .event-cell{min-width:0;}\
-        .event-key{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#94a3b8;margin-bottom:4px;}\
-        .seq-chip{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:#0f172a;color:#fff;font-weight:700;}\
-        .summary-text{white-space:pre-wrap;word-break:break-word;color:#0f172a;}\
-        .message-collapse{display:flex;flex-direction:column;align-items:flex-start;gap:8px;}\
-        .message-toggle{padding:5px 10px;border-radius:999px;border:1px solid #cbd5e1;background:#f8fafc;color:#334155;font:inherit;font-size:12px;cursor:pointer;}\
-        .message-toggle:hover{background:#eef2f7;}\
-        .message-collapse[data-expanded=\"false\"] .message-full{display:none;}\
-        .message-collapse[data-expanded=\"true\"] .message-preview{display:none;}\
-        .summary-structured{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:baseline;color:#0f172a;}\
-        .summary-title{font-weight:700;color:#334155;}\
-        .summary-pair{display:inline-flex;align-items:baseline;gap:6px;}\
-        .summary-label{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;}\
-        .summary-value{font-weight:700;color:#111827;}\
-        .event-summary{grid-column:1 / -1;padding-top:8px;margin-top:2px;border-top:1px dashed #e5e7eb;}\
-        .event-detail{grid-column:1 / -1;padding-top:8px;margin-top:2px;border-top:1px dashed #e5e7eb;}\
-        .badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-size:12px;border:1px solid transparent;}\
-        .cat-default{background:#eef2f7;color:#334155;border-color:#d8dee9;}\
-        .cat-assistant{background:#e8f7ec;color:#166534;border-color:#b7e4c7;}\
-        .cat-command{background:#e6f0ff;color:#1d4ed8;border-color:#bfdbfe;}\
-        .cat-search{background:#e6fffb;color:#0f766e;border-color:#99f6e4;}\
-        .cat-subagent{background:#f8e8ff;color:#86198f;border-color:#f0abfc;}\
-        .cat-file{background:#fff7d6;color:#92400e;border-color:#fde68a;}\
-        .cat-todo{background:#ecfeff;color:#155e75;border-color:#a5f3fc;}\
-        .cat-error{background:#fee2e2;color:#b91c1c;border-color:#fecaca;}\
-        .empty{margin-top:10px;padding:14px;border:1px dashed #d8dee9;border-radius:12px;color:#64748b;background:#fafaf9;}\
-        @media (max-width:1200px){.hero-grid{grid-template-columns:repeat(2,minmax(0,1fr));}.event-card{grid-template-columns:88px 140px 150px 130px 100px;}.event-card.has-subagent{grid-template-columns:88px 140px 160px 150px 130px 100px;}}\
-        @media (max-width:980px){.hero-source{min-width:0;width:100%;}.event-footnote{padding:0 16px;}.event-card{grid-template-columns:1fr;}.event-key{margin-bottom:2px;}}\
-        @media (max-width:640px){.page{padding:16px;}.hero{padding:18px;}.hero-grid{grid-template-columns:1fr;}}\
-        code{background:#f8fafc;padding:2px 6px;border-radius:6px;border:1px solid #e2e8f0;}",
-    );
+    out.push_str(PAGE_STYLE);
     out.push_str("</style><script>");
-    out.push_str(
-        "function toggleMessageBlock(button){var block=button.closest('.message-collapse');if(!block){return;}var expanded=block.getAttribute('data-expanded')==='true';var nextState=expanded?'false':'true';block.setAttribute('data-expanded',nextState);button.setAttribute('aria-expanded',nextState);button.textContent=expanded?'see full':'collapse';}",
-    );
+    out.push_str(PAGE_SCRIPT);
     out.push_str("</script></head><body><main class=\"page\">");
     let startup_cards = tree
         .standalone_startup_metadata
@@ -433,6 +456,39 @@ fn render_event_node(
     depth: usize,
     last_token_usage: &mut TokenUsage,
 ) {
+    if let Some(shell_result_index) = paired_command_shell_result_child_index(node) {
+        let shell_result = match &node.children[shell_result_index] {
+            TimelineItem::Event(child) => child,
+            TimelineItem::Thread(_) => unreachable!("shell result child must be an event"),
+        };
+        render_combined_shell_operation_card(out, &node.event, &shell_result.event);
+
+        let combined_children = merged_shell_operation_children(node, shell_result_index);
+        if !combined_children.is_empty() {
+            let _ = depth;
+            out.push_str("<div class=\"children\">");
+            render_timeline_items(out, &combined_children, depth + 1, last_token_usage);
+            out.push_str("</div>");
+        }
+        return;
+    }
+    if let Some(spawn_result_index) = paired_spawn_agent_result_child_index(node) {
+        let spawn_result = match &node.children[spawn_result_index] {
+            TimelineItem::Event(child) => child,
+            TimelineItem::Thread(_) => unreachable!("spawn result child must be an event"),
+        };
+        render_combined_spawn_agent_operation_card(out, &node.event, &spawn_result.event);
+
+        let combined_children = merged_spawn_agent_operation_children(node, spawn_result_index);
+        if !combined_children.is_empty() {
+            let _ = depth;
+            out.push_str("<div class=\"children\">");
+            render_timeline_items(out, &combined_children, depth + 1, last_token_usage);
+            out.push_str("</div>");
+        }
+        return;
+    }
+
     render_event_card(out, &node.event, last_token_usage);
     if !node.children.is_empty() {
         let _ = depth;
@@ -442,8 +498,182 @@ fn render_event_node(
     }
 }
 
-const TEXT_COLLAPSE_CHAR_LIMIT: usize = 420;
-const TEXT_COLLAPSE_LINE_LIMIT: usize = 6;
+fn paired_command_shell_result_child_index(node: &EventNode) -> Option<usize> {
+    if node.event.event_type != SHELL_CALL || !is_command_shell_event(&node.event) {
+        return None;
+    }
+
+    node.children
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| match item {
+            TimelineItem::Event(child)
+                if child.event.event_type == SHELL_RESULT
+                    && is_command_shell_event(&child.event)
+                    && shell_operation_ids_match(&node.event, &child.event) =>
+            {
+                Some((index, shell_result_preference(&child.event)))
+            }
+            TimelineItem::Event(_) | TimelineItem::Thread(_) => None,
+        })
+        .max_by_key(|(_, score)| *score)
+        .map(|(index, _)| index)
+}
+
+fn merged_shell_operation_children(
+    node: &EventNode,
+    shell_result_index: usize,
+) -> Vec<TimelineItem> {
+    let preferred_shell_result = match &node.children[shell_result_index] {
+        TimelineItem::Event(child) => &child.event,
+        TimelineItem::Thread(_) => unreachable!("shell result child must be an event"),
+    };
+    let mut children = Vec::new();
+    for (index, item) in node.children.iter().enumerate() {
+        if index == shell_result_index {
+            if let TimelineItem::Event(child) = item {
+                children.extend(child.children.clone());
+            }
+            continue;
+        }
+        if is_redundant_response_item_shell_result(item, &node.event, preferred_shell_result) {
+            continue;
+        }
+        children.push(item.clone());
+    }
+    children
+}
+
+fn shell_result_preference(event: &EventEntry) -> (u8, u8, u8, u8, u64) {
+    (
+        u8::from(event.duplicate_of.as_deref() == Some(RESPONSE_ITEM_FUNCTION_CALL_OUTPUT)),
+        u8::from(event.shell_command.is_some()),
+        u8::from(event.aggregated_output.is_some()),
+        u8::from(event.shell_exit_code.is_some()),
+        event.seq,
+    )
+}
+
+fn paired_spawn_agent_result_child_index(node: &EventNode) -> Option<usize> {
+    if node.event.event_type != COLLAB_SPAWN_AGENT || node.event.phase.as_deref() != Some("started")
+    {
+        return None;
+    }
+
+    node.children
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| match item {
+            TimelineItem::Event(child)
+                if child.event.event_type == COLLAB_SPAWN_AGENT
+                    && child.event.phase.as_deref() == Some("completed")
+                    && shell_operation_ids_match(&node.event, &child.event) =>
+            {
+                Some((index, spawn_agent_result_preference(&child.event)))
+            }
+            TimelineItem::Event(_) | TimelineItem::Thread(_) => None,
+        })
+        .max_by_key(|(_, score)| *score)
+        .map(|(index, _)| index)
+}
+
+fn merged_spawn_agent_operation_children(
+    node: &EventNode,
+    spawn_result_index: usize,
+) -> Vec<TimelineItem> {
+    let preferred_spawn_result = match &node.children[spawn_result_index] {
+        TimelineItem::Event(child) => &child.event,
+        TimelineItem::Thread(_) => unreachable!("spawn result child must be an event"),
+    };
+    let mut children = Vec::new();
+    for (index, item) in node.children.iter().enumerate() {
+        if index == spawn_result_index {
+            if let TimelineItem::Event(child) = item {
+                children.extend(child.children.clone());
+            }
+            continue;
+        }
+        if is_redundant_response_item_spawn_result(item, &node.event, preferred_spawn_result) {
+            continue;
+        }
+        children.push(item.clone());
+    }
+    children
+}
+
+fn spawn_agent_result_preference(event: &EventEntry) -> (u8, u8, u8, u8, u8, u8, u8, u64) {
+    let spawn = event.spawn_agent.as_ref();
+    (
+        u8::from(event.duplicate_of.as_deref() == Some(RESPONSE_ITEM_FUNCTION_CALL_OUTPUT)),
+        u8::from(
+            spawn
+                .and_then(|entry| entry.receiver_thread_id.as_deref())
+                .is_some(),
+        ),
+        u8::from(
+            spawn
+                .and_then(|entry| entry.receiver_nickname.as_deref())
+                .is_some(),
+        ),
+        u8::from(
+            spawn
+                .and_then(|entry| entry.receiver_role.as_deref())
+                .is_some(),
+        ),
+        u8::from(spawn.and_then(|entry| entry.model.as_deref()).is_some()),
+        u8::from(
+            spawn
+                .and_then(|entry| entry.reasoning_effort.as_deref())
+                .is_some(),
+        ),
+        u8::from(
+            spawn
+                .and_then(|entry| entry.receiver_status.as_deref())
+                .is_some(),
+        ),
+        event.seq,
+    )
+}
+
+fn is_redundant_response_item_spawn_result(
+    item: &TimelineItem,
+    call: &EventEntry,
+    preferred_spawn_result: &EventEntry,
+) -> bool {
+    let TimelineItem::Event(child) = item else {
+        return false;
+    };
+
+    child.event.event_id != preferred_spawn_result.event_id
+        && child.event.event_type == COLLAB_SPAWN_AGENT
+        && child.event.phase.as_deref() == Some("completed")
+        && child.event.raw_type == "response_item"
+        && child.event.duplicate_of.is_none()
+        && shell_operation_ids_match(call, &child.event)
+        && preferred_spawn_result.raw_type != "response_item"
+}
+
+fn is_redundant_response_item_shell_result(
+    item: &TimelineItem,
+    call: &EventEntry,
+    preferred_shell_result: &EventEntry,
+) -> bool {
+    let TimelineItem::Event(child) = item else {
+        return false;
+    };
+
+    child.event.event_id != preferred_shell_result.event_id
+        && child.event.event_type == SHELL_RESULT
+        && child.event.raw_type == "response_item"
+        && child.event.duplicate_of.is_none()
+        && is_command_shell_event(&child.event)
+        && shell_operation_ids_match(call, &child.event)
+        && preferred_shell_result.raw_type != "response_item"
+}
+
+const TEXT_COLLAPSE_CHAR_LIMIT: usize = 240;
+const TEXT_COLLAPSE_LINE_LIMIT: usize = 4;
+const RESPONSE_ITEM_FUNCTION_CALL_OUTPUT: &str = "response_item.function_call_output";
 
 fn render_hero_card(label: &str, value_html: &str) -> String {
     format!(
@@ -665,92 +895,668 @@ fn truncate_message_preview(summary: &str, limit: usize) -> String {
 }
 
 fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mut TokenUsage) {
-    let subagent_block = render_subagent_block(event);
-    let event_card_class = if subagent_block.is_empty() {
-        "event-card"
-    } else {
-        "event-card has-subagent"
-    };
-    let summary_cell = render_event_summary_cell(event);
-    let aggregated_output_block = render_event_detail_block(event);
     let token_footnote = render_token_footnote(event, last_token_usage);
+    if event.event_type == INFO_TOKENS {
+        out.push_str(&token_footnote);
+        return;
+    }
+
+    let subagent_badge = render_subagent_badge(event);
+    let meta_row = render_event_meta_row(event);
+    let summary_block = render_event_summary_block(event);
+    let detail_block = render_event_detail_block(event);
     let _ = write!(
         out,
-        "<article class=\"{}\" data-seq=\"{}\" data-event-id=\"{}\" data-parent-event-id=\"{}\">\
-         <div class=\"event-cell\"><span class=\"event-key\">seq</span><span class=\"seq-chip\">#{:04}</span></div>\
-         <div class=\"event-cell\"><span class=\"event-key\">ts</span>{}</div>\
-         {}\
-         <div class=\"event-cell\"><span class=\"event-key\">event_type</span><span class=\"badge {}\">{}</span></div>\
-         <div class=\"event-cell\"><span class=\"event-key\">raw_type</span>{}</div>\
-         <div class=\"event-cell\"><span class=\"event-key\">parse</span>{}</div>\
-         {}{}\
+        "<article class=\"event-card\" data-seq=\"{}\" data-event-id=\"{}\" data-parent-event-id=\"{}\" data-raw-type=\"{}\" data-parse-status=\"{}\">\
+         <div class=\"event-header\">\
+         <div class=\"event-header-main\">\
+         <span class=\"seq-chip\">#{:04}</span>\
+         <span class=\"badge {}\">{}</span>{}\
+         </div>\
+         <span class=\"event-ts\">{}</span>\
+         </div>\
+         {}{}{}\
          </article>{}",
-        event_card_class,
         event.seq,
         escape_html(&event.event_id),
         escape_html(event.parent_event_id.as_deref().unwrap_or("")),
-        event.seq,
-        escape_html(&event.ts),
-        subagent_block,
-        category_class(event.category),
-        escape_html(&event.event_type),
         escape_html(&event.raw_type),
         escape_html(&event.parse_status),
-        summary_cell,
-        aggregated_output_block,
+        event.seq,
+        category_class(event.category),
+        escape_html(&event.event_type),
+        subagent_badge,
+        escape_html(&event.ts),
+        meta_row,
+        summary_block,
+        detail_block,
         token_footnote,
     );
 }
 
-fn render_event_summary_cell(event: &EventEntry) -> String {
-    if event.event_type == SHELL_RESULT {
+fn render_combined_shell_operation_card(out: &mut String, call: &EventEntry, result: &EventEntry) {
+    let subagent_badge = {
+        let badge = render_subagent_badge(call);
+        if badge.is_empty() {
+            render_subagent_badge(result)
+        } else {
+            badge
+        }
+    };
+    let meta_row = render_combined_shell_meta_row(call, result);
+    let detail_block = render_combined_shell_operation_detail_block(call, result);
+    let seq_label = format!("#{:04}, #{:04}", call.seq, result.seq);
+    let event_label = format!("{}, {}", call.event_type, result.event_type);
+    let timestamp_label = if call.ts == result.ts {
+        call.ts.clone()
+    } else {
+        format!("{} -> {}", call.ts, result.ts)
+    };
+    let event_ids = format!("{},{}", call.event_id, result.event_id);
+    let raw_types = format!("{},{}", call.raw_type, result.raw_type);
+    let parse_statuses = format!("{},{}", call.parse_status, result.parse_status);
+    let _ = write!(
+        out,
+        "<article class=\"event-card\" data-seq=\"{},{}\" data-event-id=\"{}\" data-event-ids=\"{}\" data-parent-event-id=\"{}\" data-raw-type=\"{}\" data-parse-status=\"{}\">\
+         <div class=\"event-header\">\
+         <div class=\"event-header-main\">\
+         <span class=\"seq-chip\">{}</span>\
+         <span class=\"badge {}\">{}</span>{}\
+         </div>\
+         <span class=\"event-ts\">{}</span>\
+         </div>\
+         {}{}\
+         </article>",
+        call.seq,
+        result.seq,
+        escape_html(&call.event_id),
+        escape_html(&event_ids),
+        escape_html(call.parent_event_id.as_deref().unwrap_or("")),
+        escape_html(&raw_types),
+        escape_html(&parse_statuses),
+        escape_html(&seq_label),
+        category_class(call.category),
+        escape_html(&event_label),
+        subagent_badge,
+        escape_html(&timestamp_label),
+        meta_row,
+        detail_block,
+    );
+}
+
+fn render_combined_spawn_agent_operation_card(
+    out: &mut String,
+    call: &EventEntry,
+    result: &EventEntry,
+) {
+    let subagent_badge = {
+        let badge = render_subagent_badge(call);
+        if badge.is_empty() {
+            render_subagent_badge(result)
+        } else {
+            badge
+        }
+    };
+    let meta_row = render_combined_spawn_agent_meta_row(call, result);
+    let detail_block = render_combined_spawn_agent_operation_detail_block(call, result);
+    let seq_label = format!("#{:04}, #{:04}", call.seq, result.seq);
+    let event_label = call.event_type.clone();
+    let timestamp_label = if call.ts == result.ts {
+        call.ts.clone()
+    } else {
+        format!("{} -> {}", call.ts, result.ts)
+    };
+    let event_ids = format!("{},{}", call.event_id, result.event_id);
+    let raw_types = format!("{},{}", call.raw_type, result.raw_type);
+    let parse_statuses = format!("{},{}", call.parse_status, result.parse_status);
+    let _ = write!(
+        out,
+        "<article class=\"event-card\" data-seq=\"{},{}\" data-event-id=\"{}\" data-event-ids=\"{}\" data-parent-event-id=\"{}\" data-raw-type=\"{}\" data-parse-status=\"{}\">\
+         <div class=\"event-header\">\
+         <div class=\"event-header-main\">\
+         <span class=\"seq-chip\">{}</span>\
+         <span class=\"badge {}\">{}</span>{}\
+         </div>\
+         <span class=\"event-ts\">{}</span>\
+         </div>\
+         {}{}\
+         </article>",
+        call.seq,
+        result.seq,
+        escape_html(&call.event_id),
+        escape_html(&event_ids),
+        escape_html(call.parent_event_id.as_deref().unwrap_or("")),
+        escape_html(&raw_types),
+        escape_html(&parse_statuses),
+        escape_html(&seq_label),
+        category_class(call.category),
+        escape_html(&event_label),
+        subagent_badge,
+        escape_html(&timestamp_label),
+        meta_row,
+        detail_block,
+    );
+}
+
+fn render_combined_shell_operation_detail_block(call: &EventEntry, result: &EventEntry) -> String {
+    render_shell_operation_block(
+        call.shell_command
+            .as_deref()
+            .or(result.shell_command.as_deref()),
+        result.aggregated_output.as_deref(),
+        result.shell_exit_code,
+    )
+    .map(|shell_block| format!("<div class=\"event-detail\">{shell_block}</div>"))
+    .unwrap_or_default()
+}
+
+fn render_combined_spawn_agent_operation_detail_block(
+    call: &EventEntry,
+    result: &EventEntry,
+) -> String {
+    let Some(data) = merged_spawn_agent_render_data(call, result) else {
+        return String::new();
+    };
+    render_spawn_agent_operation_block(&data)
+        .map(|block| format!("<div class=\"event-detail\">{block}</div>"))
+        .unwrap_or_default()
+}
+
+fn render_event_summary_block(event: &EventEntry) -> String {
+    if event.event_type == SHELL_RESULT || should_skip_event_summary(event) {
         return String::new();
     }
 
     format!(
-        "<div class=\"event-cell event-summary\"><span class=\"event-key\">summary</span>{}</div>",
+        "<div class=\"event-summary\">{}</div>",
         render_summary_block(event)
     )
 }
 
 fn render_event_detail_block(event: &EventEntry) -> String {
+    if let Some(runtime_context_block) = render_runtime_context_block(event) {
+        return format!("<div class=\"event-detail\">{runtime_context_block}</div>");
+    }
+
     if let Some(shell_block) = render_shell_result_block(event) {
-        return format!("<div class=\"event-cell event-detail\">{shell_block}</div>");
+        return format!("<div class=\"event-detail\">{shell_block}</div>");
+    }
+    if let Some(spawn_agent_block) = render_spawn_agent_block(event) {
+        return format!("<div class=\"event-detail\">{spawn_agent_block}</div>");
+    }
+
+    if let Some(plan_block) = render_plan_update_block(event) {
+        return format!("<div class=\"event-detail\">{plan_block}</div>");
     }
 
     event.aggregated_output
         .as_deref()
+        .filter(|output| !output.is_empty())
         .map(|output| {
+            let content = if should_collapse_text_content(output) {
+                render_collapsible_text_block(output)
+            } else {
+                format!("<div class=\"summary-text\">{}</div>", escape_html(output))
+            };
             format!(
-                "<div class=\"event-cell event-detail\"><span class=\"event-key\">aggregated_output</span><div class=\"summary-text\">{}</div></div>",
-                escape_html(output)
+                "<div class=\"event-detail\"><span class=\"event-section-label\">output</span>{}</div>",
+                content
             )
         })
         .unwrap_or_default()
+}
+
+fn render_plan_update_block(event: &EventEntry) -> Option<String> {
+    if event.event_type != "plan.update"
+        || (event.plan_explanation.is_none() && event.plan_steps.is_empty())
+    {
+        return None;
+    }
+
+    let mut body = String::new();
+    if let Some(explanation) = event
+        .plan_explanation
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let explanation_body = if should_collapse_text_content(explanation) {
+            render_collapsible_text_block(explanation)
+        } else {
+            format!(
+                "<div class=\"summary-text plan-explanation\">{}</div>",
+                escape_html(explanation)
+            )
+        };
+        let _ = write!(
+            body,
+            "<div><span class=\"event-section-label\">explanation</span>{}</div>",
+            explanation_body,
+        );
+    }
+    if !event.plan_steps.is_empty() {
+        body.push_str(
+            "<div><span class=\"event-section-label\">steps</span><div class=\"plan-steps\">",
+        );
+        for (index, step) in event.plan_steps.iter().enumerate() {
+            let status_badge = step
+                .status
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .map(render_plan_step_status)
+                .unwrap_or_default();
+            let _ = write!(
+                body,
+                "<div class=\"plan-step\"><span class=\"plan-step-index\">{:02}</span><span class=\"plan-step-text\">{}</span>{}</div>",
+                index + 1,
+                escape_html(&step.step),
+                status_badge,
+            );
+        }
+        body.push_str("</div></div>");
+    }
+
+    Some(render_inset_block("Plan", &body, None, "plan-block", true))
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SpawnAgentRenderData {
+    prompt: Option<String>,
+    requested_agent_type: Option<String>,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    receiver_thread_id: Option<String>,
+    receiver_nickname: Option<String>,
+    receiver_role: Option<String>,
+    receiver_status: Option<String>,
+}
+
+fn render_spawn_agent_block(event: &EventEntry) -> Option<String> {
+    let data = spawn_agent_render_data(event)?;
+    render_spawn_agent_operation_block(&data)
+}
+
+fn render_spawn_agent_operation_block(data: &SpawnAgentRenderData) -> Option<String> {
+    if data == &SpawnAgentRenderData::default() {
+        return None;
+    }
+
+    let mut body = String::new();
+    if let Some(prompt) = data
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let prompt_body = if should_collapse_text_content(prompt) {
+            render_collapsible_text_block(prompt)
+        } else {
+            format!("<div class=\"summary-text\">{}</div>", escape_html(prompt))
+        };
+        let _ = write!(
+            body,
+            "<div><span class=\"event-section-label\">prompt</span>{}</div>",
+            prompt_body,
+        );
+    }
+
+    let mut rows = Vec::new();
+    for (label, value) in [
+        ("thread id", data.receiver_thread_id.as_deref()),
+        ("nickname", data.receiver_nickname.as_deref()),
+        ("role", data.receiver_role.as_deref()),
+        ("agent type", data.requested_agent_type.as_deref()),
+        ("model", data.model.as_deref()),
+        ("reasoning effort", data.reasoning_effort.as_deref()),
+        ("status", data.receiver_status.as_deref()),
+    ] {
+        let Some(value) = value.filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        rows.push(format!(
+            "<tr class=\"kv-table-row\"><th class=\"kv-table-label\">{}</th><td class=\"kv-table-value\"><code>{}</code></td></tr>",
+            escape_html(label),
+            escape_html(value),
+        ));
+    }
+    if !rows.is_empty() {
+        let _ = write!(
+            body,
+            "<div><span class=\"event-section-label\">agent</span><table class=\"kv-table\"><tbody>{}</tbody></table></div>",
+            rows.join(""),
+        );
+    }
+
+    Some(render_inset_block(
+        "Spawn Agent",
+        &body,
+        None,
+        "spawn-agent-block",
+        true,
+    ))
+}
+
+fn spawn_agent_render_data(event: &EventEntry) -> Option<SpawnAgentRenderData> {
+    let spawn = event.spawn_agent.as_ref()?;
+    Some(SpawnAgentRenderData {
+        prompt: spawn.prompt.clone(),
+        requested_agent_type: spawn.requested_agent_type.clone(),
+        model: spawn.model.clone(),
+        reasoning_effort: spawn.reasoning_effort.clone(),
+        receiver_thread_id: spawn.receiver_thread_id.clone(),
+        receiver_nickname: spawn.receiver_nickname.clone(),
+        receiver_role: spawn.receiver_role.clone(),
+        receiver_status: spawn.receiver_status.clone(),
+    })
+}
+
+fn merged_spawn_agent_render_data(
+    call: &EventEntry,
+    result: &EventEntry,
+) -> Option<SpawnAgentRenderData> {
+    let call_data = spawn_agent_render_data(call).unwrap_or_default();
+    let result_data = spawn_agent_render_data(result).unwrap_or_default();
+    let merged = SpawnAgentRenderData {
+        prompt: call_data.prompt.or(result_data.prompt),
+        requested_agent_type: call_data
+            .requested_agent_type
+            .or(result_data.requested_agent_type),
+        model: result_data.model.or(call_data.model),
+        reasoning_effort: result_data.reasoning_effort.or(call_data.reasoning_effort),
+        receiver_thread_id: result_data
+            .receiver_thread_id
+            .or(call_data.receiver_thread_id),
+        receiver_nickname: result_data
+            .receiver_nickname
+            .or(call_data.receiver_nickname),
+        receiver_role: result_data.receiver_role.or(call_data.receiver_role),
+        receiver_status: result_data.receiver_status.or(call_data.receiver_status),
+    };
+    (merged != SpawnAgentRenderData::default()).then_some(merged)
+}
+
+fn render_combined_spawn_agent_meta_row(call: &EventEntry, result: &EventEntry) -> String {
+    let mut items = Vec::new();
+    if let Some(data) = merged_spawn_agent_render_data(call, result) {
+        if let Some(agent_type) = data
+            .requested_agent_type
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            items.push(render_event_meta_item(
+                "agent type",
+                &escape_html(agent_type),
+            ));
+        }
+        if let Some(model) = data.model.as_deref().filter(|value| !value.is_empty()) {
+            items.push(render_event_meta_item("model", &escape_html(model)));
+        }
+        if let Some(reasoning_effort) = data
+            .reasoning_effort
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            items.push(render_event_meta_item(
+                "effort",
+                &escape_html(reasoning_effort),
+            ));
+        }
+        if let Some(status) = data
+            .receiver_status
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            items.push(render_event_meta_item("status", &escape_html(status)));
+        }
+    }
+    if call.parse_status != "parsed" {
+        items.push(render_event_meta_item(
+            "call parse",
+            &escape_html(&call.parse_status),
+        ));
+        items.push(render_event_meta_item(
+            "call raw",
+            &escape_html(&call.raw_type),
+        ));
+    }
+    if result.parse_status != "parsed" {
+        items.push(render_event_meta_item(
+            "result parse",
+            &escape_html(&result.parse_status),
+        ));
+        items.push(render_event_meta_item(
+            "result raw",
+            &escape_html(&result.raw_type),
+        ));
+    }
+
+    if items.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"event-meta\">{}</div>", items.join(""))
+    }
+}
+
+fn render_plan_step_status(status: &str) -> String {
+    let class_name = match status {
+        "completed" => "plan-step-status is-completed",
+        "in_progress" => "plan-step-status is-in-progress",
+        "pending" => "plan-step-status is-pending",
+        _ => "plan-step-status",
+    };
+    format!(
+        "<span class=\"{}\">{}</span>",
+        class_name,
+        escape_html(&status.replace('_', " ")),
+    )
+}
+
+fn render_runtime_context_block(event: &EventEntry) -> Option<String> {
+    if event.event_type != RUNTIME_CONTEXT || event.runtime_context_pairs.is_empty() {
+        return None;
+    }
+
+    let mut out = String::from("<table class=\"kv-table\"><tbody>");
+    for (label, value) in &event.runtime_context_pairs {
+        let rendered_value = render_runtime_context_value(label, value);
+        let _ = write!(
+            out,
+            "<tr class=\"kv-table-row\"><th class=\"kv-table-label\">{}</th><td class=\"{}\">{}</td></tr>",
+            escape_html(label),
+            "kv-table-value",
+            rendered_value,
+        );
+    }
+    out.push_str("</tbody></table>");
+
+    Some(render_inset_block(
+        "runtime.context",
+        &out,
+        None,
+        "runtime-context-block",
+        true,
+    ))
+}
+
+fn render_runtime_context_value(label: &str, value: &str) -> String {
+    if is_runtime_context_collapsible_key(label) && should_collapse_text_content(value) {
+        return render_collapsible_text_block(value);
+    }
+
+    format!("<code>{}</code>", escape_html(value))
+}
+
+fn is_runtime_context_collapsible_key(label: &str) -> bool {
+    label == "collaboration_mode" || label.ends_with("_instructions")
+}
+
+fn should_skip_event_summary(event: &EventEntry) -> bool {
+    if event.event_type == RUNTIME_CONTEXT {
+        return true;
+    }
+    if event.event_type == COLLAB_SPAWN_AGENT && event.spawn_agent.is_some() {
+        return true;
+    }
+    let summary = event.summary.trim();
+    summary.is_empty() || (event.summary_pairs.is_empty() && summary == event.event_type)
+}
+
+fn render_event_meta_row(event: &EventEntry) -> String {
+    let mut items = Vec::new();
+    if event.event_type.starts_with("message.") {
+        if let Some(role) = event
+            .message_role
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            items.push(render_event_meta_item("role", &escape_html(role)));
+        }
+        if let Some(direction) = event
+            .message_direction
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            items.push(render_event_meta_item("direction", &escape_html(direction)));
+        }
+        if let Some(phase) = event.phase.as_deref().filter(|value| !value.is_empty()) {
+            items.push(render_event_meta_item("phase", &escape_html(phase)));
+        }
+    }
+    if let Some(body_size_bytes) = message_size_bytes_for_event(event) {
+        items.push(render_event_meta_item(
+            "message size",
+            &escape_html(&format_body_size_bytes(body_size_bytes)),
+        ));
+    } else if let Some(body_size_bytes) = shell_output_size_bytes_for_event(event) {
+        items.push(render_event_meta_item(
+            "output size",
+            &escape_html(&format_body_size_bytes(body_size_bytes)),
+        ));
+    }
+    if event.parse_status != "parsed" {
+        items.push(render_event_meta_item(
+            "parse",
+            &escape_html(&event.parse_status),
+        ));
+        items.push(render_event_meta_item("raw", &escape_html(&event.raw_type)));
+    }
+
+    if items.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"event-meta\">{}</div>", items.join(""))
+    }
+}
+
+fn render_combined_shell_meta_row(call: &EventEntry, result: &EventEntry) -> String {
+    let mut items = Vec::new();
+    if let Some(body_size_bytes) = combined_shell_output_size_bytes(call, result) {
+        items.push(render_event_meta_item(
+            "output size",
+            &escape_html(&format_body_size_bytes(body_size_bytes)),
+        ));
+    }
+    if call.parse_status != "parsed" {
+        items.push(render_event_meta_item(
+            "call parse",
+            &escape_html(&call.parse_status),
+        ));
+        items.push(render_event_meta_item(
+            "call raw",
+            &escape_html(&call.raw_type),
+        ));
+    }
+    if result.parse_status != "parsed" {
+        items.push(render_event_meta_item(
+            "result parse",
+            &escape_html(&result.parse_status),
+        ));
+        items.push(render_event_meta_item(
+            "result raw",
+            &escape_html(&result.raw_type),
+        ));
+    }
+
+    if items.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"event-meta\">{}</div>", items.join(""))
+    }
+}
+
+fn render_event_meta_item(label: &str, value_html: &str) -> String {
+    format!(
+        "<span class=\"event-meta-item\"><span class=\"event-meta-label\">{}</span><span class=\"event-meta-value\">{}</span></span>",
+        escape_html(label),
+        value_html,
+    )
+}
+
+fn message_size_bytes_for_event(event: &EventEntry) -> Option<usize> {
+    if !event.event_type.starts_with("message.") {
+        return None;
+    }
+    event
+        .message_text
+        .as_deref()
+        .filter(|text| !text.is_empty())
+        .map(|text| text.as_bytes().len())
+}
+
+fn shell_output_size_bytes_for_event(event: &EventEntry) -> Option<usize> {
+    if !is_command_shell_event(event) {
+        return None;
+    }
+    shell_output_size_bytes(event.aggregated_output.as_deref())
+}
+
+fn combined_shell_output_size_bytes(_call: &EventEntry, result: &EventEntry) -> Option<usize> {
+    shell_output_size_bytes(result.aggregated_output.as_deref())
+}
+
+fn shell_output_size_bytes(output: Option<&str>) -> Option<usize> {
+    output
+        .filter(|value| !value.is_empty())
+        .map(|value| value.as_bytes().len())
+}
+
+fn format_body_size_bytes(bytes: usize) -> String {
+    format!("{} B", format_chart_number(bytes as u64))
 }
 
 fn render_shell_result_block(event: &EventEntry) -> Option<String> {
     if event.event_type != SHELL_RESULT {
         return None;
     }
-    if !matches!(
-        event.tool_name.as_deref(),
-        Some("command_execution" | "exec_command")
-    ) {
+    if !is_command_shell_event(event) {
         return None;
     }
 
-    let command = event
-        .shell_command
-        .as_deref()
+    render_shell_operation_block(
+        event.shell_command.as_deref(),
+        event.aggregated_output.as_deref(),
+        event.shell_exit_code,
+    )
+}
+
+fn render_shell_operation_block(
+    command: Option<&str>,
+    output: Option<&str>,
+    exit_code: Option<i32>,
+) -> Option<String> {
+    if command.is_none() && output.is_none() && exit_code.is_none() {
+        return None;
+    }
+
+    let command = command
         .map(|command| {
             format!(
-                "<div class=\"shell-block-command\">$ {}</div>",
+                "<div class=\"shell-block-command\"><strong>$ {}</strong></div>",
                 escape_html(command)
             )
         })
         .unwrap_or_default();
-    let output = match event.aggregated_output.as_deref() {
+    let output = match output {
         Some(output) if should_collapse_text_content(output) => {
             render_collapsible_text_block(output)
         }
@@ -761,7 +1567,7 @@ fn render_shell_result_block(event: &EventEntry) -> Option<String> {
         None => "<div class=\"summary-text shell-block-output shell-block-empty\">Нет вывода</div>"
             .to_string(),
     };
-    let footer = render_shell_result_status(event.shell_exit_code);
+    let footer = render_shell_result_status(exit_code);
     let body = format!("{command}<div class=\"shell-block-output-wrap\">{output}</div>");
     Some(render_inset_block(
         "Shell",
@@ -906,7 +1712,7 @@ fn format_signed_number(value: i128) -> String {
     }
 }
 
-fn render_subagent_block(event: &EventEntry) -> String {
+fn render_subagent_badge(event: &EventEntry) -> String {
     if event.actor_type.as_deref() != Some("subagent") {
         return String::new();
     }
@@ -920,9 +1726,24 @@ fn render_subagent_block(event: &EventEntry) -> String {
     };
 
     format!(
-        "<div class=\"event-cell\"><span class=\"event-key\">subagent</span><span class=\"badge cat-subagent\">{}</span></div>",
+        "<span class=\"badge cat-subagent\">{}</span>",
         escape_html(label)
     )
+}
+
+fn is_command_shell_event(event: &EventEntry) -> bool {
+    matches!(event.event_type.as_str(), SHELL_CALL | SHELL_RESULT)
+        && matches!(
+            event.tool_name.as_deref(),
+            Some("command_execution" | "exec_command")
+        )
+}
+
+fn shell_operation_ids_match(call: &EventEntry, result: &EventEntry) -> bool {
+    match (call.operation_id.as_deref(), result.operation_id.as_deref()) {
+        (Some(left), Some(right)) => left == right,
+        _ => true,
+    }
 }
 
 fn category_class(category: EventSummaryCategory) -> &'static str {
@@ -963,7 +1784,12 @@ mod tests {
         is_rollout_jsonl_family, is_run_input, load_records_from_run_input, TimelineItem,
     };
 
-    fn make_event(event_type: &str, payload: serde_json::Value, seq: u64) -> EventRecord {
+    fn make_raw_event(
+        event_type: &str,
+        raw_type: &str,
+        payload: serde_json::Value,
+        seq: u64,
+    ) -> EventRecord {
         EventRecord {
             schema_version: 1,
             ts: "2026-04-06T08:47:59Z".to_string(),
@@ -971,10 +1797,14 @@ mod tests {
             run_id: "run-1".to_string(),
             seq,
             event_type: event_type.to_string(),
-            raw_type: event_type.to_string(),
+            raw_type: raw_type.to_string(),
             parse_status: "parsed".to_string(),
             payload,
         }
+    }
+
+    fn make_event(event_type: &str, payload: serde_json::Value, seq: u64) -> EventRecord {
+        make_raw_event(event_type, event_type, payload, seq)
     }
 
     fn rollout_root_name(session_id: &str) -> String {
@@ -1138,21 +1968,23 @@ mod tests {
         let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
         let html = render_html(&tree);
 
-        assert!(html.contains("<span class=\"event-key\">subagent</span>"));
+        assert!(html.contains("class=\"badge cat-subagent\">Lovelace<"));
         assert!(html.contains(">Lovelace<"));
         assert!(!html.contains("Lovelace [sub-1]"));
     }
 
     #[test]
-    fn render_html_uses_message_role_prefix_when_present() {
+    fn render_html_shows_plain_message_text_and_message_meta() {
         let events = vec![
             make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
             make_event(
-                "message.agent",
+                "message.system",
                 json!({
                     "actor_type":"agent",
                     "thread_id":"root-thread",
                     "role":"system",
+                    "direction":"output_text",
+                    "phase":"commentary",
                     "text":"hello"
                 }),
                 2,
@@ -1162,8 +1994,181 @@ mod tests {
         let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
         let html = render_html(&tree);
 
-        assert!(html.contains("system: hello"));
-        assert!(!html.contains("assistant: hello"));
+        assert!(html.contains(">message.system<"));
+        assert!(html.contains("<div class=\"summary-text\">hello</div>"));
+        assert!(html.contains("event-meta-label\">role<"));
+        assert!(html.contains("event-meta-value\">system<"));
+        assert!(html.contains("event-meta-label\">direction<"));
+        assert!(html.contains("event-meta-value\">output_text<"));
+        assert!(html.contains("event-meta-label\">phase<"));
+        assert!(html.contains("event-meta-value\">commentary<"));
+        assert!(html.contains("event-meta-label\">message size<"));
+        assert!(html.contains("event-meta-value\">5 B<"));
+        assert!(!html.contains("system: hello"));
+    }
+
+    #[test]
+    fn render_html_shows_runtime_context_requisites() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "runtime.context",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "session_path":"/tmp/sub-1.jsonl",
+                    "cwd":"/workspace",
+                    "current_date":"2026-04-07",
+                    "timezone":"Europe/Moscow",
+                    "approval_policy":"never",
+                    "sandbox_policy":{"type":"workspace-write","network_access":true},
+                    "model":"gpt-5.4",
+                    "effort":"medium",
+                    "summary":"ok",
+                    "collaboration_mode":{"mode":"default"}
+                }),
+                2,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains(">runtime.context<"));
+        assert!(html.contains("class=\"inset-block runtime-context-block inline-title\""));
+        assert!(html.contains("class=\"inset-block-title inline-title\">runtime.context<"));
+        assert!(html.contains("class=\"kv-table-label\">cwd<"));
+        assert!(html.contains("class=\"kv-table-value\"><code>/workspace</code>"));
+        assert!(html.contains("class=\"kv-table-label\">sandbox_policy<"));
+        assert!(html.contains("workspace-write"));
+        assert!(html.contains("network_access"));
+        assert!(html.contains("class=\"kv-table-label\">collaboration_mode<"));
+        assert!(html.contains("&quot;mode&quot;:&quot;default&quot;"));
+        assert!(!html.contains("class=\"kv-table-label\">turn_id<"));
+        assert!(!html.contains("context: cwd=/workspace model=gpt-5.4 mode=default"));
+    }
+
+    #[test]
+    fn render_html_shows_plan_update_block() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "plan.update",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "tool_name":"update_plan",
+                    "tool_use_id":"plan-1",
+                    "phase":"started",
+                    "input":{
+                        "explanation":"Analysis approved; moving to branch decision and executable checklist before code changes.",
+                        "plan":[
+                            {"step":"Verify branch decision and working tree isolation for implementation branch","status":"in_progress"},
+                            {"step":"Build approved executable TODO checklist from the plan","status":"pending"}
+                        ]
+                    }
+                }),
+                2,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains(">plan.update<"));
+        assert!(html.contains("class=\"inset-block plan-block inline-title\""));
+        assert!(html.contains("class=\"inset-block-title inline-title\">Plan<"));
+        assert!(html.contains("Analysis approved; moving to branch decision and executable checklist before code changes."));
+        assert!(html.contains(
+            "Verify branch decision and working tree isolation for implementation branch"
+        ));
+        assert!(html.contains("Build approved executable TODO checklist from the plan"));
+        assert!(html.contains("plan-step-status is-in-progress\">in progress<"));
+        assert!(html.contains("plan-step-status is-pending\">pending<"));
+    }
+
+    #[test]
+    fn render_html_moves_runtime_context_tail_fields_last_and_collapses_them() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "runtime.context",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "session_path":"/tmp/sub-1.jsonl",
+                    "system_instructions":"instruction line\n".repeat(40),
+                    "cwd":"/workspace",
+                    "model":"gpt-5.4",
+                    "collaboration_mode":{"mode":"default","review":"strict"}
+                }),
+                2,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        let cwd_pos = html.find("class=\"kv-table-label\">cwd<").expect("cwd row");
+        let model_pos = html
+            .find("class=\"kv-table-label\">model<")
+            .expect("model row");
+        let collaboration_mode_pos = html
+            .find("class=\"kv-table-label\">collaboration_mode<")
+            .expect("collaboration_mode row");
+        let instructions_pos = html
+            .find("class=\"kv-table-label\">system_instructions<")
+            .expect("system_instructions row");
+
+        assert!(cwd_pos < collaboration_mode_pos);
+        assert!(model_pos < collaboration_mode_pos);
+        assert!(model_pos < instructions_pos);
+        assert!(html.contains("instruction line"));
+        assert!(html.contains("class=\"message-collapse\""));
+        assert!(html.contains("class=\"kv-table-value\"><div class=\"message-collapse\""));
+        assert!(html.contains(">see full<"));
+    }
+
+    #[test]
+    fn render_html_hides_redundant_summary_for_status_like_events() {
+        let events = vec![make_event(
+            "thread.started",
+            json!({"thread_id":"root-thread"}),
+            1,
+        )];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(!html.contains(">summary<"));
+        assert!(html.contains("class=\"badge cat-default\">thread.started<"));
+    }
+
+    #[test]
+    fn render_html_hides_raw_type_and_parse_for_cleanly_parsed_events() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "text":"hello"
+                }),
+                2,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(!html.contains(">raw_type<"));
+        assert!(!html.contains(">parse<"));
+        assert!(html.contains("data-raw-type=\"message.agent\""));
+        assert!(html.contains("data-parse-status=\"parsed\""));
     }
 
     #[test]
@@ -1188,11 +2193,13 @@ mod tests {
         let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
         let html = render_html(&tree);
 
-        assert!(html.contains("summary-structured"));
-        assert!(html.contains("summary-label\">input<"));
-        assert!(html.contains("summary-label\">cached input<"));
-        assert!(html.contains("summary-value\">11 877<"));
-        assert!(html.contains("summary-value\">12 635<"));
+        assert!(!html.contains("class=\"badge cat-default\">info.tokens<"));
+        assert!(!html.contains("class=\"summary-structured\""));
+        assert!(html.contains("event-footnote-title\">token consumption<"));
+        assert!(html.contains("event-footnote-label\">input<"));
+        assert!(html.contains("event-footnote-label\">cached input<"));
+        assert!(html.contains("event-footnote-value\">11 877<"));
+        assert!(html.contains("event-footnote-value\">12 635<"));
     }
 
     #[test]
@@ -1303,6 +2310,7 @@ mod tests {
         assert!(html.contains("data-footnote-event-id=\"run-1:7\""));
         assert!(html.contains("data-footnote-event-id=\"run-1:9\""));
         assert!(html.contains("event-footnote-title\">token consumption<"));
+        assert!(!html.contains("class=\"badge cat-default\">info.tokens<"));
         assert!(html.contains("event-footnote-label\">input<"));
         assert!(html.contains("class=\"event-footnote-pair is-total\""));
         assert!(html.contains("event-footnote-value\">1 234<"));
@@ -1333,7 +2341,7 @@ mod tests {
         let html = render_html(&tree);
 
         assert!(html.contains(
-            "assistant: assistant-message-without-truncation assistant-message-without-truncation assistant-message-without-truncation"
+            "assistant-message-without-truncation assistant-message-without-truncation assistant-message-without-truncation"
         ));
         assert!(html.contains("class=\"message-collapse\""));
         assert!(html.contains("class=\"summary-text message-preview\""));
@@ -1435,6 +2443,256 @@ mod tests {
         assert!(html.contains("$ git diff --stat"));
         assert!(html.contains("Нет вывода"));
         assert!(html.contains("&#10003; Успех"));
+    }
+
+    #[test]
+    fn render_html_collapses_shell_call_and_result_into_single_card() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "shell.call",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-1"
+                }),
+                2,
+            ),
+            make_event(
+                "shell.result",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-1",
+                    "input":{"command":"printf 'merged\\n'"},
+                    "exit_code":0,
+                    "output":"merged\n"
+                }),
+                3,
+            ),
+            make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "text":"after shell"
+                }),
+                4,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains("data-seq=\"2,3\""));
+        assert!(html.contains("data-event-ids=\"run-1:2,run-1:3\""));
+        assert!(html.contains(">#0002, #0003<"));
+        assert!(html.contains("event-meta-label\">output size<"));
+        assert!(html.contains("event-meta-value\">6 B<"));
+        assert!(html.contains("<strong>$ printf &#39;merged\\n&#39;</strong>"));
+        assert!(!html.contains("data-seq=\"3\""));
+        assert!(!html.contains("data-event-id=\"run-1:3\""));
+        assert_eq!(count_occurrences(&html, "class=\"event-card\""), 3);
+
+        let shell_pos = html
+            .find("data-seq=\"2,3\"")
+            .expect("collapsed shell card should be rendered");
+        let message_pos = html
+            .find("data-seq=\"4\"")
+            .expect("later message should be rendered");
+        assert!(shell_pos < message_pos);
+    }
+
+    #[test]
+    fn render_html_hides_response_item_function_call_output_when_attached_shell_result_exists() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "shell.call",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-1",
+                    "input":{"command":"printf 'rich\\n'"}
+                }),
+                2,
+            ),
+            make_raw_event(
+                "shell.result",
+                "response_item",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-1",
+                    "output":{"exit_code":0}
+                }),
+                3,
+            ),
+            make_raw_event(
+                "shell.result",
+                "event_msg",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-1",
+                    "duplicate_of":"response_item.function_call_output",
+                    "input":{"command":"printf 'rich\\n'"},
+                    "exit_code":0,
+                    "output":"rich\n"
+                }),
+                4,
+            ),
+            make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "text":"after rich shell"
+                }),
+                5,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains("data-seq=\"2,4\""));
+        assert!(html.contains(">#0002, #0004<"));
+        assert!(html.contains("<strong>$ printf &#39;rich\\n&#39;</strong>"));
+        assert!(html.contains("class=\"summary-text shell-block-output\">rich"));
+        assert!(!html.contains("data-seq=\"3\""));
+        assert!(!html.contains("data-event-id=\"run-1:3\""));
+        assert_eq!(
+            count_occurrences(&html, "class=\"inset-block shell-block inline-title\""),
+            1
+        );
+    }
+
+    #[test]
+    fn render_html_collapses_spawn_agent_call_and_result_into_single_card() {
+        let long_prompt =
+            "Review this implementation plan against the user request and repository rules.\n"
+                .repeat(8);
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "collab.spawn_agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"spawn_agent",
+                    "tool_use_id":"spawn-1",
+                    "phase":"started",
+                    "input":{"agent_type":"reviewer","message":long_prompt,"model":"gpt-5.3-codex","reasoning_effort":"high"},
+                    "prompt":"Review this implementation plan against the user request and repository rules.\n".repeat(8),
+                    "requested_agent_type":"reviewer",
+                    "model":"gpt-5.3-codex",
+                    "reasoning_effort":"high"
+                }),
+                2,
+            ),
+            make_raw_event(
+                "collab.spawn_agent",
+                "event_msg",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"spawn_agent",
+                    "tool_use_id":"spawn-1",
+                    "phase":"completed",
+                    "status":"pending_init",
+                    "receiver_thread_ids":["sub-1"],
+                    "prompt":"Review this implementation plan against the user request and repository rules.\n".repeat(8),
+                    "agents_states":{"sub-1":{"status":"pending_init","agent_nickname":"Halley","agent_role":"reviewer","model":"gpt-5.3-codex","reasoning_effort":"high"}},
+                    "new_thread_id":"sub-1",
+                    "new_agent_nickname":"Halley",
+                    "new_agent_role":"reviewer",
+                    "model":"gpt-5.3-codex",
+                    "reasoning_effort":"high",
+                    "duplicate_of":"response_item.function_call_output"
+                }),
+                3,
+            ),
+            make_raw_event(
+                "collab.spawn_agent",
+                "response_item",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"spawn_agent",
+                    "tool_use_id":"spawn-1",
+                    "phase":"completed",
+                    "output":{"agent_id":"sub-1","nickname":"Halley"},
+                    "new_thread_id":"sub-1",
+                    "new_agent_nickname":"Halley",
+                    "receiver_thread_ids":["sub-1"],
+                    "agents_states":{"sub-1":{"agent_nickname":"Halley"}}
+                }),
+                4,
+            ),
+            make_event(
+                "agent.session",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"sub-1",
+                    "parent_thread_id":"root-thread",
+                    "agent_role":"reviewer",
+                    "agent_nickname":"Halley"
+                }),
+                5,
+            ),
+            make_event(
+                "message.agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "text":"after spawn"
+                }),
+                6,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let html = render_html(&tree);
+
+        assert!(html.contains("data-seq=\"2,3\""));
+        assert!(html.contains("data-event-ids=\"run-1:2,run-1:3\""));
+        assert!(html.contains(">#0002, #0003<"));
+        assert!(html.contains("class=\"inset-block spawn-agent-block inline-title\""));
+        assert!(html.contains("class=\"inset-block-title inline-title\">Spawn Agent<"));
+        assert!(html.contains("event-meta-label\">agent type<"));
+        assert!(html.contains("event-meta-value\">reviewer<"));
+        assert!(html.contains("event-meta-label\">model<"));
+        assert!(html.contains("event-meta-value\">gpt-5.3-codex<"));
+        assert!(html.contains("event-meta-label\">effort<"));
+        assert!(html.contains("event-meta-value\">high<"));
+        assert!(html.contains("event-meta-label\">status<"));
+        assert!(html.contains("event-meta-value\">pending_init<"));
+        assert!(html.contains("class=\"message-collapse\""));
+        assert!(html.contains("onclick=\"toggleMessageBlock(this)\""));
+        assert!(html.contains(">see full<"));
+        assert!(html.contains("class=\"kv-table-label\">thread id<"));
+        assert!(html.contains("class=\"kv-table-value\"><code>sub-1</code>"));
+        assert!(html.contains("class=\"kv-table-label\">nickname<"));
+        assert!(html.contains("class=\"kv-table-value\"><code>Halley</code>"));
+        assert!(html.contains("class=\"kv-table-label\">role<"));
+        assert!(html.contains("class=\"kv-table-value\"><code>reviewer</code>"));
+        assert!(!html.contains("data-seq=\"3\""));
+        assert!(!html.contains("data-seq=\"4\""));
+        assert!(!html.contains("data-event-id=\"run-1:4\""));
+
+        let spawn_pos = html
+            .find("data-seq=\"2,3\"")
+            .expect("collapsed spawn card should be rendered");
+        let message_pos = html
+            .find("data-seq=\"6\"")
+            .expect("later message should be rendered");
+        assert!(spawn_pos < message_pos);
     }
 
     #[test]

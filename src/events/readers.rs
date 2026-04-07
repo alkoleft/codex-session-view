@@ -17,9 +17,9 @@ use crate::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_SESSION_FOREIGN, AGENT_STARTED,
     COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT,
     CONTEXT_COMPACTED, CONTEXT_COMPACTED_DUPLICATE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
-    MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE,
-    PLAN_UPDATE, RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDIN_WRITE,
-    TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TOOL_CALL, TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
+    MESSAGE_AGENT, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, PLAN_UPDATE, RAW_UNPARSED,
+    RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDIN_WRITE, TASK_COMPLETED, TASK_STARTED,
+    THREAD_STARTED, TOOL_CALL, TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
 };
 use crate::util::utc_now_iso;
 
@@ -76,6 +76,21 @@ pub struct JsonOutputState {
     pub thread_id: Option<String>,
     pub patch_apply_end_call_ids: HashSet<String>,
     pub pending_context_compacted_duplicate: bool,
+    pub last_subagent_message: Option<RecentSubagentMessage>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecentSubagentMessageSource {
+    ResponseItemMessage,
+    EventMsgMessage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentSubagentMessage {
+    pub role: String,
+    pub phase: Option<String>,
+    pub text: String,
+    pub source: RecentSubagentMessageSource,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

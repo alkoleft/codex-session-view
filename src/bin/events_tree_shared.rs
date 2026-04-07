@@ -23,6 +23,24 @@ use codex_worker_rs::models::EventRecord;
 use serde_json::{Map, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanStepEntry {
+    pub step: String,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpawnAgentEntry {
+    pub prompt: Option<String>,
+    pub requested_agent_type: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub receiver_thread_id: Option<String>,
+    pub receiver_nickname: Option<String>,
+    pub receiver_role: Option<String>,
+    pub receiver_status: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventEntry {
     pub event_id: String,
     pub parent_event_id: Option<String>,
@@ -34,9 +52,17 @@ pub struct EventEntry {
     pub event_type: String,
     pub raw_type: String,
     pub parse_status: String,
+    pub duplicate_of: Option<String>,
     pub summary: String,
     pub category: EventSummaryCategory,
     pub meta_type: Option<String>,
+    pub message_role: Option<String>,
+    pub message_direction: Option<String>,
+    pub message_text: Option<String>,
+    pub plan_explanation: Option<String>,
+    pub plan_steps: Vec<PlanStepEntry>,
+    pub spawn_agent: Option<SpawnAgentEntry>,
+    pub runtime_context_pairs: Vec<(String, String)>,
     pub tool_name: Option<String>,
     pub receiver_thread_ids: Vec<String>,
     pub operation_id: Option<String>,
@@ -968,14 +994,21 @@ fn is_barrier_event(event: &EventEntry) -> bool {
 }
 
 fn is_follow_up_event(event: &EventEntry) -> bool {
-    match event.event_type.as_str() {
-        AGENT_REASONING | MESSAGE_COMMENTARY | STDERR_LINE => true,
-        AGENT_META => matches!(
+    if matches!(event.event_type.as_str(), AGENT_REASONING | STDERR_LINE) {
+        return true;
+    }
+    if event.event_type.starts_with("message.")
+        && event.event_type != MESSAGE_USER
+        && event.phase.as_deref() == Some("commentary")
+    {
+        return true;
+    }
+
+    matches!(event.event_type.as_str(), AGENT_META)
+        && matches!(
             event.meta_type.as_deref(),
             Some("message" | "task_complete" | "user_message")
-        ),
-        _ => false,
-    }
+        )
 }
 
 fn operation_kind(event: &EventEntry) -> Option<&'static str> {
@@ -1049,6 +1082,8 @@ fn format_event_entry(
     } else {
         None
     };
+    let (plan_explanation, plan_steps) = extract_plan_update_content(&event.event_type, payload);
+    let spawn_agent = extract_spawn_agent_entry(&event.event_type, payload);
     EventEntry {
         event_id: format!("{}:{}", event.run_id, event.seq),
         parent_event_id: None,
@@ -1060,12 +1095,32 @@ fn format_event_entry(
         event_type: event.event_type.clone(),
         raw_type: event.raw_type.clone(),
         parse_status: event.parse_status.clone(),
+        duplicate_of: payload
+            .and_then(|obj| obj.get("duplicate_of"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
         summary: summarize_event_full(event),
         category: categorize_event(event),
         meta_type: payload
             .and_then(|obj| obj.get("meta_type"))
             .and_then(Value::as_str)
             .map(str::to_string),
+        message_role: payload
+            .and_then(|obj| obj.get("role"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        message_direction: payload
+            .and_then(|obj| obj.get("direction"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        message_text: payload
+            .and_then(|obj| obj.get("text"))
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        plan_explanation,
+        plan_steps,
+        spawn_agent,
+        runtime_context_pairs: extract_runtime_context_pairs(&event.event_type, payload),
         tool_name: payload
             .and_then(|obj| obj.get("tool_name").or_else(|| obj.get("tool")))
             .and_then(Value::as_str)
@@ -1141,6 +1196,341 @@ fn extract_summary_pairs(
     pairs
 }
 
+fn extract_plan_update_content(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> (Option<String>, Vec<PlanStepEntry>) {
+    if event_type != PLAN_UPDATE {
+        return (None, Vec::new());
+    }
+
+    let Some(payload) = payload else {
+        return (None, Vec::new());
+    };
+    let container = payload.get("input").or_else(|| payload.get("output"));
+    match container {
+        Some(Value::Object(object)) => extract_plan_update_content_from_object(object),
+        Some(Value::String(text)) => serde_json::from_str::<Value>(text)
+            .ok()
+            .and_then(|value| {
+                value
+                    .as_object()
+                    .map(extract_plan_update_content_from_object)
+            })
+            .unwrap_or_default(),
+        _ => (None, Vec::new()),
+    }
+}
+
+fn extract_plan_update_content_from_object(
+    object: &serde_json::Map<String, Value>,
+) -> (Option<String>, Vec<PlanStepEntry>) {
+    let explanation = object
+        .get("explanation")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let plan_steps = object
+        .get("plan")
+        .and_then(Value::as_array)
+        .map(|plan| plan.iter().filter_map(extract_plan_step).collect())
+        .unwrap_or_default();
+    (explanation, plan_steps)
+}
+
+fn extract_plan_step(value: &Value) -> Option<PlanStepEntry> {
+    match value {
+        Value::Object(object) => {
+            let step = object
+                .get("step")
+                .or_else(|| object.get("text"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    let rendered = render_payload_value(value);
+                    let trimmed = rendered.trim();
+                    (!trimmed.is_empty()).then(|| trimmed.to_string())
+                })?;
+            let status = object
+                .get("status")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    object
+                        .get("completed")
+                        .and_then(Value::as_bool)
+                        .map(|completed| {
+                            if completed {
+                                "completed".to_string()
+                            } else {
+                                "pending".to_string()
+                            }
+                        })
+                });
+            Some(PlanStepEntry { step, status })
+        }
+        Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| PlanStepEntry {
+                step: trimmed.to_string(),
+                status: None,
+            })
+        }
+        _ => {
+            let rendered = render_payload_value(value);
+            let trimmed = rendered.trim();
+            (!trimmed.is_empty()).then(|| PlanStepEntry {
+                step: trimmed.to_string(),
+                status: None,
+            })
+        }
+    }
+}
+
+fn extract_spawn_agent_entry(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<SpawnAgentEntry> {
+    if event_type != COLLAB_SPAWN_AGENT {
+        return None;
+    }
+
+    let payload = payload?;
+    let input = payload.get("input").and_then(Value::as_object);
+    let output = payload.get("output").and_then(Value::as_object);
+    let prompt = payload
+        .get("prompt")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            input
+                .and_then(|obj| obj.get("message"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            input
+                .and_then(|obj| obj.get("prompt"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let requested_agent_type = payload
+        .get("requested_agent_type")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            input
+                .and_then(|obj| obj.get("agent_type"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let mut receiver_thread_id = payload
+        .get("new_thread_id")
+        .and_then(Value::as_str)
+        .or_else(|| first_receiver_thread_id(payload))
+        .or_else(|| {
+            output
+                .and_then(|obj| obj.get("agent_id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let agent_state = if let Some(thread_id) = receiver_thread_id.as_deref() {
+        spawn_agent_state(payload, Some(thread_id))
+    } else {
+        let state = spawn_agent_state(payload, None);
+        if let Some((thread_id, _)) = state {
+            receiver_thread_id = Some(thread_id.to_string());
+        }
+        state
+    };
+    let state_obj = agent_state.map(|(_, state)| state);
+    let receiver_nickname = payload
+        .get("new_agent_nickname")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            output
+                .and_then(|obj| obj.get("nickname"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            output
+                .and_then(|obj| obj.get("agent_nickname"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            state_obj
+                .and_then(|obj| obj.get("agent_nickname"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let receiver_role = payload
+        .get("new_agent_role")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            state_obj
+                .and_then(|obj| obj.get("agent_role"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| requested_agent_type.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let model = payload
+        .get("model")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            input
+                .and_then(|obj| obj.get("model"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            state_obj
+                .and_then(|obj| obj.get("model"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let reasoning_effort = payload
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            input
+                .and_then(|obj| obj.get("reasoning_effort"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            state_obj
+                .and_then(|obj| obj.get("reasoning_effort"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let receiver_status = payload
+        .get("status")
+        .and_then(collab_status_value)
+        .or_else(|| {
+            state_obj
+                .and_then(|obj| obj.get("status"))
+                .and_then(collab_status_value)
+        });
+
+    if prompt.is_none()
+        && requested_agent_type.is_none()
+        && model.is_none()
+        && reasoning_effort.is_none()
+        && receiver_thread_id.is_none()
+        && receiver_nickname.is_none()
+        && receiver_role.is_none()
+        && receiver_status.is_none()
+    {
+        return None;
+    }
+
+    Some(SpawnAgentEntry {
+        prompt,
+        requested_agent_type,
+        model,
+        reasoning_effort,
+        receiver_thread_id,
+        receiver_nickname,
+        receiver_role,
+        receiver_status,
+    })
+}
+
+fn first_receiver_thread_id(payload: &serde_json::Map<String, Value>) -> Option<&str> {
+    payload
+        .get("receiver_thread_ids")
+        .and_then(Value::as_array)
+        .and_then(|ids| ids.first())
+        .and_then(Value::as_str)
+}
+
+fn spawn_agent_state<'a>(
+    payload: &'a serde_json::Map<String, Value>,
+    thread_id: Option<&'a str>,
+) -> Option<(&'a str, &'a serde_json::Map<String, Value>)> {
+    let states = payload.get("agents_states").and_then(Value::as_object)?;
+    if let Some(thread_id) = thread_id {
+        return states
+            .get(thread_id)
+            .and_then(Value::as_object)
+            .map(|state| (thread_id, state));
+    }
+    states
+        .iter()
+        .find_map(|(thread_id, value)| value.as_object().map(|state| (thread_id.as_str(), state)))
+}
+
+fn collab_status_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Value::Bool(true) => Some("completed".to_string()),
+        Value::Bool(false) => Some("failed".to_string()),
+        Value::Object(object) if object.len() == 1 => object.keys().next().cloned(),
+        _ => None,
+    }
+}
+
+fn extract_runtime_context_pairs(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Vec<(String, String)> {
+    if event_type != RUNTIME_CONTEXT {
+        return Vec::new();
+    }
+
+    let mut pairs = Vec::new();
+    let mut trailing_pairs = Vec::new();
+    let Some(payload) = payload else {
+        return pairs;
+    };
+
+    for (key, value) in payload {
+        if matches!(
+            key.as_str(),
+            "actor_type" | "thread_id" | "parent_thread_id" | "session_path" | "turn_id"
+        ) {
+            continue;
+        }
+        let pair = (key.clone(), render_payload_value(value));
+        if is_runtime_context_trailing_key(key) {
+            trailing_pairs.push(pair);
+        } else {
+            pairs.push(pair);
+        }
+    }
+    pairs.extend(trailing_pairs);
+    pairs
+}
+
+fn is_runtime_context_trailing_key(key: &str) -> bool {
+    key == "collaboration_mode" || key.ends_with("_instructions")
+}
+
+fn render_payload_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Bool(_) | Value::Number(_) | Value::Null => value.to_string(),
+        _ => serde_json::to_string(value).unwrap_or_else(|_| "<invalid-json>".to_string()),
+    }
+}
+
 fn extract_token_value(
     event_type: &str,
     payload: Option<&serde_json::Map<String, Value>>,
@@ -1188,7 +1578,15 @@ fn extract_shell_command(
     event_type: &str,
     payload: Option<&serde_json::Map<String, Value>>,
 ) -> Option<String> {
-    if !is_command_shell_result(event_type, payload) {
+    if !matches!(event_type, SHELL_CALL | SHELL_RESULT) {
+        return None;
+    }
+    if !matches!(
+        payload
+            .and_then(|obj| obj.get("tool_name"))
+            .and_then(Value::as_str),
+        Some("command_execution" | "exec_command")
+    ) {
         return None;
     }
 

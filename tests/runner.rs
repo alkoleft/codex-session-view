@@ -735,7 +735,7 @@ printf '%s\n' '{"type":"turn.completed"}'"#,
     )
     .expect("events should be readable");
     assert!(events.contains("\"event_type\":\"agent.session\""));
-    assert!(events.contains("\"event_type\":\"message.agent\""));
+    assert!(events.contains("\"event_type\":\"message.assistant\""));
     assert!(events.contains("\"actor_type\":\"subagent\""));
     assert!(events.contains("\"thread_id\":\"sub-1\""));
 
@@ -849,7 +849,7 @@ printf '%s\n' '{"type":"turn.completed"}'"#,
         .any(|event| event.event_type == "shell.result"));
     assert!(nested_events
         .iter()
-        .any(|event| event.event_type == "message.agent"));
+        .any(|event| event.event_type == "message.assistant"));
 }
 
 #[test]
@@ -924,7 +924,7 @@ printf '%s\n' '{"type":"turn.completed"}'"#,
     )
     .expect("events should be readable");
     assert!(events.contains("\"event_type\":\"agent.session\""));
-    assert!(events.contains("\"event_type\":\"message.agent\""));
+    assert!(events.contains("\"event_type\":\"message.assistant\""));
     assert!(events.contains("\"thread_id\":\"sub-1\""));
     assert!(!events.contains("\"raw_type\":\"invalid_utf8\""));
 }

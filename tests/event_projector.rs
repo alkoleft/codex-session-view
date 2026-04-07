@@ -402,9 +402,9 @@ fn summarize_event_formats_stdin_write() {
 }
 
 #[test]
-fn summarize_event_uses_message_role_when_present() {
+fn summarize_event_uses_plain_message_text() {
     let agent_summary = summarize_event(&make_event(
-        "message.agent",
+        "message.assistant",
         json!({
             "actor_type": "subagent",
             "thread_id": "sub-1",
@@ -413,17 +413,18 @@ fn summarize_event_uses_message_role_when_present() {
         }),
     ));
     let commentary_summary = summarize_event(&make_event(
-        "message.commentary",
+        "message.assistant",
         json!({
             "actor_type": "subagent",
             "thread_id": "sub-1",
             "role": "assistant",
+            "phase": "commentary",
             "text": "thinking aloud"
         }),
     ));
 
-    assert_eq!(agent_summary, "system: hello");
-    assert_eq!(commentary_summary, "assistant: thinking aloud");
+    assert_eq!(agent_summary, "hello");
+    assert_eq!(commentary_summary, "thinking aloud");
 }
 
 #[test]
@@ -564,7 +565,9 @@ fn summarize_event_formats_commentary_patch_and_context_events() {
             "thread_id": "sub-1",
             "cwd": "/repo",
             "model": "gpt-5.4",
-            "collaboration_mode_kind": "default"
+            "collaboration_mode": {
+                "mode": "default"
+            }
         }),
     ));
     let compacted = summarize_event(&make_event(
@@ -577,7 +580,7 @@ fn summarize_event_formats_commentary_patch_and_context_events() {
         }),
     ));
 
-    assert_eq!(commentary, "commentary: Проверяю структуру дерева");
+    assert_eq!(commentary, "Проверяю структуру дерева");
     assert_eq!(
         patch,
         "patch apply: phase=completed status=completed file=src/events/readers.rs"
@@ -591,6 +594,16 @@ fn summarize_event_formats_commentary_patch_and_context_events() {
 
 #[test]
 fn summarize_event_formats_subagent_meta_variants() {
+    let agent_summary = summarize_event(&make_event(
+        "agent.meta",
+        json!({
+            "actor_type": "subagent",
+            "thread_id": "sub-1",
+            "meta_type": "message",
+            "role": "assistant",
+            "text": "Thinking"
+        }),
+    ));
     let user_summary = summarize_event(&make_event(
         "agent.meta",
         json!({
@@ -613,10 +626,8 @@ fn summarize_event_formats_subagent_meta_variants() {
             "rate_limits": {"primary": {"used_percent": 4.0}}
         }),
     ));
-    assert_eq!(
-        user_summary,
-        "user: Inspect docs/technical-documentation.md"
-    );
+    assert_eq!(agent_summary, "Thinking");
+    assert_eq!(user_summary, "Inspect docs/technical-documentation.md");
     assert_eq!(
         token_summary,
         "tokens: input: 700, cached input: 120, output: 340, reasoning output: 74, total: 1 234"

@@ -30,6 +30,7 @@ impl JsonOutputEventReader {
         let mut event_type = "raw.unparsed".to_string();
         let mut payload: Value;
         let mut parse_status = "best_effort".to_string();
+        let mut current_subagent_message: Option<RecentSubagentMessage> = None;
 
         match raw_type.as_str() {
             "session_meta" => {
@@ -156,6 +157,7 @@ impl JsonOutputEventReader {
                             .and_then(Value::as_str)
                             .unwrap_or("unknown")
                             .to_string();
+                        let is_spawn_agent = name == "spawn_agent";
                         let call_id = item
                             .get("call_id")
                             .and_then(Value::as_str)
@@ -198,10 +200,10 @@ impl JsonOutputEventReader {
                                     thread_id: Some(thread_id.to_string()),
                                     parent_thread_id: Some(parent_thread_id.to_string()),
                                     session_path: Some(imported_path.display().to_string()),
-                                    tool_name: name,
+                                    tool_name: name.clone(),
                                     tool_use_id: Some(call_id),
                                     phase: Some("started".to_string()),
-                                    input: Some(parsed_arguments),
+                                    input: Some(parsed_arguments.clone()),
                                     ..ToolResultPayload::default()
                                 })
                             } else {
@@ -212,15 +214,18 @@ impl JsonOutputEventReader {
                                         "parent_thread_id".to_string(),
                                         Value::from(parent_thread_id),
                                     ),
-                                    ("tool_name".to_string(), Value::from(name)),
+                                    ("tool_name".to_string(), Value::from(name.clone())),
                                     ("tool_use_id".to_string(), Value::from(call_id)),
-                                    ("input".to_string(), parsed_arguments),
+                                    ("input".to_string(), parsed_arguments.clone()),
                                     (
                                         "session_path".to_string(),
                                         Value::from(imported_path.display().to_string()),
                                     ),
                                 ]))
                             };
+                            if is_spawn_agent {
+                                enrich_spawn_agent_started_payload(&mut payload, &parsed_arguments);
+                            }
                         }
                     }
                     "function_call_output" => {
@@ -233,6 +238,7 @@ impl JsonOutputEventReader {
                             .get(&call_id)
                             .cloned()
                             .unwrap_or_else(|| "unknown".to_string());
+                        let is_spawn_agent = name == "spawn_agent";
                         increment(tool_counts, &name);
                         if let Some(server) = codex_mcp_server(&name) {
                             event_type = MCP_RESULT.to_string();
@@ -251,16 +257,17 @@ impl JsonOutputEventReader {
                         } else {
                             event_type = normalized_tool_event_type(&name, true);
                             parse_status = "parsed".to_string();
+                            let parsed_output = parse_embedded_json_value(item.get("output"));
                             payload = if is_singleton_tool_event_type(&event_type) {
                                 payload_to_value(&ToolResultPayload {
                                     actor_type: Some("subagent".to_string()),
                                     thread_id: Some(thread_id.to_string()),
                                     parent_thread_id: Some(parent_thread_id.to_string()),
                                     session_path: Some(imported_path.display().to_string()),
-                                    tool_name: name,
+                                    tool_name: name.clone(),
                                     tool_use_id: Some(call_id),
                                     phase: Some("completed".to_string()),
-                                    output: item.get("output").cloned(),
+                                    output: Some(parsed_output.clone()),
                                     ..ToolResultPayload::default()
                                 })
                             } else {
@@ -271,7 +278,7 @@ impl JsonOutputEventReader {
                                         "parent_thread_id".to_string(),
                                         Value::from(parent_thread_id),
                                     ),
-                                    ("tool_name".to_string(), Value::from(name)),
+                                    ("tool_name".to_string(), Value::from(name.clone())),
                                     ("tool_use_id".to_string(), Value::from(call_id)),
                                     (
                                         "output".to_string(),
@@ -283,6 +290,9 @@ impl JsonOutputEventReader {
                                     ),
                                 ]))
                             };
+                            if is_spawn_agent {
+                                enrich_spawn_agent_completed_payload(&mut payload, &parsed_output);
+                            }
                         }
                     }
                     "custom_tool_call" => {
@@ -447,12 +457,17 @@ impl JsonOutputEventReader {
                     }
                     "message" => {
                         let text = self.extract_message_text(item);
-                        event_type =
-                            if item.get("phase").and_then(Value::as_str) == Some("commentary") {
-                                MESSAGE_COMMENTARY.to_string()
-                            } else {
-                                MESSAGE_AGENT.to_string()
-                            };
+                        let direction = self.extract_message_direction(item);
+                        let phase = item
+                            .get("phase")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .map(str::to_string);
+                        let role = normalized_subagent_message_role(
+                            item.get("role").and_then(Value::as_str),
+                        );
+                        event_type = subagent_message_event_type(&role);
                         parse_status = "parsed".to_string();
                         payload = Value::Object(Map::from_iter([
                             ("actor_type".to_string(), Value::from("subagent")),
@@ -461,9 +476,13 @@ impl JsonOutputEventReader {
                                 "parent_thread_id".to_string(),
                                 Value::from(parent_thread_id),
                             ),
+                            ("role".to_string(), Value::from(role.clone())),
                             (
-                                "role".to_string(),
-                                item.get("role").cloned().unwrap_or(Value::Null),
+                                "direction".to_string(),
+                                direction
+                                    .as_ref()
+                                    .map(|value| Value::from(value.clone()))
+                                    .unwrap_or(Value::Null),
                             ),
                             (
                                 "phase".to_string(),
@@ -481,6 +500,12 @@ impl JsonOutputEventReader {
                                 Value::from(imported_path.display().to_string()),
                             ),
                         ]));
+                        current_subagent_message = Some(RecentSubagentMessage {
+                            role,
+                            phase,
+                            text,
+                            source: RecentSubagentMessageSource::ResponseItemMessage,
+                        });
                     }
                     "reasoning" => {
                         let text = self.extract_reasoning_text(item);
@@ -589,7 +614,16 @@ impl JsonOutputEventReader {
                         .and_then(Value::as_str)
                         .unwrap_or_default()
                         .to_string();
-                    event_type = MESSAGE_COMMENTARY.to_string();
+                    let phase = item
+                        .get("phase")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string);
+                    let role =
+                        normalized_subagent_message_role(item.get("role").and_then(Value::as_str));
+                    let direction = "output_text".to_string();
+                    event_type = subagent_message_event_type(&role);
                     parse_status = "parsed".to_string();
                     payload = Value::Object(Map::from_iter([
                         ("actor_type".to_string(), Value::from("subagent")),
@@ -598,6 +632,8 @@ impl JsonOutputEventReader {
                             "parent_thread_id".to_string(),
                             Value::from(parent_thread_id),
                         ),
+                        ("role".to_string(), Value::from(role.clone())),
+                        ("direction".to_string(), Value::from(direction)),
                         ("text".to_string(), Value::from(text.clone())),
                         (
                             "phase".to_string(),
@@ -614,6 +650,12 @@ impl JsonOutputEventReader {
                             Value::from(imported_path.display().to_string()),
                         ),
                     ]));
+                    current_subagent_message = Some(RecentSubagentMessage {
+                        role,
+                        phase,
+                        text,
+                        source: RecentSubagentMessageSource::EventMsgMessage,
+                    });
                 } else if msg_type == "token_count" {
                     parse_status = "parsed".to_string();
                     let total_token_usage = item
@@ -707,6 +749,12 @@ impl JsonOutputEventReader {
                             ]));
                         }
                         "user_message" => {
+                            let text = item
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string();
+                            let direction = "input_text".to_string();
                             event_type = MESSAGE_USER.to_string();
                             payload = Value::Object(Map::from_iter([
                                 ("actor_type".to_string(), Value::from("subagent")),
@@ -719,10 +767,9 @@ impl JsonOutputEventReader {
                                     "session_path".to_string(),
                                     Value::from(imported_path.display().to_string()),
                                 ),
-                                (
-                                    "text".to_string(),
-                                    item.get("message").cloned().unwrap_or(Value::Null),
-                                ),
+                                ("role".to_string(), Value::from("user")),
+                                ("direction".to_string(), Value::from(direction)),
+                                ("text".to_string(), Value::from(text.clone())),
                                 (
                                     "images_count".to_string(),
                                     Value::from(
@@ -751,6 +798,17 @@ impl JsonOutputEventReader {
                                     ),
                                 ),
                             ]));
+                            current_subagent_message = Some(RecentSubagentMessage {
+                                role: "user".to_string(),
+                                phase: item
+                                    .get("phase")
+                                    .and_then(Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|value| !value.is_empty())
+                                    .map(str::to_string),
+                                text,
+                                source: RecentSubagentMessageSource::EventMsgMessage,
+                            });
                         }
                         "context_compacted" => {
                             if self.state.pending_context_compacted_duplicate {
@@ -1142,20 +1200,7 @@ impl JsonOutputEventReader {
                 event_type = RUNTIME_CONTEXT.to_string();
                 parse_status = "parsed".to_string();
                 let context = parsed.get("payload").and_then(Value::as_object);
-                let sandbox_policy_type = context
-                    .and_then(|ctx| ctx.get("sandbox_policy"))
-                    .and_then(Value::as_object)
-                    .and_then(|v| v.get("type"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let collaboration_mode_kind = context
-                    .and_then(|ctx| ctx.get("collaboration_mode"))
-                    .and_then(Value::as_object)
-                    .and_then(|v| v.get("mode"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-
-                payload = Value::Object(Map::from_iter([
+                let mut normalized = Map::from_iter([
                     ("actor_type".to_string(), Value::from("subagent")),
                     ("thread_id".to_string(), Value::from(thread_id)),
                     (
@@ -1166,68 +1211,16 @@ impl JsonOutputEventReader {
                         "session_path".to_string(),
                         Value::from(imported_path.display().to_string()),
                     ),
-                    (
-                        "turn_id".to_string(),
-                        context
-                            .and_then(|ctx| ctx.get("turn_id"))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    ),
-                    (
-                        "cwd".to_string(),
-                        context
-                            .and_then(|ctx| ctx.get("cwd"))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    ),
-                    (
-                        "current_date".to_string(),
-                        context
-                            .and_then(|ctx| ctx.get("current_date"))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    ),
-                    (
-                        "timezone".to_string(),
-                        context
-                            .and_then(|ctx| ctx.get("timezone"))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    ),
-                    (
-                        "approval_policy".to_string(),
-                        context
-                            .and_then(|ctx| ctx.get("approval_policy"))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    ),
-                    ("sandbox_policy_type".to_string(), sandbox_policy_type),
-                    (
-                        "model".to_string(),
-                        context
-                            .and_then(|ctx| ctx.get("model"))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    ),
-                    (
-                        "effort".to_string(),
-                        context
-                            .and_then(|ctx| ctx.get("effort"))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    ),
-                    (
-                        "summary".to_string(),
-                        context
-                            .and_then(|ctx| ctx.get("summary"))
-                            .cloned()
-                            .unwrap_or(Value::Null),
-                    ),
-                    (
-                        "collaboration_mode_kind".to_string(),
-                        collaboration_mode_kind,
-                    ),
-                ]));
+                ]);
+                if let Some(context) = context {
+                    for (key, value) in context {
+                        if key == "turn_id" {
+                            continue;
+                        }
+                        normalized.insert(key.clone(), value.clone());
+                    }
+                }
+                payload = Value::Object(normalized);
             }
             _ => {
                 payload = subagent_raw_payload(
@@ -1238,6 +1231,18 @@ impl JsonOutputEventReader {
                     Some(format!("unsupported subagent record type={raw_type}")),
                 );
             }
+        }
+
+        if let Some(current_message) = current_subagent_message {
+            if should_skip_subagent_message_duplicate(
+                self.state.last_subagent_message.as_ref(),
+                &current_message,
+            ) {
+                return None;
+            }
+            self.state.last_subagent_message = Some(current_message);
+        } else {
+            self.state.last_subagent_message = None;
         }
 
         Some(self.build_subagent_event(seq, &ts, event_type, raw_type, parse_status, payload))
@@ -1281,6 +1286,17 @@ impl JsonOutputEventReader {
             }
         }
         parts.join("\n").trim().to_string()
+    }
+
+    fn extract_message_direction(&self, item: &Map<String, Value>) -> Option<String> {
+        let content = item.get("content").and_then(Value::as_array)?;
+        content
+            .iter()
+            .filter_map(Value::as_object)
+            .filter_map(|chunk| chunk.get("type").and_then(Value::as_str))
+            .map(str::trim)
+            .find(|content_type| matches!(*content_type, "input_text" | "output_text"))
+            .map(str::to_string)
     }
 
     fn extract_reasoning_text(&self, item: &Map<String, Value>) -> String {
@@ -1496,6 +1512,163 @@ fn insert_duplicate_of(payload: &mut Value, duplicate_of: &str) {
     if let Some(obj) = payload.as_object_mut() {
         obj.insert("duplicate_of".to_string(), Value::from(duplicate_of));
     }
+}
+
+fn enrich_spawn_agent_started_payload(payload: &mut Value, arguments: &Value) {
+    let Some(payload_obj) = payload.as_object_mut() else {
+        return;
+    };
+    let Some(arguments_obj) = arguments.as_object() else {
+        return;
+    };
+
+    if let Some(prompt) = arguments_obj
+        .get("message")
+        .or_else(|| arguments_obj.get("prompt"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        payload_obj.insert("prompt".to_string(), Value::from(prompt.to_string()));
+    }
+    if let Some(agent_type) = arguments_obj
+        .get("agent_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        payload_obj.insert(
+            "requested_agent_type".to_string(),
+            Value::from(agent_type.to_string()),
+        );
+    }
+    if let Some(model) = arguments_obj
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        payload_obj.insert("model".to_string(), Value::from(model.to_string()));
+    }
+    if let Some(reasoning_effort) = arguments_obj
+        .get("reasoning_effort")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        payload_obj.insert(
+            "reasoning_effort".to_string(),
+            Value::from(reasoning_effort.to_string()),
+        );
+    }
+}
+
+fn enrich_spawn_agent_completed_payload(payload: &mut Value, output: &Value) {
+    let Some(payload_obj) = payload.as_object_mut() else {
+        return;
+    };
+    let Some(output_obj) = output.as_object() else {
+        return;
+    };
+
+    let thread_id = output_obj
+        .get("agent_id")
+        .or_else(|| output_obj.get("thread_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let nickname = output_obj
+        .get("nickname")
+        .or_else(|| output_obj.get("agent_nickname"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let role = output_obj
+        .get("agent_role")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    if let Some(thread_id) = thread_id.as_deref() {
+        payload_obj.insert(
+            "new_thread_id".to_string(),
+            Value::from(thread_id.to_string()),
+        );
+        payload_obj.insert(
+            "receiver_thread_ids".to_string(),
+            Value::Array(vec![Value::from(thread_id.to_string())]),
+        );
+    }
+    if let Some(nickname) = nickname.as_deref() {
+        payload_obj.insert(
+            "new_agent_nickname".to_string(),
+            Value::from(nickname.to_string()),
+        );
+    }
+    if let Some(role) = role.as_deref() {
+        payload_obj.insert("new_agent_role".to_string(), Value::from(role.to_string()));
+    }
+
+    if let Some(thread_id) = thread_id {
+        let state = Value::Object(Map::from_iter([
+            (
+                "agent_nickname".to_string(),
+                nickname.map(Value::from).unwrap_or(Value::Null),
+            ),
+            (
+                "agent_role".to_string(),
+                role.map(Value::from).unwrap_or(Value::Null),
+            ),
+        ]));
+        payload_obj.insert(
+            "agents_states".to_string(),
+            Value::Object(Map::from_iter([(thread_id, state)])),
+        );
+    }
+}
+
+fn normalized_subagent_message_role(role: Option<&str>) -> String {
+    role.map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "assistant".to_string())
+}
+
+fn subagent_message_event_type(role: &str) -> String {
+    format!("message.{role}")
+}
+
+fn should_skip_subagent_message_duplicate(
+    previous: Option<&RecentSubagentMessage>,
+    current: &RecentSubagentMessage,
+) -> bool {
+    previous
+        .map(|message| {
+            message.source != current.source
+                && same_subagent_message_role(&message.role, &current.role)
+                && same_subagent_message_phase(message.phase.as_deref(), current.phase.as_deref())
+                && same_subagent_message_text(&message.text, &current.text)
+        })
+        .unwrap_or(false)
+}
+
+fn same_subagent_message_role(left: &str, right: &str) -> bool {
+    left.trim() == right.trim()
+}
+
+fn same_subagent_message_text(left: &str, right: &str) -> bool {
+    let left = left.trim();
+    let right = right.trim();
+    !left.is_empty() && left == right
+}
+
+fn same_subagent_message_phase(left: Option<&str>, right: Option<&str>) -> bool {
+    let left = left.map(str::trim).filter(|value| !value.is_empty());
+    let right = right.map(str::trim).filter(|value| !value.is_empty());
+    left == right
 }
 
 pub(crate) fn imported_subagent_session_meta(

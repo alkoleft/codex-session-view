@@ -135,10 +135,7 @@ fn assistant_messages_render_as_timeline_rows() {
         "message.agent",
         json!({"actor_type":"agent","thread_id":"root","text":"Сообщение ассистента"}),
     );
-    assert_eq!(
-        console.format_event_line(&event),
-        "○ assistant: Сообщение ассистента"
-    );
+    assert_eq!(console.format_event_line(&event), "○ Сообщение ассистента");
 }
 
 #[test]
@@ -579,8 +576,7 @@ fn assistant_message_after_command_inherits_command_color() {
     let line = console.format_event_line(&message);
 
     assert!(line.contains("\u{1b}[1;34m○\u{1b}[0m"));
-    assert!(line.contains("\u{1b}[1;34massistant:\u{1b}[0m"));
-    assert!(line.contains("\u{1b}[1;34massistant:\u{1b}[0m Проверочный прогон выполнен"));
+    assert!(line.contains("\u{1b}[1;34mПроверочный прогон выполнен\u{1b}[0m"));
 }
 
 #[test]
@@ -608,7 +604,7 @@ fn subagent_message_after_command_inherits_command_color() {
     let line = console.format_event_line(&message);
 
     assert!(line.contains("\u{1b}[1;34m○\u{1b}[0m"));
-    assert!(line.contains("\u{1b}[1;34massistant:\u{1b}[0m Команда выполнена успешно"));
+    assert!(line.contains("\u{1b}[1;34mКоманда выполнена успешно\u{1b}[0m"));
 }
 
 #[test]

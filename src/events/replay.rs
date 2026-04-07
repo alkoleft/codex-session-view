@@ -429,9 +429,10 @@ mod tests {
         assert_common_event_counts(
             &replayed.event_counts,
             &[
-                ("message.agent", 17),
-                ("message.commentary", 12),
-                ("message.user", 3),
+                ("message.agent", 8),
+                ("message.assistant", 7),
+                ("message.developer", 3),
+                ("message.user", 4),
                 ("task.started", 3),
                 ("task.completed", 2),
                 ("runtime.context", 3),

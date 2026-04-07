@@ -868,6 +868,52 @@ fn subagent_update_plan_function_call_and_output_normalization() {
 }
 
 #[test]
+fn subagent_update_plan_function_call_sample_is_normalized() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let call_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"timestamp":"2026-04-06T19:42:26.171Z","type":"response_item","payload":{"type":"function_call","name":"update_plan","arguments":"{\"explanation\":\"Analysis approved; moving to branch decision and executable checklist before code changes.\",\"plan\":[{\"step\":\"Verify branch decision and working tree isolation for implementation branch\", \"status\":\"in_progress\"},{\"step\":\"Build approved executable TODO checklist from the plan\", \"status\":\"pending\"},{\"step\":\"Implement standalone session loading and metadata propagation for events_tree_html\", \"status\":\"pending\"},{\"step\":\"Add/adjust tests for standalone session input, routing, and regressions\", \"status\":\"pending\"},{\"step\":\"Run required checks, review diff, and prepare commit(s)\", \"status\":\"pending\"}]}","call_id":"call_MsxRurOW415xdvzIsTdask9e"}}"#,
+    )
+    .expect("json should parse");
+    let call = reader
+        .parse_subagent_session_payload(
+            12,
+            &call_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("update_plan sample function_call should produce event");
+
+    assert_eq!(call.event_type, "plan.update");
+    assert_eq!(call.payload["tool_name"].as_str(), Some("update_plan"));
+    assert_eq!(
+        call.payload["tool_use_id"].as_str(),
+        Some("call_MsxRurOW415xdvzIsTdask9e")
+    );
+    assert_eq!(call.payload["phase"].as_str(), Some("started"));
+    assert_eq!(
+        call.payload["input"]["explanation"].as_str(),
+        Some("Analysis approved; moving to branch decision and executable checklist before code changes.")
+    );
+    assert_eq!(
+        call.payload["input"]["plan"].as_array().map(|v| v.len()),
+        Some(5)
+    );
+    assert_eq!(
+        call.payload["input"]["plan"][0]["status"].as_str(),
+        Some("in_progress")
+    );
+}
+
+#[test]
 fn subagent_write_stdin_function_call_and_output_normalization() {
     let mut reader = make_reader();
     let mut call_names = HashMap::new();
@@ -1128,6 +1174,74 @@ fn subagent_function_call_updates_subagent_counts_for_spawn_agent() {
 }
 
 #[test]
+fn subagent_spawn_agent_function_call_and_output_extract_rich_fields() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let call_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"spawn_agent","call_id":"call-spawn","arguments":"{\"agent_type\":\"reviewer\",\"message\":\"review this implementation plan\",\"model\":\"gpt-5.3-codex\",\"reasoning_effort\":\"high\"}"}}"#,
+    )
+    .expect("json should parse");
+    let call = reader
+        .parse_subagent_session_payload(
+            15,
+            &call_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("spawn_agent function_call should produce event");
+    assert_eq!(call.event_type, "collab.spawn_agent");
+    assert_eq!(
+        call.payload["prompt"].as_str(),
+        Some("review this implementation plan")
+    );
+    assert_eq!(
+        call.payload["requested_agent_type"].as_str(),
+        Some("reviewer")
+    );
+    assert_eq!(call.payload["model"].as_str(), Some("gpt-5.3-codex"));
+    assert_eq!(call.payload["reasoning_effort"].as_str(), Some("high"));
+
+    let output_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"response_item","payload":{"type":"function_call_output","call_id":"call-spawn","output":"{\"agent_id\":\"sub-1\",\"nickname\":\"Halley\"}"}}"#,
+    )
+    .expect("json should parse");
+    let output = reader
+        .parse_subagent_session_payload(
+            16,
+            &output_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("spawn_agent function_call_output should produce event");
+    assert_eq!(output.event_type, "collab.spawn_agent");
+    assert_eq!(output.payload["new_thread_id"].as_str(), Some("sub-1"));
+    assert_eq!(
+        output.payload["new_agent_nickname"].as_str(),
+        Some("Halley")
+    );
+    assert_eq!(
+        output.payload["receiver_thread_ids"][0].as_str(),
+        Some("sub-1")
+    );
+    assert_eq!(
+        output.payload["agents_states"]["sub-1"]["agent_nickname"].as_str(),
+        Some("Halley")
+    );
+}
+
+#[test]
 fn subagent_function_call_send_input_is_normalized_as_collab_event() {
     let mut reader = make_reader();
     let mut call_names = HashMap::new();
@@ -1167,7 +1281,7 @@ fn subagent_response_item_message_and_reasoning_are_normalized() {
     let imported = Path::new("/tmp/subagent.jsonl");
 
     let message_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
-        r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"text":"hello"},{"text":"world"}]}}"#,
+        r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"},{"type":"output_text","text":"world"}]}}"#,
     )
     .expect("json should parse");
     let message = reader
@@ -1182,8 +1296,9 @@ fn subagent_response_item_message_and_reasoning_are_normalized() {
             &mut subagent_counts,
         )
         .expect("message should produce event");
-    assert_eq!(message.event_type, "message.agent");
+    assert_eq!(message.event_type, "message.assistant");
     assert_eq!(message.payload["role"].as_str(), Some("assistant"));
+    assert_eq!(message.payload["direction"].as_str(), Some("output_text"));
     assert_eq!(message.payload["text"].as_str(), Some("hello\nworld"));
 
     let reasoning_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
@@ -1230,7 +1345,10 @@ fn subagent_event_msg_agent_message_and_meta_normalization() {
             &mut subagent_counts,
         )
         .expect("event_msg agent_message should produce event");
-    assert_eq!(event.event_type, "message.commentary");
+    assert_eq!(event.event_type, "message.assistant");
+    assert_eq!(event.payload["role"].as_str(), Some("assistant"));
+    assert_eq!(event.payload["direction"].as_str(), Some("output_text"));
+    assert_eq!(event.payload["phase"].as_str(), Some("completed"));
     assert_eq!(
         event.payload["text_links"]["request_id"].as_str(),
         Some("01234567-89ab-cdef-0123-456789abcdef")
@@ -1312,6 +1430,39 @@ fn subagent_event_msg_agent_message_and_meta_normalization() {
     assert_eq!(
         unknown_meta.payload["raw"]["payload"]["type"].as_str(),
         Some("custom_meta")
+    );
+}
+
+#[test]
+fn subagent_event_msg_user_message_is_normalized_with_role_and_direction() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let user_message: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"user_message","message":"возможность просмотра дерева событий по файлу сессии","images":[],"local_images":[],"text_elements":[]}}"#,
+    )
+    .expect("json should parse");
+    let event = reader
+        .parse_subagent_session_payload(
+            22,
+            &user_message,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("event_msg user_message should produce event");
+    assert_eq!(event.event_type, "message.user");
+    assert_eq!(event.payload["role"].as_str(), Some("user"));
+    assert_eq!(event.payload["direction"].as_str(), Some("input_text"));
+    assert_eq!(
+        event.payload["text"].as_str(),
+        Some("возможность просмотра дерева событий по файлу сессии")
     );
 }
 
@@ -1685,8 +1836,250 @@ fn subagent_response_item_commentary_message_is_normalized() {
         )
         .expect("commentary message should produce event");
 
-    assert_eq!(commentary.event_type, "message.commentary");
+    assert_eq!(commentary.event_type, "message.assistant");
+    assert_eq!(commentary.payload["phase"].as_str(), Some("commentary"));
     assert_eq!(commentary.payload["text"].as_str(), Some("thinking aloud"));
+}
+
+#[test]
+fn subagent_event_msg_agent_message_is_deduplicated_after_matching_response_item_message() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let response_item_message: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"text":"thinking aloud"}]}}"#,
+    )
+    .expect("json should parse");
+    let normalized = reader
+        .parse_subagent_session_payload(
+            30,
+            &response_item_message,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("response_item message should produce event");
+    assert_eq!(normalized.event_type, "message.assistant");
+    assert_eq!(normalized.payload["text"].as_str(), Some("thinking aloud"));
+
+    let duplicate_event_msg: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"agent_message","message":"thinking aloud","phase":"commentary"}}"#,
+    )
+    .expect("json should parse");
+    let duplicate = reader.parse_subagent_session_payload(
+        31,
+        &duplicate_event_msg,
+        imported,
+        "parent-1",
+        "thread-1",
+        &mut call_names,
+        &mut tool_counts,
+        &mut subagent_counts,
+    );
+    assert!(duplicate.is_none(), "duplicate event_msg should be skipped");
+}
+
+#[test]
+fn subagent_response_item_message_is_deduplicated_after_matching_event_msg_agent_message() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let event_msg: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"agent_message","message":"thinking aloud","phase":"commentary"}}"#,
+    )
+    .expect("json should parse");
+    let normalized = reader
+        .parse_subagent_session_payload(
+            31,
+            &event_msg,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("event_msg should produce event");
+    assert_eq!(normalized.event_type, "message.assistant");
+    assert_eq!(normalized.payload["text"].as_str(), Some("thinking aloud"));
+
+    let duplicate_response_item: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"thinking aloud"}]}}"#,
+        )
+        .expect("json should parse");
+    let duplicate = reader.parse_subagent_session_payload(
+        32,
+        &duplicate_response_item,
+        imported,
+        "parent-1",
+        "thread-1",
+        &mut call_names,
+        &mut tool_counts,
+        &mut subagent_counts,
+    );
+    assert!(
+        duplicate.is_none(),
+        "duplicate response_item should be skipped"
+    );
+}
+
+#[test]
+fn subagent_event_msg_user_message_is_deduplicated_after_matching_response_item_message() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let response_item_message: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"возможность просмотра дерева событий по файлу сессии"}]}}"#,
+    )
+    .expect("json should parse");
+    let normalized = reader
+        .parse_subagent_session_payload(
+            32,
+            &response_item_message,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("response_item user message should produce event");
+    assert_eq!(normalized.event_type, "message.user");
+    assert_eq!(normalized.payload["role"].as_str(), Some("user"));
+    assert_eq!(normalized.payload["direction"].as_str(), Some("input_text"));
+    assert_eq!(
+        normalized.payload["text"].as_str(),
+        Some("возможность просмотра дерева событий по файлу сессии")
+    );
+
+    let duplicate_event_msg: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"user_message","message":"возможность просмотра дерева событий по файлу сессии","images":[],"local_images":[],"text_elements":[]}}"#,
+    )
+    .expect("json should parse");
+    let duplicate = reader.parse_subagent_session_payload(
+        33,
+        &duplicate_event_msg,
+        imported,
+        "parent-1",
+        "thread-1",
+        &mut call_names,
+        &mut tool_counts,
+        &mut subagent_counts,
+    );
+    assert!(
+        duplicate.is_none(),
+        "duplicate user_message should be skipped"
+    );
+}
+
+#[test]
+fn subagent_response_item_user_message_is_deduplicated_after_matching_event_msg_user_message() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let event_msg: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"user_message","message":"возможность просмотра дерева событий по файлу сессии","images":[],"local_images":[],"text_elements":[]}}"#,
+    )
+    .expect("json should parse");
+    let normalized = reader
+        .parse_subagent_session_payload(
+            33,
+            &event_msg,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("event_msg user_message should produce event");
+    assert_eq!(normalized.event_type, "message.user");
+    assert_eq!(
+        normalized.payload["text"].as_str(),
+        Some("возможность просмотра дерева событий по файлу сессии")
+    );
+
+    let duplicate_response_item: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(
+            r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"возможность просмотра дерева событий по файлу сессии"}]}}"#,
+        )
+        .expect("json should parse");
+    let duplicate = reader.parse_subagent_session_payload(
+        34,
+        &duplicate_response_item,
+        imported,
+        "parent-1",
+        "thread-1",
+        &mut call_names,
+        &mut tool_counts,
+        &mut subagent_counts,
+    );
+    assert!(
+        duplicate.is_none(),
+        "duplicate response_item user message should be skipped"
+    );
+}
+
+#[test]
+fn subagent_messages_with_different_phase_are_not_deduplicated() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let event_msg: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"event_msg","payload":{"type":"agent_message","message":"thinking aloud","phase":"commentary"}}"#,
+    )
+    .expect("json should parse");
+    let normalized = reader
+        .parse_subagent_session_payload(
+            35,
+            &event_msg,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("event_msg should produce event");
+    assert_eq!(normalized.event_type, "message.assistant");
+
+    let response_item: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"response_item","payload":{"type":"message","role":"assistant","phase":"completed","content":[{"type":"output_text","text":"thinking aloud"}]}}"#,
+    )
+    .expect("json should parse");
+    let not_duplicate = reader
+        .parse_subagent_session_payload(
+            36,
+            &response_item,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("different phase should keep second message");
+    assert_eq!(not_duplicate.event_type, "message.assistant");
+    assert_eq!(not_duplicate.payload["phase"].as_str(), Some("completed"));
 }
 
 #[test]
@@ -1714,14 +2107,14 @@ fn subagent_turn_context_normalization() {
         )
         .expect("turn_context should produce event");
     assert_eq!(event.event_type, "runtime.context");
-    assert_eq!(event.payload["turn_id"].as_str(), Some("t-1"));
+    assert!(event.payload.get("turn_id").is_none());
     assert_eq!(event.payload["cwd"].as_str(), Some("/workspace"));
     assert_eq!(
-        event.payload["sandbox_policy_type"].as_str(),
+        event.payload["sandbox_policy"]["type"].as_str(),
         Some("workspace-write")
     );
     assert_eq!(
-        event.payload["collaboration_mode_kind"].as_str(),
+        event.payload["collaboration_mode"]["mode"].as_str(),
         Some("default")
     );
 }
