@@ -464,13 +464,35 @@ fn render_timeline_items(
     }
 
     out.push_str("<div class=\"thread-flow\">");
-    for item in items {
-        match item {
-            TimelineItem::Event(node) => render_event_node(out, node, depth, last_token_usage),
-            TimelineItem::Thread(thread) => render_thread_html(out, thread, depth + 1),
-        }
-    }
+    render_timeline_items_internal(out, items, depth, last_token_usage, true);
     out.push_str("</div>");
+}
+
+fn render_timeline_items_internal(
+    out: &mut String,
+    items: &[TimelineItem],
+    depth: usize,
+    last_token_usage: &mut TokenUsage,
+    group_task_lifecycles: bool,
+) {
+    let mut index = 0usize;
+    while index < items.len() {
+        if group_task_lifecycles {
+            if let Some((end_index, is_closed)) = task_lifecycle_segment_end(items, index) {
+                render_task_lifecycle_segment(
+                    out,
+                    &items[index..=end_index],
+                    depth,
+                    last_token_usage,
+                    is_closed,
+                );
+                index = end_index + 1;
+                continue;
+            }
+        }
+        render_timeline_item(out, &items[index], depth, last_token_usage);
+        index += 1;
+    }
 }
 
 fn render_event_flow(out: &mut String, events: &[EventEntry]) {
@@ -485,6 +507,36 @@ fn render_event_flow(out: &mut String, events: &[EventEntry]) {
         render_event_card(out, event, &mut last_token_usage);
     }
     out.push_str("</div>");
+}
+
+fn render_timeline_item(
+    out: &mut String,
+    item: &TimelineItem,
+    depth: usize,
+    last_token_usage: &mut TokenUsage,
+) {
+    match item {
+        TimelineItem::Event(node) => render_event_node(out, node, depth, last_token_usage),
+        TimelineItem::Thread(thread) => render_thread_html(out, thread, depth + 1),
+    }
+}
+
+fn render_task_lifecycle_segment(
+    out: &mut String,
+    items: &[TimelineItem],
+    depth: usize,
+    last_token_usage: &mut TokenUsage,
+    is_closed: bool,
+) {
+    let class_name = if is_closed {
+        "task-lifecycle is-closed"
+    } else {
+        "task-lifecycle is-open"
+    };
+    let _ = write!(out, "<section class=\"{}\">", class_name);
+    out.push_str("<div class=\"thread-flow task-lifecycle-items\">");
+    render_timeline_items_internal(out, items, depth, last_token_usage, false);
+    out.push_str("</div></section>");
 }
 
 fn render_event_node(
@@ -571,6 +623,46 @@ fn render_event_node(
         out.push_str("<div class=\"children\">");
         render_timeline_items(out, &node.children, depth + 1, last_token_usage);
         out.push_str("</div>");
+    }
+}
+
+fn task_lifecycle_segment_end(items: &[TimelineItem], start_index: usize) -> Option<(usize, bool)> {
+    let start_event = timeline_item_event(items.get(start_index)?)?;
+    if !is_task_started_event(start_event) {
+        return None;
+    }
+
+    let start_turn_id = start_event.turn_id.as_deref();
+    let mut fallback_end = items.len().saturating_sub(1);
+
+    for (index, item) in items.iter().enumerate().skip(start_index + 1) {
+        let Some(event) = timeline_item_event(item) else {
+            continue;
+        };
+
+        if is_task_completed_event(event) {
+            let same_turn = match (start_turn_id, event.turn_id.as_deref()) {
+                (Some(left), Some(right)) => left == right,
+                _ => true,
+            };
+            if same_turn {
+                return Some((index, true));
+            }
+        }
+
+        if is_task_started_event(event) {
+            fallback_end = index.saturating_sub(1);
+            break;
+        }
+    }
+
+    Some((fallback_end.max(start_index), false))
+}
+
+fn timeline_item_event(item: &TimelineItem) -> Option<&EventEntry> {
+    match item {
+        TimelineItem::Event(node) => Some(&node.event),
+        TimelineItem::Thread(_) => None,
     }
 }
 
