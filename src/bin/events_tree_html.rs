@@ -1266,10 +1266,17 @@ fn render_event_card(out: &mut String, event: &EventEntry, last_token_usage: &mu
 }
 
 fn event_card_class(event: &EventEntry) -> &'static str {
-    if event.event_type == MESSAGE_USER {
-        "event-card is-user-prompt"
-    } else {
-        "event-card"
+    match (
+        event.event_type == MESSAGE_USER,
+        is_task_started_event(event),
+        is_task_completed_event(event),
+    ) {
+        (true, false, false) => "event-card is-user-prompt",
+        (false, true, false) => "event-card is-task-started",
+        (false, false, true) => "event-card is-task-completed",
+        (true, true, false) => "event-card is-user-prompt is-task-started",
+        (true, false, true) => "event-card is-user-prompt is-task-completed",
+        _ => "event-card",
     }
 }
 
