@@ -1,4 +1,6 @@
-use codex_log::session::{LoadedSession, SessionCatalogPage, TailCursor, TailResult};
+use codex_log::session::{
+    IndexedSessionCatalogPage, LoadedSession, SessionCatalogPage, TailCursor, TailResult,
+};
 use tauri::State;
 
 use crate::{DetectCodexHomeResponse, InitializeCodexHomeResponse, SessionPreview, ViewerBackend};
@@ -33,6 +35,18 @@ pub fn list_sessions(
 }
 
 #[tauri::command]
+pub fn list_indexed_sessions(
+    state: State<'_, ViewerBackend>,
+    limit: Option<usize>,
+    cursor: Option<String>,
+    query: Option<String>,
+) -> CommandResult<IndexedSessionCatalogPage> {
+    state
+        .list_indexed_sessions(limit, cursor.as_deref(), query.as_deref())
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 pub fn load_session_preview(
     state: State<'_, ViewerBackend>,
     session_ref: String,
@@ -40,6 +54,17 @@ pub fn load_session_preview(
 ) -> CommandResult<SessionPreview> {
     state
         .load_session_preview(&session_ref, event_limit)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn load_session_preview_by_id(
+    state: State<'_, ViewerBackend>,
+    session_id: String,
+    event_limit: Option<usize>,
+) -> CommandResult<SessionPreview> {
+    state
+        .load_session_preview_by_id(&session_id, event_limit)
         .map_err(|err| err.to_string())
 }
 

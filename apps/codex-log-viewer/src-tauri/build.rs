@@ -13,7 +13,9 @@ fn main() {
             "detect_codex_home",
             "initialize_codex_home",
             "list_sessions",
+            "list_indexed_sessions",
             "load_session_preview",
+            "load_session_preview_by_id",
             "load_session",
             "tail_session",
         ]));

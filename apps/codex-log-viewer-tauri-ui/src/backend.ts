@@ -37,6 +37,21 @@ export type SessionCatalogPage = {
   diagnostics: SessionDiagnostic[];
 };
 
+export type IndexedSessionSummary = {
+  session_id: string;
+  updated_at: string;
+  thread_name: string | null;
+  cwd: string | null;
+  agent_name: string | null;
+  tokens_used: number | null;
+};
+
+export type IndexedSessionCatalogPage = {
+  items: IndexedSessionSummary[];
+  next_cursor: string | null;
+  diagnostics: SessionDiagnostic[];
+};
+
 export type ListSessionsArgs = {
   query?: string;
   cursor?: string | null;
@@ -150,9 +165,26 @@ export function listSessions(args: ListSessionsArgs = {}) {
   });
 }
 
+export function listIndexedSessions(args: ListSessionsArgs = {}) {
+  const query =
+    args.query && args.query.trim().length > 0 ? args.query.trim() : null;
+  return invokeBackend<IndexedSessionCatalogPage>("list_indexed_sessions", {
+    limit: args.limit ?? 40,
+    query,
+    cursor: args.cursor ?? null,
+  });
+}
+
 export function loadSessionPreview(sessionRef: string) {
   return invokeBackend<SessionPreview>("load_session_preview", {
     sessionRef,
+    eventLimit: 80,
+  });
+}
+
+export function loadSessionPreviewById(sessionId: string) {
+  return invokeBackend<SessionPreview>("load_session_preview_by_id", {
+    sessionId,
     eventLimit: 80,
   });
 }

@@ -248,7 +248,8 @@ flowchart LR
 flowchart TD
     MAIN[JSON lines из stdout] --> R1[Читатель основного потока]
     SUB[JSONL из подчинённых сессий] --> CAT[SessionCatalog / SessionLoader]
-    IDX[session_index.jsonl overlay] --> CAT
+    IDX[session_index.jsonl overlay / fallback] --> CAT
+    SQL[state_*.sqlite threads] --> CAT
     CAT --> R2[Читатель подчинённых сессий]
     R1 --> REC[Канонический EventRecord]
     R2 --> REC
@@ -518,8 +519,12 @@ classDiagram
 
 Для `CODEX_HOME` дополнительно действует split между двумя слоями:
 
-- session files в `CODEX_HOME/sessions/**` это source of truth существования сессии;
-- `session_index.jsonl` это только metadata overlay для viewer и runtime discovery.
+- session files в `CODEX_HOME/sessions/**` остаются source of truth для file-backed discovery,
+  preview и tail;
+- `session_index.jsonl` используется как metadata overlay для viewer v1 и как fallback-каталог
+  для dialog picker в `codex-log-viewer-tauri-ui`, если недоступен `state_*.sqlite`.
+- `state_*.sqlite`, таблица `threads`, используется как основной каталог для
+  `list_indexed_sessions` и dialog picker в `codex-log-viewer-tauri-ui`.
 
 ### 8.4 Наблюдаемость и телеметрия
 

@@ -12,8 +12,9 @@ fn main() {
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "detect_codex_home",
             "initialize_codex_home",
-            "list_sessions",
+            "list_indexed_sessions",
             "load_session_preview",
+            "load_session_preview_by_id",
             "tail_session",
         ]));
     tauri_build::try_build(attributes).expect("tauri build script should succeed");

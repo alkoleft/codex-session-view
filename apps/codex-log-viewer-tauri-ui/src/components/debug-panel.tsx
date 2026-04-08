@@ -306,9 +306,19 @@ export function DebugPanel() {
     let detachConsole: (() => void) | undefined;
 
     if (isTauri()) {
-      void attachConsole().then((detach) => {
-        detachConsole = detach;
-      });
+      void attachConsole()
+        .then((detach) => {
+          detachConsole = detach;
+        })
+        .catch((error) => {
+          emitDebugEvent({
+            id: crypto.randomUUID(),
+            kind: "log",
+            level: "error",
+            message: `attachConsole failed: ${serializeError(error).message}`,
+            timestamp: new Date().toISOString(),
+          });
+        });
     }
 
     return () => {
@@ -373,19 +383,43 @@ export function DebugPanel() {
   }
 
   function refreshSnapshot() {
-    void loadSnapshot().then((nextSnapshot) => {
-      setSnapshot(nextSnapshot);
-    });
+    void loadSnapshot()
+      .then((nextSnapshot) => {
+        setSnapshot(nextSnapshot);
+      })
+      .catch((error) => {
+        setErrors((current) =>
+          pushRecent(current, {
+            id: crypto.randomUUID(),
+            timestamp: new Date().toISOString(),
+            source: "unhandledrejection",
+            message: `snapshot refresh failed: ${serializeError(error).message}`,
+          }),
+        );
+      });
   }
 
   useEffect(() => {
     let cancelled = false;
 
-    void loadSnapshot().then((nextSnapshot) => {
-      if (!cancelled) {
-        setSnapshot(nextSnapshot);
-      }
-    });
+    void loadSnapshot()
+      .then((nextSnapshot) => {
+        if (!cancelled) {
+          setSnapshot(nextSnapshot);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setErrors((current) =>
+            pushRecent(current, {
+              id: crypto.randomUUID(),
+              timestamp: new Date().toISOString(),
+              source: "unhandledrejection",
+              message: `initial snapshot failed: ${serializeError(error).message}`,
+            }),
+          );
+        }
+      });
 
     return () => {
       cancelled = true;

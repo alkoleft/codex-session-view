@@ -4,7 +4,8 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -22,6 +23,8 @@ use crate::util::{hash8, normalize_path, utc_now_iso};
 const DEFAULT_PAGE_LIMIT: usize = 50;
 const MAX_PAGE_LIMIT: usize = 500;
 const RECENT_DEDUP_WINDOW: usize = 128;
+const STATE_DB_PREFIX: &str = "state_";
+const STATE_DB_SUFFIX: &str = ".sqlite";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedCodexHome {
@@ -142,6 +145,23 @@ pub struct SessionDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionCatalogPage {
     pub items: Vec<SessionSummary>,
+    pub next_cursor: Option<String>,
+    pub diagnostics: Vec<SessionDiagnostic>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexedSessionSummary {
+    pub session_id: String,
+    pub updated_at: String,
+    pub thread_name: Option<String>,
+    pub cwd: Option<String>,
+    pub agent_name: Option<String>,
+    pub tokens_used: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndexedSessionCatalogPage {
+    pub items: Vec<IndexedSessionSummary>,
     pub next_cursor: Option<String>,
     pub diagnostics: Vec<SessionDiagnostic>,
 }
@@ -268,6 +288,71 @@ impl SessionCatalog {
         })
     }
 
+    pub fn list_indexed_sessions(
+        &self,
+        limit: Option<usize>,
+        cursor: Option<&str>,
+        query: Option<&str>,
+    ) -> AppResult<IndexedSessionCatalogPage> {
+        let limit = limit.unwrap_or(DEFAULT_PAGE_LIMIT).clamp(1, MAX_PAGE_LIMIT);
+        let offset = cursor
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| {
+                value.parse::<usize>().map_err(|_| AppError::Validation {
+                    field: "cursor",
+                    reason: "must be a numeric offset".to_string(),
+                })
+            })
+            .transpose()?
+            .unwrap_or(0);
+
+        let query = query
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase);
+
+        let mut diagnostics = Vec::new();
+        let mut sessions =
+            if let Some(state_sessions) = self.load_state_indexed_sessions(&mut diagnostics)? {
+                state_sessions
+            } else {
+                self.load_index_overlay(&mut diagnostics)?
+                    .into_iter()
+                    .map(|(session_id, entry)| IndexedSessionSummary {
+                        session_id,
+                        updated_at: entry.updated_at,
+                        thread_name: entry.thread_name,
+                        cwd: None,
+                        agent_name: None,
+                        tokens_used: None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+        sessions.retain(|summary| matches_index_query(summary, query.as_deref()));
+
+        sessions.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+
+        let next_cursor = if offset + limit < sessions.len() {
+            Some((offset + limit).to_string())
+        } else {
+            None
+        };
+        let items = sessions.into_iter().skip(offset).take(limit).collect();
+
+        Ok(IndexedSessionCatalogPage {
+            items,
+            next_cursor,
+            diagnostics,
+        })
+    }
+
     pub fn find_session(&self, session_id: &str) -> AppResult<Option<SessionSummary>> {
         let mut cursor = None;
         loop {
@@ -284,6 +369,29 @@ impl SessionCatalog {
             }
             cursor = page.next_cursor;
         }
+    }
+
+    pub fn resolve_session_ref_by_id(&self, session_id: &str) -> AppResult<Option<String>> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Err(AppError::Validation {
+                field: "session_id",
+                reason: "must not be empty".to_string(),
+            });
+        }
+
+        if let Ok(Some(session_ref)) = self.resolve_session_ref_by_id_from_state_db(session_id) {
+            return Ok(Some(session_ref));
+        }
+
+        let mut best_match: Option<(SystemTime, String)> = None;
+        find_session_ref_by_id(
+            &self.home.sessions_dir,
+            &self.home.sessions_dir,
+            session_id,
+            &mut best_match,
+        )?;
+        Ok(best_match.map(|(_, session_ref)| session_ref))
     }
 
     fn load_index_overlay(
@@ -363,6 +471,123 @@ impl SessionCatalog {
             diagnostics,
         )?;
         Ok(files)
+    }
+
+    fn load_state_indexed_sessions(
+        &self,
+        diagnostics: &mut Vec<SessionDiagnostic>,
+    ) -> AppResult<Option<Vec<IndexedSessionSummary>>> {
+        let Some(state_db_path) = find_latest_state_db_path(&self.home.root)? else {
+            return Ok(None);
+        };
+
+        let connection = match open_state_db(&state_db_path) {
+            Ok(connection) => connection,
+            Err(err) => {
+                diagnostics.push(SessionDiagnostic {
+                    kind: "sqlite_catalog_unavailable".to_string(),
+                    message: format!(
+                        "state sqlite catalog ignored ({}): {err}",
+                        state_db_path.display()
+                    ),
+                    session_id: None,
+                    session_refs: Vec::new(),
+                });
+                return Ok(None);
+            }
+        };
+
+        let mut statement = match connection.prepare(
+            "select id, updated_at, title, first_user_message, cwd, agent_nickname, tokens_used from threads",
+        ) {
+            Ok(statement) => statement,
+            Err(err) => {
+                diagnostics.push(SessionDiagnostic {
+                    kind: "sqlite_catalog_unavailable".to_string(),
+                    message: format!(
+                        "state sqlite catalog ignored ({}): {err}",
+                        state_db_path.display()
+                    ),
+                    session_id: None,
+                    session_refs: Vec::new(),
+                });
+                return Ok(None);
+            }
+        };
+
+        let rows = match statement.query_map([], |row| {
+            let title: String = row.get(2)?;
+            let first_user_message: String = row.get(3)?;
+            let cwd: String = row.get(4)?;
+            let agent_nickname: Option<String> = row.get(5)?;
+            let tokens_used: i64 = row.get(6)?;
+
+            Ok(IndexedSessionSummary {
+                session_id: row.get(0)?,
+                updated_at: unix_seconds_to_rfc3339(row.get(1)?),
+                thread_name: select_thread_name(
+                    Some(title.as_str()),
+                    Some(first_user_message.as_str()),
+                    agent_nickname.as_deref(),
+                ),
+                cwd: optional_text(Some(cwd.as_str())),
+                agent_name: optional_text(agent_nickname.as_deref()),
+                tokens_used: u64::try_from(tokens_used).ok(),
+            })
+        }) {
+            Ok(rows) => rows,
+            Err(err) => {
+                diagnostics.push(SessionDiagnostic {
+                    kind: "sqlite_catalog_unavailable".to_string(),
+                    message: format!(
+                        "state sqlite catalog ignored ({}): {err}",
+                        state_db_path.display()
+                    ),
+                    session_id: None,
+                    session_refs: Vec::new(),
+                });
+                return Ok(None);
+            }
+        };
+
+        let sessions = match rows.collect::<Result<Vec<_>, _>>() {
+            Ok(sessions) => sessions,
+            Err(err) => {
+                diagnostics.push(SessionDiagnostic {
+                    kind: "sqlite_catalog_unavailable".to_string(),
+                    message: format!(
+                        "state sqlite catalog ignored ({}): {err}",
+                        state_db_path.display()
+                    ),
+                    session_id: None,
+                    session_refs: Vec::new(),
+                });
+                return Ok(None);
+            }
+        };
+        Ok(Some(sessions))
+    }
+
+    fn resolve_session_ref_by_id_from_state_db(
+        &self,
+        session_id: &str,
+    ) -> AppResult<Option<String>> {
+        let Some(state_db_path) = find_latest_state_db_path(&self.home.root)? else {
+            return Ok(None);
+        };
+        let connection =
+            open_state_db(&state_db_path).map_err(|err| AppError::Runner(err.to_string()))?;
+        let rollout_path = connection
+            .query_row(
+                "select rollout_path from threads where id = ?1 limit 1",
+                [session_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(|err| AppError::Runner(err.to_string()))?;
+
+        Ok(rollout_path
+            .and_then(|value| rollout_path_to_session_ref(&self.home.sessions_dir, value.trim())))
     }
 }
 
@@ -589,6 +814,20 @@ struct SessionMetaPreview {
     cwd: Option<String>,
 }
 
+trait OptionalRow<T> {
+    fn optional(self) -> Result<Option<T>, rusqlite::Error>;
+}
+
+impl<T> OptionalRow<T> for Result<T, rusqlite::Error> {
+    fn optional(self) -> Result<Option<T>, rusqlite::Error> {
+        match self {
+            Ok(value) => Ok(Some(value)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct ParsedSessionChunk {
     events: Vec<EventRecord>,
@@ -714,6 +953,171 @@ fn read_session_meta_preview(path: &Path) -> AppResult<SessionMetaPreview> {
             .filter(|value| !value.is_empty())
             .map(str::to_string),
     })
+}
+
+fn find_latest_state_db_path(root: &Path) -> AppResult<Option<PathBuf>> {
+    let mut best_match: Option<(u64, SystemTime, PathBuf)> = None;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        let Some(generation) = parse_state_db_generation(file_name) else {
+            continue;
+        };
+        let modified_at = entry
+            .metadata()?
+            .modified()
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+
+        match &best_match {
+            Some((best_generation, best_modified_at, best_path))
+                if *best_generation > generation
+                    || (*best_generation == generation
+                        && (*best_modified_at > modified_at
+                            || (*best_modified_at == modified_at && best_path >= &path))) => {}
+            _ => {
+                best_match = Some((generation, modified_at, path));
+            }
+        }
+    }
+
+    Ok(best_match.map(|(_, _, path)| path))
+}
+
+fn parse_state_db_generation(file_name: &str) -> Option<u64> {
+    file_name
+        .strip_prefix(STATE_DB_PREFIX)?
+        .strip_suffix(STATE_DB_SUFFIX)?
+        .parse::<u64>()
+        .ok()
+}
+
+fn open_state_db(path: &Path) -> Result<Connection, rusqlite::Error> {
+    Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+}
+
+fn unix_seconds_to_rfc3339(value: i64) -> String {
+    Utc.timestamp_opt(value, 0)
+        .single()
+        .map(|timestamp| timestamp.to_rfc3339())
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn select_thread_name(
+    title: Option<&str>,
+    first_user_message: Option<&str>,
+    agent_nickname: Option<&str>,
+) -> Option<String> {
+    [title, first_user_message, agent_nickname]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn optional_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn rollout_path_to_session_ref(sessions_dir: &Path, rollout_path: &str) -> Option<String> {
+    if rollout_path.is_empty() {
+        return None;
+    }
+
+    let normalized = normalize_path(Path::new(rollout_path));
+    if !normalized.is_absolute() || !normalized.is_file() {
+        return None;
+    }
+
+    let relative = normalized.strip_prefix(sessions_dir).ok()?;
+    Some(
+        relative
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(value) => value.to_str(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("/"),
+    )
+}
+
+fn find_session_ref_by_id(
+    base_root: &Path,
+    current_dir: &Path,
+    session_id: &str,
+    best_match: &mut Option<(SystemTime, String)>,
+) -> AppResult<()> {
+    let entries = match fs::read_dir(current_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    };
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            find_session_ref_by_id(base_root, &path, session_id, best_match)?;
+            continue;
+        }
+        if !file_type.is_file()
+            || path.extension().and_then(|value| value.to_str()) != Some("jsonl")
+        {
+            continue;
+        }
+
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if parse_rollout_session_id(file_name) != Some(session_id) {
+            continue;
+        }
+
+        let metadata = entry.metadata()?;
+        let modified_at = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+        let relative = path
+            .strip_prefix(base_root)
+            .expect("session path should stay under sessions root");
+        let session_ref = relative
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(value) => value.to_str(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+
+        match best_match {
+            Some((current_modified_at, current_ref))
+                if *current_modified_at > modified_at
+                    || (*current_modified_at == modified_at && *current_ref <= session_ref) => {}
+            _ => {
+                *best_match = Some((modified_at, session_ref));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_session_lines(
@@ -972,6 +1376,25 @@ fn matches_query(summary: &SessionSummary, query: Option<&str>) -> bool {
     .any(|value| value.to_lowercase().contains(query))
 }
 
+fn matches_index_query(summary: &IndexedSessionSummary, query: Option<&str>) -> bool {
+    let Some(query) = query else {
+        return true;
+    };
+    let query = query.trim();
+    if query.is_empty() {
+        return true;
+    }
+
+    [
+        summary.session_id.as_str(),
+        summary.thread_name.as_deref().unwrap_or_default(),
+        summary.cwd.as_deref().unwrap_or_default(),
+        summary.agent_name.as_deref().unwrap_or_default(),
+    ]
+    .iter()
+    .any(|value| value.to_lowercase().contains(query))
+}
+
 fn session_name_boundary(ch: Option<char>) -> bool {
     ch.is_none_or(|value| !value.is_ascii_alphanumeric())
 }
@@ -1042,8 +1465,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        ResolvedCodexHome, SessionCatalog, SessionLoader, SessionReadContext, SessionReader,
+        IndexedSessionCatalogPage, ResolvedCodexHome, SessionCatalog, SessionLoader,
+        SessionReadContext, SessionReader,
     };
+    use rusqlite::Connection;
 
     fn write_rollout_file(path: &Path, session_id: &str, lines: &[&str]) {
         let mut content = format!(
@@ -1054,6 +1479,78 @@ mod tests {
             content.push('\n');
         }
         fs::write(path, content).expect("rollout file should be written");
+    }
+
+    struct StateThreadRow<'a> {
+        session_id: &'a str,
+        rollout_path: &'a Path,
+        updated_at: i64,
+        cwd: &'a str,
+        title: &'a str,
+        first_user_message: &'a str,
+        agent_nickname: Option<&'a str>,
+        tokens_used: i64,
+    }
+
+    fn write_state_threads_db(home: &Path, rows: &[StateThreadRow<'_>]) {
+        let path = home.join("state_5.sqlite");
+        let connection = Connection::open(&path).expect("state db should open");
+        connection
+            .execute_batch(
+                "create table threads (
+                    id text primary key,
+                    rollout_path text not null,
+                    created_at integer not null,
+                    updated_at integer not null,
+                    source text not null,
+                    model_provider text not null,
+                    cwd text not null,
+                    title text not null,
+                    sandbox_policy text not null,
+                    approval_mode text not null,
+                    tokens_used integer not null default 0,
+                    has_user_event integer not null default 0,
+                    archived integer not null default 0,
+                    archived_at integer,
+                    git_sha text,
+                    git_branch text,
+                    git_origin_url text,
+                    cli_version text not null default '',
+                    first_user_message text not null default '',
+                    agent_nickname text,
+                    agent_role text,
+                    memory_mode text not null default 'enabled',
+                    model text,
+                    reasoning_effort text,
+                    agent_path text
+                );",
+            )
+            .expect("threads table should be created");
+
+        let mut statement = connection
+            .prepare(
+                "insert into threads (
+                    id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
+                    sandbox_policy, approval_mode, tokens_used, has_user_event, archived,
+                    cli_version, first_user_message, agent_nickname, memory_mode
+                ) values (?1, ?2, ?3, ?4, 'cli', 'openai', ?5, ?6, '{\"type\":\"danger-full-access\"}', 'never', ?7, 0, 0, '0.118.0', ?8, ?9, 'enabled')",
+            )
+            .expect("insert statement should prepare");
+        for row in rows {
+            statement
+                .execute((
+                    row.session_id,
+                    row.rollout_path.display().to_string(),
+                    row.updated_at - 60,
+                    row.updated_at,
+                    row.cwd,
+                    row.title,
+                    row.tokens_used,
+                    row.first_user_message,
+                    row.agent_nickname,
+                ))
+                .expect("thread row should insert");
+        }
     }
 
     #[test]
@@ -1142,6 +1639,168 @@ mod tests {
             .diagnostics
             .iter()
             .any(|item| item.kind == "duplicate_session_files"));
+    }
+
+    #[test]
+    fn indexed_catalog_reads_only_session_index() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        fs::create_dir_all(home.join("sessions")).expect("sessions dir should exist");
+
+        fs::write(
+            home.join("session_index.jsonl"),
+            concat!(
+                "{\"id\":\"session-a\",\"thread_name\":\"Alpha\",\"updated_at\":\"2026-04-07T10:01:00Z\"}\n",
+                "{\"id\":\"stale-only\",\"thread_name\":\"Stale\",\"updated_at\":\"2026-04-07T11:00:00Z\"}\n",
+                "{bad json\n"
+            ),
+        )
+        .expect("index should be written");
+
+        let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
+        let catalog = SessionCatalog::new(home);
+        let page: IndexedSessionCatalogPage = catalog
+            .list_indexed_sessions(Some(10), None, None)
+            .expect("indexed catalog should load");
+
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].session_id, "stale-only");
+        assert_eq!(page.items[1].thread_name.as_deref(), Some("Alpha"));
+        assert_eq!(page.items[0].cwd, None);
+        assert_eq!(page.items[0].agent_name, None);
+        assert_eq!(page.items[0].tokens_used, None);
+        assert!(page
+            .diagnostics
+            .iter()
+            .any(|item| item.kind == "invalid_index_line"));
+    }
+
+    #[test]
+    fn indexed_catalog_prefers_sqlite_threads_when_state_db_exists() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let sessions = home.join("sessions").join("2026").join("04").join("07");
+        fs::create_dir_all(&sessions).expect("sessions dir should exist");
+
+        let session_a = sessions.join("rollout-2026-04-07T10-00-00-session-a.jsonl");
+        let session_b = sessions.join("rollout-2026-04-07T10-00-00-session-b.jsonl");
+        write_rollout_file(&session_a, "session-a", &[]);
+        write_rollout_file(&session_b, "session-b", &[]);
+        fs::write(
+            home.join("session_index.jsonl"),
+            "{\"id\":\"session-index-only\",\"thread_name\":\"Index only\",\"updated_at\":\"2026-04-07T11:00:00Z\"}\n",
+        )
+        .expect("index should be written");
+        write_state_threads_db(
+            &home,
+            &[
+                StateThreadRow {
+                    session_id: "session-a",
+                    rollout_path: &session_a,
+                    updated_at: 1_775_560_607,
+                    cwd: "/repo/alpha",
+                    title: "SQLite Alpha",
+                    first_user_message: "ignored",
+                    agent_nickname: None,
+                    tokens_used: 42,
+                },
+                StateThreadRow {
+                    session_id: "session-b",
+                    rollout_path: &session_b,
+                    updated_at: 1_775_560_701,
+                    cwd: "/repo/beta",
+                    title: "",
+                    first_user_message: "",
+                    agent_nickname: Some("Archimedes"),
+                    tokens_used: 777,
+                },
+            ],
+        );
+
+        let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
+        let catalog = SessionCatalog::new(home);
+        let page: IndexedSessionCatalogPage = catalog
+            .list_indexed_sessions(Some(10), None, None)
+            .expect("indexed catalog should load");
+
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].session_id, "session-b");
+        assert_eq!(page.items[0].thread_name.as_deref(), Some("Archimedes"));
+        assert_eq!(page.items[0].cwd.as_deref(), Some("/repo/beta"));
+        assert_eq!(page.items[0].agent_name.as_deref(), Some("Archimedes"));
+        assert_eq!(page.items[0].tokens_used, Some(777));
+        assert_eq!(page.items[1].thread_name.as_deref(), Some("SQLite Alpha"));
+        assert_eq!(page.items[1].cwd.as_deref(), Some("/repo/alpha"));
+        assert_eq!(page.items[1].tokens_used, Some(42));
+        assert!(!page
+            .items
+            .iter()
+            .any(|item| item.session_id == "session-index-only"));
+    }
+
+    #[test]
+    fn resolve_session_ref_by_id_prefers_latest_rollout_file() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let sessions = home.join("sessions").join("2026").join("04").join("07");
+        fs::create_dir_all(&sessions).expect("sessions dir should exist");
+
+        let older = sessions.join("rollout-2026-04-07T10-00-00-session-a.jsonl");
+        let newer = sessions.join("rollout-2026-04-07T10-00-01-session-a.jsonl");
+        write_rollout_file(&older, "session-a", &[]);
+        thread::sleep(Duration::from_millis(20));
+        write_rollout_file(&newer, "session-a", &[]);
+
+        let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
+        let catalog = SessionCatalog::new(home);
+        let session_ref = catalog
+            .resolve_session_ref_by_id("session-a")
+            .expect("resolution should succeed")
+            .expect("session ref should exist");
+
+        assert_eq!(
+            session_ref,
+            "2026/04/07/rollout-2026-04-07T10-00-01-session-a.jsonl"
+        );
+    }
+
+    #[test]
+    fn resolve_session_ref_by_id_prefers_sqlite_rollout_path() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let sessions = home.join("sessions").join("2026").join("04").join("07");
+        fs::create_dir_all(&sessions).expect("sessions dir should exist");
+
+        let older = sessions.join("rollout-2026-04-07T10-00-00-session-a.jsonl");
+        let newer = sessions.join("rollout-2026-04-07T10-00-01-session-a.jsonl");
+        write_rollout_file(&older, "session-a", &[]);
+        thread::sleep(Duration::from_millis(20));
+        write_rollout_file(&newer, "session-a", &[]);
+        write_state_threads_db(
+            &home,
+            &[StateThreadRow {
+                session_id: "session-a",
+                rollout_path: &older,
+                updated_at: 1_775_560_607,
+                cwd: "/repo/alpha",
+                title: "SQLite Alpha",
+                first_user_message: "SQLite Alpha",
+                agent_nickname: None,
+                tokens_used: 42,
+            }],
+        );
+
+        let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
+        let catalog = SessionCatalog::new(home);
+        let session_ref = catalog
+            .resolve_session_ref_by_id("session-a")
+            .expect("resolution should succeed")
+            .expect("session ref should exist");
+
+        assert_eq!(
+            session_ref,
+            "2026/04/07/rollout-2026-04-07T10-00-00-session-a.jsonl"
+        );
     }
 
     #[test]

@@ -34,10 +34,16 @@ discovery, tail и tree/view-model теперь находится в `crates/co
 
 ### 1.1.1. Discovery и metadata overlay для session-файлов
 
-Для `SessionCatalog` и viewer v1 источником истины существования сессии считается файловая
-структура `CODEX_HOME/sessions/YYYY/MM/DD/*.jsonl`.
+Сейчас в проекте есть два режима discovery:
 
-`session_index.jsonl` используется только как metadata overlay:
+- `SessionCatalog::list_sessions` и viewer v1 продолжают считать источником истины файловую
+  структуру `CODEX_HOME/sessions/YYYY/MM/DD/*.jsonl`, а `session_index.jsonl` используют как
+  metadata overlay;
+- `SessionCatalog::list_indexed_sessions` и dialog picker в `codex-log-viewer-tauri-ui`
+  в первую очередь читают `CODEX_HOME/state_*.sqlite`, таблицу `threads`, и только при
+  недоступности SQLite откатываются к `session_index.jsonl`.
+
+Для file-backed каталога действуют прежние правила:
 
 - файл есть, индекса нет: сессия остаётся в каталоге с `index_status="missing"`;
 - индекс есть, файла нет: запись считается stale и в основной список не попадает;
@@ -46,6 +52,20 @@ discovery, tail и tree/view-model теперь находится в `crates/co
 - дубли session-файлов для одного `session_id`: primary выбирается по самому свежему `mtime`,
   остальные фиксируются в diagnostics как `duplicate_session_files`;
 - битые строки `session_index.jsonl` пропускаются fail-soft и не ломают построение каталога.
+
+Для SQLite-backed каталога действуют отдельные правила:
+
+- при наличии `state_*.sqlite` список строится по таблице `threads`, без обхода
+  `CODEX_HOME/sessions`;
+- `thread_name` берётся из `threads.title`, а если он пустой, используется
+  `threads.first_user_message` или `threads.agent_nickname`;
+- `updated_at` берётся из `threads.updated_at` и конвертируется из Unix seconds в RFC3339;
+- конкретный `session_ref` для preview не хранится в списке и резолвится отдельно по
+  `session_id` через `threads.rollout_path`;
+- если SQLite недоступен или несовместим по схеме, каталог fail-soft откатывается к
+  `session_index.jsonl`, а причина попадает в diagnostics;
+- если rollout-файл для выбранного `session_id` не найден ни по `threads.rollout_path`, ни
+  файловым fallback-поиском, preview завершается ошибкой открытия.
 
 ### 1.2. Канонический on-disk формат
 

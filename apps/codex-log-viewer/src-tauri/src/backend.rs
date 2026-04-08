@@ -5,8 +5,8 @@ use codex_log::error::{AppError, AppResult};
 use codex_log::events::projector::{categorize_event, summarize_event_full, EventSummaryCategory};
 use codex_log::events::record::EventRecord;
 use codex_log::session::{
-    LoadedSession, ResolvedCodexHome, SessionCatalog, SessionCatalogPage, SessionLoader,
-    SessionReadContext, SessionReader, TailCursor, TailResult,
+    IndexedSessionCatalogPage, LoadedSession, ResolvedCodexHome, SessionCatalog,
+    SessionCatalogPage, SessionLoader, SessionReadContext, SessionReader, TailCursor, TailResult,
 };
 use codex_log::tree::validate_standalone_rollout_root;
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,16 @@ impl ViewerBackend {
         catalog.list_sessions(limit, cursor, query)
     }
 
+    pub fn list_indexed_sessions(
+        &self,
+        limit: Option<usize>,
+        cursor: Option<&str>,
+        query: Option<&str>,
+    ) -> AppResult<IndexedSessionCatalogPage> {
+        let catalog = SessionCatalog::new(self.require_home()?);
+        catalog.list_indexed_sessions(limit, cursor, query)
+    }
+
     pub fn load_session(
         &self,
         session_ref: &str,
@@ -114,6 +124,48 @@ impl ViewerBackend {
 
         Ok(SessionPreview {
             session_ref: session_ref.to_string(),
+            session_id: context.session_id,
+            event_count: read_result.events.len(),
+            first_ts: read_result.events.first().map(|event| event.ts.clone()),
+            last_ts: read_result.events.last().map(|event| event.ts.clone()),
+            tail_cursor: read_result.tail_cursor,
+            recent_events,
+        })
+    }
+
+    pub fn load_session_preview_by_id(
+        &self,
+        session_id: &str,
+        event_limit: Option<usize>,
+    ) -> AppResult<SessionPreview> {
+        let home = self.require_home()?;
+        let catalog = SessionCatalog::new(home.clone());
+        let session_ref = catalog
+            .resolve_session_ref_by_id(session_id)?
+            .ok_or_else(|| {
+                AppError::Runner(format!(
+                    "session file for session_id={} was not found under CODEX_HOME/sessions",
+                    session_id.trim()
+                ))
+            })?;
+
+        let path = home.resolve_session_ref(&session_ref)?;
+        let context = self.build_read_context(&path, &session_ref, None)?;
+        let read_result = SessionReader::load_all(&path, &context)?;
+        let limit = event_limit
+            .unwrap_or(DEFAULT_PREVIEW_LIMIT)
+            .clamp(1, MAX_PREVIEW_LIMIT);
+
+        let recent_events = read_result
+            .events
+            .iter()
+            .rev()
+            .take(limit)
+            .map(preview_event)
+            .collect();
+
+        Ok(SessionPreview {
+            session_ref,
             session_id: context.session_id,
             event_count: read_result.events.len(),
             first_ts: read_result.events.first().map(|event| event.ts.clone()),
@@ -269,6 +321,34 @@ mod tests {
         assert_eq!(preview.session_id, "session-a");
         assert_eq!(preview.event_count, 2);
         assert_eq!(preview.recent_events.len(), 2);
+    }
+
+    #[test]
+    fn indexed_catalog_and_preview_by_id_work_without_catalog_scan_path_output() {
+        let (_tmp, home, session_ref) = create_codex_home();
+        std::fs::write(
+            home.join("session_index.jsonl"),
+            "{\"id\":\"session-a\",\"thread_name\":\"Alpha\",\"updated_at\":\"2026-04-07T10:01:00Z\"}\n",
+        )
+        .expect("index should be written");
+
+        let backend = ViewerBackend::default();
+        backend
+            .initialize_codex_home(Some(home.display().to_string()))
+            .expect("home should initialize");
+
+        let indexed_page = backend
+            .list_indexed_sessions(Some(10), None, None)
+            .expect("indexed sessions should list");
+        assert_eq!(indexed_page.items.len(), 1);
+        assert_eq!(indexed_page.items[0].session_id, "session-a");
+        assert_eq!(indexed_page.items[0].thread_name.as_deref(), Some("Alpha"));
+
+        let preview = backend
+            .load_session_preview_by_id("session-a", Some(10))
+            .expect("session preview by id should load");
+        assert_eq!(preview.session_id, "session-a");
+        assert_eq!(preview.session_ref, session_ref);
     }
 
     #[test]
