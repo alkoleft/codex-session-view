@@ -179,6 +179,15 @@ export function SessionEventList({
   session: LoadedSession;
 }) {
   const rootItems = session.tree.roots.flatMap((thread) => thread.items);
+  const orphanEvents = [...session.tree.orphan_events].sort((left, right) => {
+    const leftRenderSeq = left.operation_terminal_seq ?? left.seq;
+    const rightRenderSeq = right.operation_terminal_seq ?? right.seq;
+    if (leftRenderSeq !== rightRenderSeq) {
+      return rightRenderSeq - leftRenderSeq;
+    }
+
+    return left.seq - right.seq;
+  });
   const threadMetaById = buildThreadPresentationIndex(session);
   const eventElementMapRef = useRef(new Map<string, HTMLDivElement>());
 
@@ -223,9 +232,9 @@ export function SessionEventList({
           />
         ) : null}
 
-        {session.tree.orphan_events.length > 0 ? (
+        {orphanEvents.length > 0 ? (
           <div className="flex flex-col">
-            {session.tree.orphan_events.map((event, index) => (
+            {orphanEvents.map((event, index) => (
               <TimelineListItem key={`orphan-${event.event_id}-${index}`} withDivider={index > 0}>
                 <TimelineEventCard
                   eventIds={[event.event_id]}

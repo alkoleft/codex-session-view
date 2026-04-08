@@ -31,6 +31,7 @@ import {
   type SessionDiagnostic,
   type SessionPreview,
   type TailCursor,
+  type TimelineItem,
 } from "./backend";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -46,7 +47,6 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -249,6 +249,59 @@ function readSessionRef(payload: OpenSessionEventPayload) {
   }
 
   return "";
+}
+
+function findLatestTimelineEvent(items: TimelineItem[]): { eventId: string; seq: number } | null {
+  let latest: { eventId: string; seq: number } | null = null;
+
+  for (const item of items) {
+    if ("Event" in item) {
+      const candidate = {
+        eventId: item.Event.event.event_id,
+        seq: item.Event.event.seq,
+      };
+      if (!latest || candidate.seq > latest.seq) {
+        latest = candidate;
+      }
+
+      const childLatest = findLatestTimelineEvent(item.Event.children);
+      if (childLatest && (!latest || childLatest.seq > latest.seq)) {
+        latest = childLatest;
+      }
+      continue;
+    }
+
+    const childLatest = findLatestTimelineEvent(item.Thread.items);
+    if (childLatest && (!latest || childLatest.seq > latest.seq)) {
+      latest = childLatest;
+    }
+  }
+
+  return latest;
+}
+
+function findLatestSessionEventId(session: LoadedSession) {
+  const rootsLatest = findLatestTimelineEvent(
+    session.tree.roots.flatMap((thread) => thread.items),
+  );
+  const orphanLatest = session.tree.orphan_events.reduce<{ eventId: string; seq: number } | null>(
+    (current, event) => {
+      const candidate = { eventId: event.event_id, seq: event.seq };
+      if (!current || candidate.seq > current.seq) {
+        return candidate;
+      }
+      return current;
+    },
+    null,
+  );
+
+  if (!rootsLatest) {
+    return orphanLatest?.eventId ?? null;
+  }
+  if (!orphanLatest) {
+    return rootsLatest.eventId;
+  }
+  return rootsLatest.seq >= orphanLatest.seq ? rootsLatest.eventId : orphanLatest.eventId;
 }
 
 function CatalogMetaItem({
@@ -968,10 +1021,15 @@ export default function App() {
 
           tailCursorRef.current = preview.tail_cursor;
           setTailCursor(preview.tail_cursor);
+          const latestEventId = findLatestSessionEventId(loadedSession);
           startTransition(() => {
             setSelectedLoadedSession(loadedSession);
             setSelectedPreview(preview);
           });
+          if (latestEventId) {
+            setTimelineFocusEventId(latestEventId);
+            setTimelineFocusRevision((current) => current + 1);
+          }
           setTailStatus(`Основная лента обновлена. Новых событий: ${result.events.length}.`);
         } else {
           setTailStatus("Новых событий пока нет, tail остаётся активным.");
@@ -993,7 +1051,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [liveTailEnabled, selectedSessionRef, tailCursor]);
+  }, [liveTailEnabled, selectedSessionRef]);
 
   return (
     <>
@@ -1003,12 +1061,6 @@ export default function App() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex flex-col gap-2">
                 <DialogTitle>Выбор сессии</DialogTitle>
-                <DialogDescription className="max-w-3xl">
-                  Диалог читает каталог через backend-команду `list_indexed_sessions`: сначала из
-                  `state_*.sqlite`, таблицы `threads`, и с fallback на `session_index.jsonl`.
-                  Конкретный rollout-файл резолвится по `session_id` только в момент открытия
-                  preview.
-                </DialogDescription>
                 <p className="text-xs text-muted-foreground">{catalogSessions.length} loaded</p>
               </div>
             </div>
@@ -1167,9 +1219,21 @@ export default function App() {
                       Tail: {liveTailEnabled ? "on" : "off"}
                     </span>
                   </div>
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <p className="text-sm leading-6 text-foreground">{tailStatus}</p>
+                    {tailCursor ? (
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        offset {tailCursor.offset} · next_seq {tailCursor.next_seq}
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
+                  <Button onClick={toggleLiveTail} type="button" variant="outline">
+                    <RadioTower data-icon="inline-start" />
+                    Tail {liveTailEnabled ? "Off" : "On"}
+                  </Button>
                   <Button
                     onClick={() => {
                       setIsSessionDialogOpen(true);
@@ -1305,35 +1369,11 @@ export default function App() {
             <Card className={cn(PANEL_CARD_CLASS, "h-full")}>
               <CardHeader className="gap-3">
                 <CardTitle className="text-base">Agents</CardTitle>
-                <CardDescription>
-                  Причинность фоновых агентов, сохранённый live state и служебная информация
-                  выбранной сессии.
-                </CardDescription>
               </CardHeader>
 
               <CardContent className="min-h-0 flex-1 pt-4">
                 <ScrollArea className="h-full min-h-0">
                   <div className="flex flex-col gap-3 pr-4">
-                    <Card className={SURFACE_CARD_CLASS} size="sm">
-                      <CardHeader className="gap-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <CardTitle className="text-sm">Tail status</CardTitle>
-                          <Button onClick={toggleLiveTail} size="sm" type="button" variant="outline">
-                            <RadioTower data-icon="inline-start" />
-                            {liveTailEnabled ? "Off" : "On"}
-                          </Button>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="flex flex-col gap-2">
-                        <p className="text-sm leading-6">{tailStatus}</p>
-                        {tailCursor ? (
-                          <p className="text-xs leading-5 text-muted-foreground">
-                            offset {tailCursor.offset} · next_seq {tailCursor.next_seq}
-                          </p>
-                        ) : null}
-                      </CardContent>
-                    </Card>
-
                     <Card className={SURFACE_CARD_CLASS} size="sm">
                       <CardHeader className="gap-2">
                         <CardTitle className="text-sm">Session summary</CardTitle>

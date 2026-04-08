@@ -155,7 +155,7 @@ describe("preferredTerminalChildIndexFromSnapshot", () => {
 });
 
 describe("sortTimelineItemsForRender", () => {
-  it("orders atomic events by seq and lifecycle events by terminal seq", () => {
+  it("orders atomic events by seq and lifecycle events by terminal seq with newest first", () => {
     const items = sortTimelineItemsForRender([
       eventItem({
         event_id: "run-1:25",
@@ -182,16 +182,16 @@ describe("sortTimelineItemsForRender", () => {
     ]);
 
     expect(items.map((item) => ("Event" in item ? item.Event.event.event_id : null))).toEqual([
-      "run-1:28",
-      "run-1:24",
-      "run-1:25",
       "run-1:35",
+      "run-1:25",
+      "run-1:24",
+      "run-1:28",
     ]);
   });
 });
 
 describe("sortEntriesByRenderSeq", () => {
-  it("places a task lifecycle segment by its terminal render seq", () => {
+  it("places a task lifecycle segment by its terminal render seq with newest first", () => {
     const taskSegment = {
       label: "task-lifecycle",
       index: 0,
@@ -213,8 +213,8 @@ describe("sortEntriesByRenderSeq", () => {
     const ordered = sortEntriesByRenderSeq([taskSegment, atomicTokens]);
 
     expect(ordered.map((entry) => entry.label)).toEqual([
-      "info.tokens",
       "task-lifecycle",
+      "info.tokens",
     ]);
   });
 });

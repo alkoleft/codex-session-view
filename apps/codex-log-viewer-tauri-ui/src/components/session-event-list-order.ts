@@ -7,7 +7,9 @@ export function sortTimelineItemsForRender(items: TimelineItem[]): TimelineItem[
       index,
       renderSeq: timelineItemRenderSeq(item),
     }))
-    .sort((left, right) => compareRenderSeq(left.renderSeq, right.renderSeq, left.index, right.index))
+    .sort((left, right) =>
+      compareRenderSeq(left.renderSeq, right.renderSeq, left.index, right.index),
+    )
     .map(({ item }) => item);
 }
 
@@ -32,7 +34,7 @@ export function timelineItemsRenderSeq(items: TimelineItem[]): number {
     return itemRenderSeq > max ? itemRenderSeq : max;
   }, Number.NEGATIVE_INFINITY);
 
-  return Number.isFinite(renderSeq) ? renderSeq : Number.MAX_SAFE_INTEGER;
+  return Number.isFinite(renderSeq) ? renderSeq : Number.MIN_SAFE_INTEGER;
 }
 
 function eventNodeRenderSeq(node: EventNode): number {
@@ -40,17 +42,17 @@ function eventNodeRenderSeq(node: EventNode): number {
 }
 
 function threadRenderSeq(thread: ThreadNode): number {
-  const firstSeq = thread.items.reduce<number>((min, item) => {
+  const lastSeq = thread.items.reduce<number>((max, item) => {
     const itemRenderSeq = timelineItemRenderSeq(item);
-    return itemRenderSeq < min ? itemRenderSeq : min;
-  }, Number.POSITIVE_INFINITY);
+    return itemRenderSeq > max ? itemRenderSeq : max;
+  }, Number.NEGATIVE_INFINITY);
 
-  return Number.isFinite(firstSeq) ? firstSeq : Number.MAX_SAFE_INTEGER;
+  return Number.isFinite(lastSeq) ? lastSeq : Number.MIN_SAFE_INTEGER;
 }
 
 function compareRenderSeq(leftRenderSeq: number, rightRenderSeq: number, leftIndex: number, rightIndex: number) {
   if (leftRenderSeq !== rightRenderSeq) {
-    return leftRenderSeq - rightRenderSeq;
+    return rightRenderSeq - leftRenderSeq;
   }
 
   return leftIndex - rightIndex;
