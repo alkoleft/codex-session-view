@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import { Check, CircleAlert, CircleX } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,8 @@ import type {
   LoadedSession,
   PatchApplyChangeEntry,
   TimelineItem,
+  UserInputOptionEntry,
+  UserInputQuestionEntry,
   UserInputRequestEntry,
 } from "@/backend";
 
@@ -21,10 +23,14 @@ const COLLAB_SEND_INPUT = "collab.send_input";
 const COLLAB_WAIT = "collab.wait";
 const COLLAB_CLOSE_AGENT = "collab.close_agent";
 const COLLAB_RESUME_AGENT = "collab.resume_agent";
+const INFO_TOKENS = "info.tokens";
 const USER_INPUT_REQUEST = "user.input.request";
 const RUNTIME_CONTEXT = "runtime.context";
 const PATCH_APPLY = "patch.apply";
 const PATCH_APPLY_DUPLICATE = "patch.apply.duplicate";
+const TASK_STARTED = "task.started";
+const TASK_COMPLETED = "task.completed";
+const AGENT_META = "agent.meta";
 const RESPONSE_ITEM_FUNCTION_CALL_OUTPUT = "response_item.function_call_output";
 const TEXT_COLLAPSE_CHAR_LIMIT = 240;
 const TEXT_COLLAPSE_LINE_LIMIT = 4;
@@ -49,6 +55,22 @@ type PatchApplyRenderData = {
   diffSections: PatchApplyDiffSection[];
   fallbackDiffText: string | null;
 };
+
+type TaskTimelinePalette = {
+  accent: string;
+  surface: string;
+  line: string;
+  lineOpen: string;
+};
+
+type TimelineRenderItem =
+  | { kind: "item"; item: TimelineItem }
+  | {
+      kind: "task-lifecycle";
+      items: TimelineItem[];
+      isClosed: boolean;
+      mode: string | null;
+    };
 
 type SingleCard = {
   kind: "single";
@@ -99,6 +121,8 @@ type MergedCard =
   | CollabMergedCard
   | PatchApplyMergedCard;
 
+const TaskTimelinePaletteContext = createContext<TaskTimelinePalette | null>(null);
+
 export function SessionEventList({ session }: { session: LoadedSession }) {
   const rootItems = session.tree.roots.flatMap((thread) => thread.items);
 
@@ -122,31 +146,92 @@ export function SessionEventList({ session }: { session: LoadedSession }) {
 function TimelineItemsView({
   items,
   path,
+  groupTaskLifecycles = true,
 }: {
   items: TimelineItem[];
   path: string;
+  groupTaskLifecycles?: boolean;
 }) {
+  const renderedItems = groupTaskLifecycles ? buildTimelineRenderItems(items) : items.map((item) => ({
+    kind: "item" as const,
+    item,
+  }));
+
   return (
     <div className="flex flex-col">
-      {items.map((item, index) => {
-        if ("Event" in item) {
+      {renderedItems.map((entry, index) => {
+        if (entry.kind === "task-lifecycle") {
           return (
-            <TimelineListItem key={`${path}-event-${index}`} withDivider={index > 0}>
-              <EventNodeView node={item.Event} path={`${path}-event-${index}`} />
+            <TimelineListItem key={`${path}-task-${index}`} withDivider={index > 0}>
+              <TaskLifecycleSegmentView
+                isClosed={entry.isClosed}
+                items={entry.items}
+                mode={entry.mode}
+                path={`${path}-task-${index}`}
+              />
             </TimelineListItem>
           );
         }
 
         return (
-          <TimelineListItem key={`${path}-thread-${item.Thread.thread_id}-${index}`} withDivider={index > 0}>
-            <TimelineItemsView
-              items={item.Thread.items}
-              path={`${path}-thread-${item.Thread.thread_id}-${index}`}
-            />
+          <TimelineListItem key={timelineItemKey(entry.item, path, index)} withDivider={index > 0}>
+            <TimelineItemView item={entry.item} path={`${path}-item-${index}`} />
           </TimelineListItem>
         );
       })}
     </div>
+  );
+}
+
+function TimelineItemView({
+  item,
+  path,
+}: {
+  item: TimelineItem;
+  path: string;
+}) {
+  if ("Event" in item) {
+    return <EventNodeView node={item.Event} path={`${path}-event`} />;
+  }
+
+  return (
+    <TimelineItemsView
+      items={item.Thread.items}
+      path={`${path}-thread-${item.Thread.thread_id}`}
+    />
+  );
+}
+
+function TaskLifecycleSegmentView({
+  items,
+  isClosed,
+  mode,
+  path,
+}: {
+  items: TimelineItem[];
+  isClosed: boolean;
+  mode: string | null;
+  path: string;
+}) {
+  const palette = taskModePalette(mode);
+
+  return (
+    <TaskTimelinePaletteContext.Provider value={palette}>
+      <div
+        className="relative overflow-hidden py-1 pl-5"
+        style={{ backgroundColor: palette.surface }}
+      >
+        <div
+          className="absolute bottom-1 left-[9px] top-1 w-px"
+          style={{ backgroundColor: isClosed ? palette.line : palette.lineOpen }}
+        />
+        <TimelineItemsView
+          groupTaskLifecycles={false}
+          items={items}
+          path={path}
+        />
+      </div>
+    </TaskTimelinePaletteContext.Provider>
   );
 }
 
@@ -190,9 +275,208 @@ function EventNodeView({
   );
 }
 
+function buildTimelineRenderItems(items: TimelineItem[]): TimelineRenderItem[] {
+  const renderedItems: TimelineRenderItem[] = [];
+  let index = 0;
+
+  while (index < items.length) {
+    const taskSegment = taskLifecycleSegmentEnd(items, index);
+    if (taskSegment) {
+      const [endIndex, isClosed] = taskSegment;
+      const segmentItems = items.slice(index, endIndex + 1);
+      const mode = timelineItemEvent(segmentItems[0])?.collaboration_mode_kind ?? null;
+      renderedItems.push({
+        kind: "task-lifecycle",
+        items: segmentItems,
+        isClosed,
+        mode,
+      });
+      index = endIndex + 1;
+      continue;
+    }
+
+    renderedItems.push({
+      kind: "item",
+      item: items[index],
+    });
+    index += 1;
+  }
+
+  return renderedItems;
+}
+
+function taskLifecycleSegmentEnd(items: TimelineItem[], startIndex: number) {
+  const startEvent = timelineItemEvent(items[startIndex]);
+  if (!startEvent || !isTaskStartedEvent(startEvent)) {
+    return null;
+  }
+
+  const startTurnId = startEvent.turn_id ?? null;
+  let fallbackEnd = items.length - 1;
+
+  for (let index = startIndex + 1; index < items.length; index += 1) {
+    const event = timelineItemEvent(items[index]);
+    if (!event) {
+      continue;
+    }
+
+    if (isTaskCompletedEvent(event)) {
+      const sameTurn =
+        startTurnId && event.turn_id ? startTurnId === event.turn_id : true;
+      if (sameTurn) {
+        return [index, true] as const;
+      }
+    }
+
+    if (isTaskStartedEvent(event)) {
+      fallbackEnd = Math.max(startIndex, index - 1);
+      break;
+    }
+  }
+
+  return [fallbackEnd, false] as const;
+}
+
+function timelineItemEvent(item: TimelineItem | undefined) {
+  if (!item || !("Event" in item)) {
+    return null;
+  }
+
+  return item.Event.event;
+}
+
+function timelineItemKey(item: TimelineItem, path: string, index: number) {
+  if ("Event" in item) {
+    return `${path}-event-${item.Event.event.event_id}-${index}`;
+  }
+
+  return `${path}-thread-${item.Thread.thread_id}-${index}`;
+}
+
+function isTaskStartedEvent(event: EventEntry) {
+  return (
+    event.event_type === TASK_STARTED
+    || (event.event_type === AGENT_META && event.meta_type === "task_started")
+  );
+}
+
+function isTaskCompletedEvent(event: EventEntry) {
+  return (
+    event.event_type === TASK_COMPLETED
+    || (event.event_type === AGENT_META && event.meta_type === "task_complete")
+  );
+}
+
+function taskModePalette(mode: string | null | undefined): TaskTimelinePalette {
+  const normalized = mode?.trim().toLowerCase() ?? "";
+  switch (normalized) {
+    case "default":
+      return {
+        accent: "#2563eb",
+        surface: "rgba(37, 99, 235, 0.08)",
+        line: "rgba(37, 99, 235, 0.95)",
+        lineOpen: "rgba(37, 99, 235, 0.35)",
+      };
+    case "plan":
+    case "planning":
+      return {
+        accent: "#d97706",
+        surface: "rgba(217, 119, 6, 0.10)",
+        line: "rgba(217, 119, 6, 0.92)",
+        lineOpen: "rgba(217, 119, 6, 0.34)",
+      };
+    case "review":
+    case "reviewer":
+      return {
+        accent: "#be123c",
+        surface: "rgba(190, 18, 60, 0.10)",
+        line: "rgba(190, 18, 60, 0.92)",
+        lineOpen: "rgba(190, 18, 60, 0.34)",
+      };
+    case "implementation":
+    case "worker":
+      return {
+        accent: "#0f766e",
+        surface: "rgba(15, 118, 110, 0.10)",
+        line: "rgba(15, 118, 110, 0.92)",
+        lineOpen: "rgba(15, 118, 110, 0.34)",
+      };
+    case "approval":
+      return {
+        accent: "#7c3aed",
+        surface: "rgba(124, 58, 237, 0.10)",
+        line: "rgba(124, 58, 237, 0.92)",
+        lineOpen: "rgba(124, 58, 237, 0.34)",
+      };
+    default:
+      return taskModeFallbackPalette(normalized);
+  }
+}
+
+function taskModeFallbackPalette(mode: string) {
+  const palette: TaskTimelinePalette[] = [
+    {
+      accent: "#2563eb",
+      surface: "rgba(37, 99, 235, 0.08)",
+      line: "rgba(37, 99, 235, 0.95)",
+      lineOpen: "rgba(37, 99, 235, 0.35)",
+    },
+    {
+      accent: "#7c3aed",
+      surface: "rgba(124, 58, 237, 0.10)",
+      line: "rgba(124, 58, 237, 0.92)",
+      lineOpen: "rgba(124, 58, 237, 0.34)",
+    },
+    {
+      accent: "#0891b2",
+      surface: "rgba(8, 145, 178, 0.10)",
+      line: "rgba(8, 145, 178, 0.92)",
+      lineOpen: "rgba(8, 145, 178, 0.34)",
+    },
+    {
+      accent: "#d97706",
+      surface: "rgba(217, 119, 6, 0.10)",
+      line: "rgba(217, 119, 6, 0.92)",
+      lineOpen: "rgba(217, 119, 6, 0.34)",
+    },
+    {
+      accent: "#16a34a",
+      surface: "rgba(22, 163, 74, 0.10)",
+      line: "rgba(22, 163, 74, 0.92)",
+      lineOpen: "rgba(22, 163, 74, 0.34)",
+    },
+    {
+      accent: "#be123c",
+      surface: "rgba(190, 18, 60, 0.10)",
+      line: "rgba(190, 18, 60, 0.92)",
+      lineOpen: "rgba(190, 18, 60, 0.34)",
+    },
+  ];
+  const hash = Array.from(mode).reduce(
+    (value, character) => (value * 16777619 + character.charCodeAt(0)) >>> 0,
+    0,
+  );
+  return palette[hash % palette.length] ?? palette[0];
+}
+
 function EventCard({ event }: { event: EventEntry }) {
+  const inheritedTaskPalette = useContext(TaskTimelinePaletteContext);
+
   if (isStandaloneShellResult(event)) {
     return <SingleShellEventCard event={event} />;
+  }
+
+  const infoTokens = infoTokensRenderData(event);
+  if (infoTokens) {
+    return <InfoTokensEventCard data={infoTokens} event={event} />;
+  }
+
+  if (
+    event.event_type === USER_INPUT_REQUEST
+    && event.user_input_request
+    && userInputRequestHasRenderableContent(event.user_input_request)
+  ) {
+    return <UserInputRequestEventCard event={event} request={event.user_input_request} />;
   }
 
   const summary = eventSummaryText(event);
@@ -200,28 +484,84 @@ function EventCard({ event }: { event: EventEntry }) {
   const subagentLabel = eventSubagentLabel(event);
   const runtimeContext = runtimeContextRenderData(event);
   const patchApply = patchApplyRenderData(event);
+  const taskMetaItems = taskEventMetaItems(event);
+  const taskModeBadge = taskEventModeBadge(event);
+  const taskMessage = taskCompletedMessage(event);
+  const taskMarker = taskLifecycleMarker(event, inheritedTaskPalette);
 
   return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
+    <div className="relative">
+      {taskMarker ? <TaskLifecycleMarker marker={taskMarker} /> : null}
+      <Card
+        className={cn(
+          SURFACE_CARD_CLASS,
+          subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
+        )}
+        size="sm"
+      >
+        <CardContent className="flex flex-col gap-2 p-4">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span className="font-mono">#{event.seq}</span>
+            <time>{formatTime(event.ts)}</time>
+            <span className="font-mono">{event.event_type}</span>
+            {taskModeBadge ? <TaskModeBadge badge={taskModeBadge} /> : null}
+            {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
+          </div>
+          {taskMetaItems.length > 0 ? <EventMetaRow items={taskMetaItems} /> : null}
+          {runtimeContext ? <RuntimeContextBlock data={runtimeContext} /> : null}
+          {patchApply ? <PatchApplyBlock data={patchApply} /> : null}
+          {!patchApply && summary ? <CardText text={summary} tone="default" /> : null}
+          {!patchApply && taskMessage ? <TaskCompletedMessageBlock text={taskMessage} /> : null}
+          {!patchApply && !taskMessage && detail ? <CardText text={detail} tone="muted" /> : null}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function TaskCompletedMessageBlock({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        Last Agent Message
+      </div>
+      <CardText text={text} tone="default" />
+    </div>
+  );
+}
+
+function TaskModeBadge({
+  badge,
+}: {
+  badge: { label: string; palette: TaskTimelinePalette };
+}) {
+  return (
+    <span
+      className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em]"
+      style={{
+        color: badge.palette.accent,
+        backgroundColor: badge.palette.surface,
+      }}
     >
-      <CardContent className="flex flex-col gap-2 p-4">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-mono">#{event.seq}</span>
-          <time>{formatTime(event.ts)}</time>
-          <span className="font-mono">{event.event_type}</span>
-          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-        </div>
-        {runtimeContext ? <RuntimeContextBlock data={runtimeContext} /> : null}
-        {patchApply ? <PatchApplyBlock data={patchApply} /> : null}
-        {!patchApply && summary ? <CardText text={summary} tone="default" /> : null}
-        {!patchApply && detail ? <CardText text={detail} tone="muted" /> : null}
-      </CardContent>
-    </Card>
+      {badge.label}
+    </span>
+  );
+}
+
+function TaskLifecycleMarker({
+  marker,
+}: {
+  marker: { accent: string; completed: boolean };
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      className="absolute -left-4 top-5 z-10 size-2.5 rounded-full border-2"
+      style={{
+        borderColor: marker.accent,
+        backgroundColor: marker.completed ? "var(--background)" : marker.accent,
+      }}
+    />
   );
 }
 
@@ -236,6 +576,13 @@ function MergedEventCard({
 
   if (card.kind === "patch-apply") {
     return <MergedPatchApplyEventCard card={card} />;
+  }
+
+  if (card.kind === "user-input") {
+    const request = mergedUserInputRequestEntry(card.call, card.result);
+    if (request && userInputRequestHasRenderableContent(request)) {
+      return <MergedUserInputRequestEventCard card={card} request={request} />;
+    }
   }
 
   const summary = mergedSummaryText(card.call, card.result);
@@ -448,6 +795,309 @@ function EventMetaRow({
         <span className="inline-flex items-center gap-1" key={`${item.label}-${item.value}`}>
           <span>{item.label}</span>
           <span className="ui-selectable font-semibold text-foreground">{item.value}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function InfoTokensEventCard({
+  event,
+  data,
+}: {
+  event: EventEntry;
+  data: {
+    pairs: Array<{ label: string; value: string }>;
+    fallbackText: string | null;
+  };
+}) {
+  const subagentLabel = eventSubagentLabel(event);
+
+  return (
+    <Card
+      className={cn(
+        SURFACE_CARD_CLASS,
+        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
+      )}
+      size="sm"
+    >
+      <CardContent className="flex flex-col gap-1.5 p-4">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-mono">#{event.seq}</span>
+          <time>{formatTime(event.ts)}</time>
+          <span className="font-mono">{event.event_type}</span>
+          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
+        </div>
+        <InfoTokensBlock fallbackText={data.fallbackText} pairs={data.pairs} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function InfoTokensBlock({
+  pairs,
+  fallbackText,
+}: {
+  pairs: Array<{ label: string; value: string }>;
+  fallbackText: string | null;
+}) {
+  return (
+    <div className="flex w-full flex-col items-end gap-1 text-right">
+      {pairs.length > 0 ? (
+        <div className="flex w-full flex-wrap items-start justify-end gap-x-4 gap-y-1">
+          {pairs.map((pair) => (
+            <div
+              className="flex min-w-[84px] flex-col items-end"
+              key={`${pair.label}-${pair.value}`}
+            >
+              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                {pair.label}
+              </span>
+              <span className="ui-selectable font-mono text-xs text-foreground/80">
+                {pair.value}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {fallbackText ? (
+        <div className="ui-selectable whitespace-pre-wrap break-words text-xs text-muted-foreground">
+          {fallbackText}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function UserInputRequestEventCard({
+  event,
+  request,
+}: {
+  event: EventEntry;
+  request: UserInputRequestEntry;
+}) {
+  const subagentLabel = eventSubagentLabel(event);
+  const metaItems = userInputRequestMetaItems(request);
+
+  return (
+    <Card
+      className={cn(
+        SURFACE_CARD_CLASS,
+        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
+      )}
+      size="sm"
+    >
+      <CardContent className="flex flex-col gap-3 p-4">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-mono">#{event.seq}</span>
+          <time>{formatTime(event.ts)}</time>
+          <span className="font-mono">{event.event_type}</span>
+          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
+        </div>
+        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
+        <UserInputRequestBlock request={request} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function MergedUserInputRequestEventCard({
+  card,
+  request,
+}: {
+  card: UserInputMergedCard;
+  request: UserInputRequestEntry;
+}) {
+  const subagentLabel = eventSubagentLabel(card.call) ?? eventSubagentLabel(card.result);
+  const metaItems = userInputRequestMetaItems(request);
+  const eventLabel =
+    card.call.event_type === card.result.event_type
+      ? card.call.event_type
+      : `${card.call.event_type}/${card.result.event_type}`;
+  const timeLabel =
+    card.call.ts === card.result.ts
+      ? formatTime(card.call.ts)
+      : `${formatTime(card.call.ts)} -> ${formatTime(card.result.ts)}`;
+
+  return (
+    <Card
+      className={cn(
+        SURFACE_CARD_CLASS,
+        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
+      )}
+      size="sm"
+    >
+      <CardContent className="flex flex-col gap-3 p-4">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-mono">
+            #{card.call.seq}, #{card.result.seq}
+          </span>
+          <time>{timeLabel}</time>
+          <span className="font-mono">{eventLabel}</span>
+          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
+        </div>
+        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
+        <UserInputRequestBlock request={request} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function UserInputRequestBlock({ request }: { request: UserInputRequestEntry }) {
+  const extraAnswers = request.extra_answers.filter(
+    (answer) => answer.id.trim() && userInputAnswerValues(answer.answers).length > 0,
+  );
+
+  return (
+    <div className="flex flex-col gap-3">
+      {request.questions.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            questions
+          </div>
+          <div className="flex flex-col gap-3">
+            {request.questions.map((question, index) => (
+              <UserInputQuestionBlock
+                key={question.id ?? `${question.header ?? "question"}-${index}`}
+                question={question}
+              />
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {extraAnswers.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            answers
+          </div>
+          <div className="grid gap-2">
+            {extraAnswers.map((answer) => (
+              <div
+                className="grid gap-1 rounded-xl border border-border/60 bg-muted/10 px-3 py-2 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)] sm:items-start sm:gap-3"
+                key={`${answer.id}-${answer.answers.join("|")}`}
+              >
+                <code className="ui-selectable whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
+                  {answer.id}
+                </code>
+                <UserInputAnswerChips answers={answer.answers} selected={false} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function UserInputQuestionBlock({ question }: { question: UserInputQuestionEntry }) {
+  const unmatchedAnswers = userInputAnswerValues(question.answers).filter(
+    (answer) =>
+      !question.options.some((option) => option.label.trim() === answer.trim()),
+  );
+
+  return (
+    <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-muted/10 p-3">
+      <div className="flex flex-wrap items-start gap-3">
+        <div className="min-w-0 flex-1">
+          {question.question?.trim() ? <CardText text={question.question.trim()} tone="default" /> : null}
+        </div>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+          {question.header?.trim() ? (
+            <span className="inline-flex items-center rounded-full border border-border/60 bg-background/60 px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+              {question.header.trim()}
+            </span>
+          ) : null}
+          {question.id?.trim() ? (
+            <span className="inline-flex items-center rounded-full border border-border/60 bg-background/60 px-2 py-0.5 text-[10px] text-muted-foreground">
+              <code className="ui-selectable">{question.id.trim()}</code>
+            </span>
+          ) : null}
+        </div>
+      </div>
+      {question.options.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          {question.options.map((option, index) => {
+            const isSelected = question.answers.some(
+              (answer) => answer.trim() === option.label.trim(),
+            );
+            return (
+              <UserInputOptionBlock
+                isSelected={isSelected}
+                key={`${option.label}-${index}`}
+                option={option}
+              />
+            );
+          })}
+        </div>
+      ) : null}
+      {unmatchedAnswers.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            answers
+          </div>
+          <UserInputAnswerChips answers={unmatchedAnswers} selected />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function UserInputOptionBlock({
+  option,
+  isSelected,
+}: {
+  option: UserInputOptionEntry;
+  isSelected: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-2 rounded-xl border px-3 py-2",
+        isSelected
+          ? "border-emerald-500/40 bg-emerald-500/10"
+          : "border-border/60 bg-background/40",
+      )}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="ui-selectable whitespace-pre-wrap break-words text-sm font-medium text-foreground">
+          {option.label}
+        </div>
+        {isSelected ? (
+          <span className="inline-flex items-center rounded-full border border-emerald-500/35 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700 dark:text-emerald-300">
+            selected
+          </span>
+        ) : null}
+      </div>
+      {option.description?.trim() ? <CardText text={option.description.trim()} tone="muted" /> : null}
+    </div>
+  );
+}
+
+function UserInputAnswerChips({
+  answers,
+  selected,
+}: {
+  answers: string[];
+  selected: boolean;
+}) {
+  const values = userInputAnswerValues(answers);
+  if (values.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {values.map((answer, index) => (
+        <span
+          className={cn(
+            "ui-selectable inline-flex items-center rounded-full border px-2 py-0.5 text-xs",
+            selected
+              ? "border-emerald-500/35 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
+              : "border-border/60 bg-background/60 text-muted-foreground",
+          )}
+          key={`${index}-${answer}`}
+        >
+          {answer}
         </span>
       ))}
     </div>
@@ -793,6 +1443,18 @@ function formatTime(value: string | null) {
   }).format(date);
 }
 
+function shouldSkipEventSummary(event: EventEntry) {
+  if (event.event_type === RUNTIME_CONTEXT || event.event_type === SHELL_RESULT) {
+    return true;
+  }
+
+  if (isTaskStartedEvent(event)) {
+    return true;
+  }
+
+  return false;
+}
+
 function normalizeSummary(summary: string, eventType: string) {
   const trimmed = summary.trim();
   if (
@@ -808,6 +1470,10 @@ function normalizeSummary(summary: string, eventType: string) {
 }
 
 function eventSummaryText(event: EventEntry) {
+  if (shouldSkipEventSummary(event)) {
+    return null;
+  }
+
   return normalizeSummary(event.summary, event.event_type);
 }
 
@@ -819,6 +1485,10 @@ function mergedSummaryText(call: EventEntry, result: EventEntry) {
 
 function singleDetailText(event: EventEntry) {
   if (event.event_type === RUNTIME_CONTEXT) {
+    return null;
+  }
+
+  if (isTaskCompletedEvent(event) && taskCompletedMessage(event)) {
     return null;
   }
 
@@ -840,6 +1510,70 @@ function singleDetailText(event: EventEntry) {
   }
 
   return null;
+}
+
+function taskEventMetaItems(event: EventEntry) {
+  const items: Array<{ label: string; value: string }> = [];
+
+  if (isTaskStartedEvent(event)) {
+    const mode = event.collaboration_mode_kind?.trim();
+    if (mode) {
+      items.push({ label: "mode", value: mode });
+    }
+    if (event.turn_id?.trim()) {
+      items.push({ label: "turn", value: event.turn_id.trim() });
+    }
+    if (event.model_context_window?.trim()) {
+      items.push({ label: "context window", value: event.model_context_window.trim() });
+    }
+    return items;
+  }
+
+  if (isTaskCompletedEvent(event) && event.turn_id?.trim()) {
+    items.push({ label: "turn", value: event.turn_id.trim() });
+  }
+
+  return items;
+}
+
+function taskCompletedMessage(event: EventEntry) {
+  if (!isTaskCompletedEvent(event)) {
+    return null;
+  }
+
+  const message = event.last_agent_message?.trim();
+  return message ? message : null;
+}
+
+function taskEventModeBadge(event: EventEntry) {
+  if (!isTaskStartedEvent(event)) {
+    return null;
+  }
+
+  const label = event.collaboration_mode_kind?.trim();
+  if (!label) {
+    return null;
+  }
+
+  return {
+    label,
+    palette: taskModePalette(label),
+  };
+}
+
+function taskLifecycleMarker(
+  event: EventEntry,
+  inheritedPalette: TaskTimelinePalette | null,
+) {
+  if (!isTaskStartedEvent(event) && !isTaskCompletedEvent(event)) {
+    return null;
+  }
+
+  const palette = inheritedPalette ?? taskModePalette(event.collaboration_mode_kind);
+  return {
+    accent: palette.accent,
+    completed: isTaskCompletedEvent(event),
+  };
 }
 
 function mergedDetailText(card: Exclude<MergedCard, { kind: "single" }>) {
@@ -1252,7 +1986,111 @@ function totalUserInputRequestAnswerCount(request: UserInputRequestEntry | null 
 }
 
 function mergedUserInputRequestEntry(call: EventEntry, result: EventEntry) {
-  return call.user_input_request ?? result.user_input_request ?? null;
+  const callRequest = call.user_input_request;
+  const resultRequest = result.user_input_request;
+  const baseRequest = callRequest ?? resultRequest;
+  if (!baseRequest) {
+    return null;
+  }
+
+  const answersById = new Map<string, string[]>();
+  if (callRequest) {
+    collectUserInputAnswers(callRequest, answersById);
+  }
+  if (resultRequest) {
+    collectUserInputAnswers(resultRequest, answersById);
+  }
+
+  const matchedAnswerIds = new Set<string>();
+  const sourceQuestions =
+    baseRequest.questions.length > 0
+      ? baseRequest.questions
+      : resultRequest?.questions ?? [];
+  const questions = sourceQuestions.map((question) => {
+    const id = question.id?.trim() || null;
+    const answers = id ? answersById.get(id) ?? question.answers : question.answers;
+    if (id && answersById.has(id)) {
+      matchedAnswerIds.add(id);
+    }
+
+    return {
+      header: question.header,
+      id: question.id,
+      question: question.question,
+      options: question.options.map((option) => ({
+        label: option.label,
+        description: option.description,
+      })),
+      answers: [...answers],
+    };
+  });
+
+  const extra_answers = Array.from(answersById.entries())
+    .filter(([id, answers]) => !matchedAnswerIds.has(id) && answers.length > 0)
+    .sort(([leftId], [rightId]) => leftId.localeCompare(rightId))
+    .map(([id, answers]) => ({
+      id,
+      answers: [...answers],
+    }));
+
+  return {
+    questions,
+    extra_answers,
+  };
+}
+
+function collectUserInputAnswers(
+  request: UserInputRequestEntry,
+  answersById: Map<string, string[]>,
+) {
+  request.questions.forEach((question) => {
+    const id = question.id?.trim();
+    if (!id) {
+      return;
+    }
+
+    mergeUserInputAnswerValues(answersById, id, question.answers);
+  });
+
+  request.extra_answers.forEach((answer) => {
+    const id = answer.id.trim();
+    if (!id) {
+      return;
+    }
+
+    mergeUserInputAnswerValues(answersById, id, answer.answers);
+  });
+}
+
+function mergeUserInputAnswerValues(
+  answersById: Map<string, string[]>,
+  id: string,
+  source: string[],
+) {
+  const target = answersById.get(id) ?? [];
+  source.forEach((answer) => {
+    if (!answer.trim() || target.includes(answer)) {
+      return;
+    }
+
+    target.push(answer);
+  });
+  answersById.set(id, target);
+}
+
+function userInputRequestMetaItems(request: UserInputRequestEntry) {
+  return [
+    { label: "questions", value: String(request.questions.length) },
+    { label: "answers", value: String(totalUserInputRequestAnswerCount(request)) },
+  ];
+}
+
+function userInputRequestHasRenderableContent(request: UserInputRequestEntry) {
+  return request.questions.length > 0 || request.extra_answers.length > 0;
+}
+
+function userInputAnswerValues(answers: string[]) {
+  return answers.filter((answer) => answer.trim());
 }
 
 function collabOperationStates(event: EventEntry) {
@@ -1675,6 +2513,54 @@ function formatBodySizeBytes(bytes: number) {
 function shellOutputSizeLabel(output: string | null) {
   const bytes = shellOutputSizeBytes(output);
   return bytes == null ? null : formatBodySizeBytes(bytes);
+}
+
+function formatCompactNumber(value: number) {
+  return new Intl.NumberFormat("ru-RU").format(value);
+}
+
+function infoTokensRenderData(event: EventEntry) {
+  if (event.event_type !== INFO_TOKENS) {
+    return null;
+  }
+
+  const pairs =
+    event.summary_pairs.length > 0
+      ? event.summary_pairs.map(([label, value]) => ({ label, value }))
+      : [
+        { label: "input", value: event.input_tokens },
+        { label: "cached input", value: event.cached_input_tokens },
+        { label: "output", value: event.output_tokens },
+        { label: "reasoning output", value: event.reasoning_output_tokens },
+        { label: "total", value: event.total_tokens },
+      ]
+          .filter(
+            (pair): pair is { label: string; value: number } => pair.value != null,
+          )
+          .map((pair) => ({
+            label: pair.label,
+            value: formatCompactNumber(pair.value),
+          }));
+
+  const fallbackText = normalizeInfoTokensSummary(event.summary);
+  if (pairs.length === 0 && !fallbackText) {
+    return null;
+  }
+
+  return {
+    pairs,
+    fallbackText: pairs.length > 0 ? null : fallbackText,
+  };
+}
+
+function normalizeInfoTokensSummary(summary: string) {
+  const trimmed = summary.trim();
+  if (!trimmed || trimmed === INFO_TOKENS) {
+    return null;
+  }
+
+  const withoutPrefix = trimmed.replace(/^tokens\b[:\s-]*/i, "").trim();
+  return withoutPrefix || null;
 }
 
 function runtimeContextRenderData(event: EventEntry) {

@@ -149,8 +149,11 @@ export type EventEntry = {
   duplicate_of: string | null;
   summary: string;
   category: string;
+  meta_type: string | null;
   turn_id: string | null;
+  model_context_window: string | null;
   collaboration_mode_kind: string | null;
+  last_agent_message: string | null;
   tool_name: string | null;
   receiver_thread_ids: string[];
   operation_id: string | null;
@@ -159,6 +162,12 @@ export type EventEntry = {
   output_value: unknown;
   shell_command: string | null;
   shell_exit_code: number | null;
+  summary_pairs: Array<[string, string]>;
+  input_tokens: number | null;
+  cached_input_tokens: number | null;
+  output_tokens: number | null;
+  reasoning_output_tokens: number | null;
+  total_tokens: number | null;
   spawn_agent: SpawnAgentEntry | null;
   user_input_request: UserInputRequestEntry | null;
   runtime_context_pairs: Array<[string, string]>;

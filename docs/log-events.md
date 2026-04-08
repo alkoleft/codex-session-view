@@ -538,6 +538,16 @@ HTML renderer рендерит единые карточки для пар:
 
 ### 8.5. Дополнительные merge-правила в HTML
 
+- `task lifecycle`: `task.started` / `agent.meta(task_started)` открывает сегмент timeline и
+  группирует все соседние `TimelineItem` до matching `task.completed` /
+  `agent.meta(task_complete)` с тем же `turn_id`. Если matching completion не найден, сегмент
+  остаётся открытым и закрывается перед следующим `task.started`. Для сегмента используется palette
+  по `collaboration_mode_kind`.
+- `task.started`: в viewer summary для такого события подавляется; вместо этого в карточке
+  показываются `mode`, `turn`, `context window`, а `collaboration_mode_kind` дополнительно
+  выводится как mode-badge.
+- `task.completed`: если есть `last_agent_message`, viewer рендерит его как отдельный detail-блок
+  `Last Agent Message` и не дублирует тем же текстом общий detail.
 - `patch.apply`: header берётся из `started` события, а detail комбинируется из обеих частей. В итоговой карточке viewer по умолчанию показывает только список файлов; `phase/status` остаются только для нештатных случаев без списка изменений. Для diff `tauri-ui` в первую очередь использует `event_msg.patch_apply_end -> changes[path].unified_diff`; сырой `payload.input` start-события остаётся только fallback-источником, если per-file diff отсутствует. Colorized diff по умолчанию скрыт и раскрывается явным toggle. `patch.apply.duplicate` скрывается как redundant и не рендерится отдельной карточкой.
 - `spawn_agent`: данные call/result объединяются в одну meta-модель. Предпочтение у result для `model`, `reasoning_effort`, `receiver_*`, у call для `prompt` и `requested_agent_type`.
 - `user.input.request`: ответы из started/completed частей объединяются по `question.id`, одинаковые значения ответа дедуплицируются.
