@@ -23,9 +23,9 @@ use crate::events::types::{
     AGENT_SESSION_FOREIGN, AGENT_STARTED, COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT,
     COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT, CONTEXT_COMPACTED,
     CONTEXT_COMPACTED_DUPLICATE, INFO_TOKENS, MCP_CALL, MCP_RESULT, MESSAGE_COMMENTARY,
-    MESSAGE_PLAN, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, PLAN_UPDATE, RUNTIME_CONTEXT,
+    MESSAGE_PLAN, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, RUNTIME_CONTEXT,
     SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED, TASK_STARTED,
-    THREAD_STARTED, TOOL_CALL, TOOL_RESULT, USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
+    THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -1023,7 +1023,7 @@ fn merge_plan_message_duplicates(events: Vec<EventEntry>) -> Vec<EventEntry> {
 }
 
 fn is_event_msg_plan_message(event: &EventEntry) -> bool {
-    event.event_type == PLAN_UPDATE
+    event.event_type == TODO_UPDATE
         && event.raw_type == "event_msg"
         && event.plan_message_text.is_some()
         && event.duplicate_of.as_deref() == Some("response_item.message")
@@ -1151,7 +1151,7 @@ fn is_barrier_event(event: &EventEntry) -> bool {
             | STDIN_WRITE
             | WEB_SEARCH
             | WEB_OPEN
-            | PLAN_UPDATE
+            | TODO_UPDATE
             | USER_INPUT_REQUEST
             | PATCH_APPLY
             | COLLAB_SPAWN_AGENT
@@ -1455,7 +1455,7 @@ fn extract_plan_update_content(
     event_type: &str,
     payload: Option<&serde_json::Map<String, Value>>,
 ) -> (Option<String>, Vec<PlanStepEntry>) {
-    if event_type != PLAN_UPDATE {
+    if event_type != TODO_UPDATE {
         return (None, Vec::new());
     }
 
@@ -1556,7 +1556,7 @@ fn extract_plan_message_text(
         event_type if event_type.starts_with("message.") => message_text
             .and_then(strip_proposed_plan_wrapper)
             .map(str::to_string),
-        PLAN_UPDATE => payload
+        TODO_UPDATE => payload
             .and_then(|obj| obj.get("output"))
             .and_then(Value::as_object)
             .filter(|output| {
@@ -3709,7 +3709,7 @@ mod tests {
         let events = vec![
             make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
             make_event(
-                "plan.update",
+                "todo.update",
                 json!({
                     "actor_type":"subagent",
                     "thread_id":"sub-1",
@@ -3722,7 +3722,7 @@ mod tests {
                 2,
             ),
             make_event(
-                "plan.update",
+                "todo.update",
                 json!({
                     "actor_type":"subagent",
                     "thread_id":"sub-1",
@@ -3755,8 +3755,8 @@ mod tests {
             TimelineItem::Thread(_) => panic!("expected plan update completion child"),
         };
 
-        assert_eq!(plan_update_started.event.event_type, "plan.update");
-        assert_eq!(plan_update_completed.event.event_type, "plan.update");
+        assert_eq!(plan_update_started.event.event_type, "todo.update");
+        assert_eq!(plan_update_completed.event.event_type, "todo.update");
         assert_eq!(
             plan_update_completed.event.parent_event_id.as_deref(),
             Some("run-1:2")

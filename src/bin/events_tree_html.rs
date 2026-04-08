@@ -1851,7 +1851,7 @@ fn render_task_message_block(event: &EventEntry) -> Option<String> {
 }
 
 fn render_plan_update_block(event: &EventEntry) -> Option<String> {
-    if event.event_type != "plan.update"
+    if event.event_type != "todo.update"
         || (event.plan_explanation.is_none() && event.plan_steps.is_empty())
     {
         return None;
@@ -3552,7 +3552,7 @@ mod tests {
         let events = vec![
             make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
             make_event(
-                "plan.update",
+                "todo.update",
                 json!({
                     "actor_type":"subagent",
                     "thread_id":"sub-1",
@@ -3575,7 +3575,7 @@ mod tests {
         let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
         let html = render_html(&tree);
 
-        assert!(html.contains(">plan.update<"));
+        assert!(html.contains(">todo.update<"));
         assert!(html.contains("class=\"inset-block plan-block inline-title\""));
         assert!(html.contains("class=\"inset-block-title inline-title\">Plan<"));
         assert!(html.contains("Analysis approved; moving to branch decision and executable checklist before code changes."));
@@ -3859,7 +3859,7 @@ mod tests {
         let events = vec![
             make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
             make_raw_event(
-                "plan.update",
+                "todo.update",
                 "event_msg",
                 json!({
                     "actor_type":"subagent",
@@ -3918,7 +3918,7 @@ mod tests {
         assert!(html.contains("event-meta-value\">final_answer<"));
         assert!(html.contains("HTML-просмотр дерева событий по session-файлу"));
         assert!(!html.contains("&lt;proposed_plan&gt;"));
-        assert!(!html.contains(">plan.update<"));
+        assert!(!html.contains(">todo.update<"));
         assert!(!html.contains("data-event-id=\"run-1:3\""));
         assert!(html.contains("data-event-id=\"run-1:2\""));
     }

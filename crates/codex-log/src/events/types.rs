@@ -29,7 +29,8 @@ pub const MCP_RESULT: &str = "mcp.result";
 pub const STDIN_WRITE: &str = "stdin.write";
 pub const WEB_SEARCH: &str = "web.search";
 pub const WEB_OPEN: &str = "web.open";
-pub const PLAN_UPDATE: &str = "plan.update";
+pub const TODO_UPDATE: &str = "todo.update";
+pub const PLAN_UPDATE: &str = TODO_UPDATE;
 pub const USER_INPUT_REQUEST: &str = "user.input.request";
 pub const PATCH_APPLY: &str = "patch.apply";
 pub const PATCH_APPLY_DUPLICATE: &str = "patch.apply.duplicate";
@@ -40,7 +41,6 @@ pub const COLLAB_CLOSE_AGENT: &str = "collab.close_agent";
 pub const COLLAB_RESUME_AGENT: &str = "collab.resume_agent";
 
 pub const FILE_CHANGE: &str = "file.change";
-pub const TODO_UPDATE: &str = "todo.update";
 pub const ERROR: &str = "error";
 pub const RAW_UNPARSED: &str = "raw.unparsed";
 pub const STDERR_LINE: &str = "stderr.line";

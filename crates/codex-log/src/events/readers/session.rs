@@ -1134,7 +1134,7 @@ impl JsonOutputEventReader {
                                     .get("id")
                                     .and_then(Value::as_str)
                                     .map(str::to_string);
-                                event_type = PLAN_UPDATE.to_string();
+                                event_type = TODO_UPDATE.to_string();
                                 payload = payload_to_value(&ToolResultPayload {
                                     actor_type: Some("subagent".to_string()),
                                     thread_id: Some(thread_id.to_string()),

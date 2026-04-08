@@ -24,7 +24,7 @@
 | `response_item.local_shell_call` | `ResponseItem(type="local_shell_call")` | `/tmp/codex-schema/ResponseItem.ts` | `exact` | Есть `call_id`, `status`, `action`. |
 | `message.user` | `ThreadItem(type="userMessage")` | `/tmp/codex-schema/v2/ThreadItem.ts` | `close` | Ближайшее каноническое item-представление. |
 | `message.assistant` / `message.agent` | `ThreadItem(type="agentMessage")` | `/tmp/codex-schema/v2/ThreadItem.ts` | `close` | Для streaming ближе всего также `AgentMessageDeltaNotification`. |
-| `message.plan` / `plan.update` | `ThreadItem(type="plan")` | `/tmp/codex-schema/v2/ThreadItem.ts` | `close` | Для дельт полезен `PlanDeltaNotification`. |
+| `message.plan` / `todo.update` | `ThreadItem(type="plan")` | `/tmp/codex-schema/v2/ThreadItem.ts` | `close` | Для дельт полезен `PlanDeltaNotification`; tool-shaped `todo.update` соответствует `update_plan`. |
 | `agent.reasoning` | `ThreadItem(type="reasoning")` | `/tmp/codex-schema/v2/ThreadItem.ts` | `close` | Для streaming ближе `Reasoning*DeltaNotification`. |
 | `shell.call` / `shell.result` | `ThreadItem(type="commandExecution")` | `/tmp/codex-schema/v2/ThreadItem.ts` | `close` | На typed item-слое shell сведён к `commandExecution`. |
 | `patch.apply` | `ThreadItem(type="fileChange")` | `/tmp/codex-schema/v2/ThreadItem.ts` | `close` | Патч-представление выражено через file change и patch status. |

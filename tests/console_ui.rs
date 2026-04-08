@@ -350,7 +350,7 @@ fn subagent_tool_command_renders_command_text() {
 fn subagent_plan_update_renders_structured_summary() {
     let console = make_console();
     let event = make_event(
-        "plan.update",
+        "todo.update",
         json!({
             "actor_type":"subagent",
             "thread_id":"sub-1",
@@ -368,7 +368,7 @@ fn subagent_plan_update_renders_structured_summary() {
 
     assert_eq!(
         console.format_event_line(&event),
-        "○ plan update: phase=started explanation=sync state steps=2"
+        "○ todo update: phase=started explanation=sync state steps=2"
     );
 }
 

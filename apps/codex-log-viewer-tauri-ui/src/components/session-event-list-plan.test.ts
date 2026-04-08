@@ -15,7 +15,7 @@ function makeEvent(overrides: Partial<EventEntry> = {}): EventEntry {
     actor_type: "agent",
     thread_id: "root-thread",
     subagent_nickname: null,
-    event_type: "plan.update",
+    event_type: "todo.update",
     raw_type: "response_item",
     parse_status: "parsed",
     duplicate_of: null,
@@ -73,7 +73,7 @@ function makeEvent(overrides: Partial<EventEntry> = {}): EventEntry {
 }
 
 describe("planUpdateRenderData", () => {
-  it("returns structured explanation and steps for plan.update", () => {
+  it("returns structured explanation and steps for todo.update from update_plan", () => {
     expect(planUpdateRenderData(makeEvent({
       plan_explanation: "  sync state  ",
       plan_steps: [
@@ -89,7 +89,7 @@ describe("planUpdateRenderData", () => {
     });
   });
 
-  it("returns null when plan.update has no renderable content", () => {
+  it("returns null when todo.update has no renderable plan content", () => {
     expect(planUpdateRenderData(makeEvent({
       plan_explanation: "   ",
       plan_steps: [{ step: "   ", status: "pending" }],

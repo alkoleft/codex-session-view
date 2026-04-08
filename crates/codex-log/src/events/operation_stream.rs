@@ -6,8 +6,8 @@ use crate::events::record::EventRecord;
 use crate::events::types::{
     COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT,
     CONTEXT_COMPACTED_DUPLICATE, FILE_CHANGE, MCP_CALL, MCP_RESULT, PATCH_APPLY,
-    PATCH_APPLY_DUPLICATE, PLAN_UPDATE, SHELL_CALL, SHELL_RESULT, STDIN_WRITE, TODO_UPDATE,
-    TOOL_CALL, TOOL_RESULT, USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
+    PATCH_APPLY_DUPLICATE, SHELL_CALL, SHELL_RESULT, STDIN_WRITE, TODO_UPDATE, TOOL_CALL,
+    TOOL_RESULT, USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,7 +24,6 @@ pub enum OperationKind {
     StdinWrite,
     WebSearch,
     WebOpen,
-    PlanUpdate,
     UserInputRequest,
     PatchApply,
     CollabSpawnAgent,
@@ -45,7 +44,6 @@ impl OperationKind {
             Self::StdinWrite => "stdin.write",
             Self::WebSearch => "web.search",
             Self::WebOpen => "web.open",
-            Self::PlanUpdate => "plan.update",
             Self::UserInputRequest => "user.input.request",
             Self::PatchApply => "patch.apply",
             Self::CollabSpawnAgent => "collab.spawn_agent",
@@ -136,7 +134,7 @@ impl OperationPolicy {
     }
 }
 
-const LIFECYCLE_POLICIES: [OperationPolicy; 16] = [
+const LIFECYCLE_POLICIES: [OperationPolicy; 15] = [
     OperationPolicy {
         kind: OperationKind::Tool,
         class: OperationClass::Lifecycle,
@@ -186,14 +184,6 @@ const LIFECYCLE_POLICIES: [OperationPolicy; 16] = [
         mutable_after_terminal: true,
         shape: PolicyShape::Phased {
             event_type: WEB_OPEN,
-        },
-    },
-    OperationPolicy {
-        kind: OperationKind::PlanUpdate,
-        class: OperationClass::Lifecycle,
-        mutable_after_terminal: true,
-        shape: PolicyShape::Phased {
-            event_type: PLAN_UPDATE,
         },
     },
     OperationPolicy {
@@ -263,7 +253,7 @@ const LIFECYCLE_POLICIES: [OperationPolicy; 16] = [
     OperationPolicy {
         kind: OperationKind::TodoUpdate,
         class: OperationClass::Lifecycle,
-        mutable_after_terminal: false,
+        mutable_after_terminal: true,
         shape: PolicyShape::Phased {
             event_type: TODO_UPDATE,
         },

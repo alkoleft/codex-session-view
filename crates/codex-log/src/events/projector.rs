@@ -10,7 +10,7 @@ use crate::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_META, AGENT_SESSION, AGENT_SESSION_FOREIGN,
     COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT,
     CONTEXT_COMPACTED, CONTEXT_COMPACTED_DUPLICATE, ERROR, FILE_CHANGE, INFO_TOKENS, MCP_CALL,
-    MCP_RESULT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, PLAN_UPDATE,
+    MCP_RESULT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE,
     RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE,
     TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT,
     USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
@@ -525,14 +525,16 @@ impl EventProjector {
                     Some(tool_event_category(payload)),
                 );
             }
-            PLAN_UPDATE if actor_type(event) == "subagent" => {
+            TODO_UPDATE
+                if actor_type(event) == "subagent" && is_update_plan_todo_payload(payload) =>
+            {
                 let thread_id = thread_id(event).unwrap_or_else(|| "unknown".to_string());
                 let parent_thread_id = payload_string(payload, "parent_thread_id");
                 let detail = plan_update_detail(payload, true);
                 let line = if detail.is_empty() {
-                    "plan update".to_string()
+                    "todo update".to_string()
                 } else {
-                    format!("plan update: {detail}")
+                    format!("todo update: {detail}")
                 };
                 self.assign_subagent_color(&thread_id);
                 self.append_agent_line(&thread_id, &line, parent_thread_id.as_deref());
@@ -937,18 +939,18 @@ fn summarize_event_impl(event: &EventRecord, full: bool) -> String {
                 format!("stdin write: {detail}")
             }
         }
-        PLAN_UPDATE => {
+        TODO_UPDATE if is_update_plan_todo_payload(payload) => {
             let detail = plan_update_detail(payload, full);
             if actor_type(event) == "subagent" {
                 if detail.is_empty() {
-                    "plan update".to_string()
+                    "todo update".to_string()
                 } else {
-                    format!("plan update: {detail}")
+                    format!("todo update: {detail}")
                 }
             } else if detail.is_empty() {
-                "plan update".to_string()
+                "todo update".to_string()
             } else {
-                format!("plan update: {detail}")
+                format!("todo update: {detail}")
             }
         }
         USER_INPUT_REQUEST => {
@@ -1126,9 +1128,15 @@ pub fn categorize_event(event: &EventRecord) -> EventSummaryCategory {
         TOOL_CALL | TOOL_RESULT | SHELL_CALL | SHELL_RESULT | MCP_CALL | MCP_RESULT
         | STDIN_WRITE | WEB_SEARCH | WEB_OPEN | COLLAB_SPAWN_AGENT | COLLAB_SEND_INPUT
         | COLLAB_WAIT | COLLAB_CLOSE_AGENT | COLLAB_RESUME_AGENT => tool_event_category(payload),
-        PLAN_UPDATE | USER_INPUT_REQUEST => EventSummaryCategory::Default,
+        USER_INPUT_REQUEST => EventSummaryCategory::Default,
         PATCH_APPLY | FILE_CHANGE => EventSummaryCategory::File,
-        TODO_UPDATE => EventSummaryCategory::Todo,
+        TODO_UPDATE => {
+            if is_update_plan_todo_payload(payload) {
+                EventSummaryCategory::Default
+            } else {
+                EventSummaryCategory::Todo
+            }
+        }
         STDERR_LINE | ERROR | AGENT_FAILED | AGENT_ABORTED | RAW_UNPARSED => {
             EventSummaryCategory::Error
         }
@@ -1337,7 +1345,7 @@ fn is_root_toolish_event_type(event_type: &str) -> bool {
             | STDIN_WRITE
             | WEB_SEARCH
             | WEB_OPEN
-            | PLAN_UPDATE
+            | TODO_UPDATE
             | USER_INPUT_REQUEST
             | COLLAB_SPAWN_AGENT
             | COLLAB_WAIT
@@ -1346,6 +1354,33 @@ fn is_root_toolish_event_type(event_type: &str) -> bool {
 
 fn payload_phase(payload: Option<&Map<String, Value>>) -> Option<String> {
     payload_string(payload, "phase")
+}
+
+fn is_update_plan_todo_payload(payload: Option<&Map<String, Value>>) -> bool {
+    payload
+        .and_then(|obj| obj.get("tool_name"))
+        .and_then(Value::as_str)
+        .map(|tool_name| tool_name == "update_plan")
+        .unwrap_or(false)
+        || payload
+            .and_then(|obj| obj.get("tool_use_id"))
+            .is_some()
+        || payload
+            .and_then(|obj| obj.get("input"))
+            .and_then(Value::as_object)
+            .map(plan_payload_has_content)
+            .unwrap_or(false)
+        || payload
+            .and_then(|obj| obj.get("output"))
+            .and_then(Value::as_object)
+            .map(plan_payload_has_content)
+            .unwrap_or(false)
+}
+
+fn plan_payload_has_content(payload: &Map<String, Value>) -> bool {
+    payload.contains_key("plan")
+        || payload.contains_key("explanation")
+        || payload.contains_key("text")
 }
 
 fn truncate_command_text(command: &str, limit: usize) -> String {

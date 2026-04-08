@@ -1,6 +1,6 @@
 import type { EventEntry, PlanStepEntry } from "@/backend";
 
-const PLAN_UPDATE = "plan.update";
+const TODO_UPDATE = "todo.update";
 
 export type PlanUpdateRenderData = {
   explanation: string | null;
@@ -8,7 +8,7 @@ export type PlanUpdateRenderData = {
 };
 
 export function planUpdateRenderData(event: EventEntry): PlanUpdateRenderData | null {
-  if (event.event_type !== PLAN_UPDATE) {
+  if (!isPlanTodoEvent(event)) {
     return null;
   }
 
@@ -19,7 +19,7 @@ export function mergedPlanUpdateRenderData(
   call: EventEntry,
   result: EventEntry,
 ): PlanUpdateRenderData | null {
-  if (call.event_type !== PLAN_UPDATE && result.event_type !== PLAN_UPDATE) {
+  if (!isPlanTodoEvent(call) && !isPlanTodoEvent(result)) {
     return null;
   }
 
@@ -91,4 +91,15 @@ function normalizePlanSteps(steps: PlanStepEntry[] | null | undefined): PlanStep
 function normalizePlanStatus(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function isPlanTodoEvent(event: EventEntry) {
+  return (
+    event.event_type === TODO_UPDATE
+    && (
+      event.tool_name === "update_plan"
+      || Boolean(event.plan_explanation?.trim())
+      || event.plan_steps.length > 0
+    )
+  );
 }

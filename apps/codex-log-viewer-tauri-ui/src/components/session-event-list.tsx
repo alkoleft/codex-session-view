@@ -36,7 +36,7 @@ const USER_INPUT_REQUEST = "user.input.request";
 const RUNTIME_CONTEXT = "runtime.context";
 const PATCH_APPLY = "patch.apply";
 const PATCH_APPLY_DUPLICATE = "patch.apply.duplicate";
-const PLAN_UPDATE = "plan.update";
+const TODO_UPDATE = "todo.update";
 const TASK_STARTED = "task.started";
 const TASK_COMPLETED = "task.completed";
 const AGENT_META = "agent.meta";
@@ -1984,7 +1984,7 @@ function patchApplyResultPreference(event: EventEntry) {
 }
 
 function pairedPlanUpdateResultChildIndex(node: EventNode) {
-  if (node.event.event_type !== PLAN_UPDATE || node.event.phase !== "started") {
+  if (!isPlanTodoEventEntry(node.event) || node.event.phase !== "started") {
     return null;
   }
 
@@ -1997,7 +1997,7 @@ function pairedPlanUpdateResultChildIndex(node: EventNode) {
     node.children,
     (item) =>
       "Event" in item
-      && item.Event.event.event_type === PLAN_UPDATE
+      && isPlanTodoEventEntry(item.Event.event)
       && item.Event.event.phase === "completed"
       && shellOperationIdsMatch(node.event, item.Event.event),
     (item) => planUpdateResultPreference(item.Event.event),
@@ -2338,12 +2338,23 @@ function isRedundantResponseItemPlanUpdateResult(
   const event = item.Event.event;
   return (
     event.event_id !== preferredResult.event_id
-    && event.event_type === PLAN_UPDATE
+    && isPlanTodoEventEntry(event)
     && event.phase === "completed"
     && event.raw_type === "response_item"
     && event.duplicate_of == null
     && shellOperationIdsMatch(call, event)
     && preferredResult.raw_type !== "response_item"
+  );
+}
+
+function isPlanTodoEventEntry(event: EventEntry) {
+  return (
+    event.event_type === TODO_UPDATE
+    && (
+      event.tool_name === "update_plan"
+      || Boolean(event.plan_explanation?.trim())
+      || event.plan_steps.length > 0
+    )
   );
 }
 

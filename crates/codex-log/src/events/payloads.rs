@@ -7,7 +7,7 @@ use crate::events::types::{
     COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT, CONTEXT_COMPACTED,
     CONTEXT_COMPACTED_DUPLICATE, ERROR, FILE_CHANGE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
     MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE,
-    PLAN_UPDATE, RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE,
+    RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE,
     TASK_COMPLETED, TASK_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, WEB_OPEN, WEB_SEARCH,
 };
 
@@ -494,7 +494,7 @@ pub fn parse_payload(event_type: &str, payload: &Value) -> PayloadObject {
             serde_json::to_value(out).unwrap_or(Value::Null),
         );
     }
-    if event_type == "todo.update" {
+    if event_type == TODO_UPDATE && !is_tool_lifecycle_todo_update_payload(&normalized) {
         let mut out = Vec::new();
         if let Some(items) = normalized.get("items").and_then(Value::as_array) {
             for item in items {
@@ -559,7 +559,6 @@ pub fn parse_payload(event_type: &str, payload: &Value) -> PayloadObject {
         | STDIN_WRITE
         | WEB_SEARCH
         | WEB_OPEN
-        | PLAN_UPDATE
         | PATCH_APPLY
         | PATCH_APPLY_DUPLICATE
         | COLLAB_SPAWN_AGENT
@@ -572,9 +571,21 @@ pub fn parse_payload(event_type: &str, payload: &Value) -> PayloadObject {
         FILE_CHANGE => serde_json::from_value(value)
             .map(PayloadObject::FileChange)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
-        TODO_UPDATE => serde_json::from_value(value)
-            .map(PayloadObject::TodoUpdate)
-            .unwrap_or(PayloadObject::Unknown(payload.clone())),
+        TODO_UPDATE => {
+            let is_tool_lifecycle = value
+                .as_object()
+                .map(is_tool_lifecycle_todo_update_payload)
+                .unwrap_or(false);
+            if is_tool_lifecycle {
+                serde_json::from_value(value)
+                    .map(PayloadObject::ToolResult)
+                    .unwrap_or(PayloadObject::Unknown(payload.clone()))
+            } else {
+                serde_json::from_value(value)
+                    .map(PayloadObject::TodoUpdate)
+                    .unwrap_or(PayloadObject::Unknown(payload.clone()))
+            }
+        }
         ERROR => serde_json::from_value(value)
             .map(PayloadObject::Error)
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
@@ -586,4 +597,15 @@ pub fn parse_payload(event_type: &str, payload: &Value) -> PayloadObject {
             .unwrap_or(PayloadObject::Unknown(payload.clone())),
         _ => PayloadObject::Unknown(payload.clone()),
     }
+}
+
+fn is_tool_lifecycle_todo_update_payload(payload: &serde_json::Map<String, Value>) -> bool {
+    payload
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .map(|tool_name| tool_name == "update_plan")
+        .unwrap_or(false)
+        || payload.contains_key("tool_use_id")
+        || payload.contains_key("input")
+        || payload.contains_key("output")
 }

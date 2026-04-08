@@ -530,7 +530,7 @@ fn summarize_event_formats_subagent_command_call() {
 #[test]
 fn summarize_event_formats_subagent_plan_update() {
     let summary = summarize_event(&make_event(
-        "plan.update",
+        "todo.update",
         json!({
             "actor_type": "subagent",
             "thread_id": "sub-1",
@@ -548,7 +548,7 @@ fn summarize_event_formats_subagent_plan_update() {
 
     assert_eq!(
         summary,
-        "plan update: phase=started explanation=sync state steps=2"
+        "todo update: phase=started explanation=sync state steps=2"
     );
 }
 

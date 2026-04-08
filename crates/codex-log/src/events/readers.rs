@@ -17,9 +17,10 @@ use crate::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_SESSION_FOREIGN, AGENT_STARTED,
     COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT,
     CONTEXT_COMPACTED, CONTEXT_COMPACTED_DUPLICATE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
-    MESSAGE_AGENT, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, PLAN_UPDATE, RAW_UNPARSED,
+    MESSAGE_AGENT, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, RAW_UNPARSED,
     RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDIN_WRITE, TASK_COMPLETED, TASK_STARTED,
-    THREAD_STARTED, TOOL_CALL, TOOL_RESULT, USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
+    THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, USER_INPUT_REQUEST, WEB_OPEN,
+    WEB_SEARCH,
 };
 use crate::util::utc_now_iso;
 
@@ -235,7 +236,7 @@ fn increment(counter: &mut HashMap<String, u64>, key: &str) {
 
 fn normalized_tool_event_type(tool_name: &str, is_result: bool) -> String {
     if tool_name == "update_plan" {
-        PLAN_UPDATE.to_string()
+        TODO_UPDATE.to_string()
     } else if tool_name == "request_user_input" {
         USER_INPUT_REQUEST.to_string()
     } else if tool_name == "write_stdin" {
@@ -302,7 +303,7 @@ fn collab_event_type(tool_name: &str) -> Option<&'static str> {
 fn is_singleton_tool_event_type(event_type: &str) -> bool {
     matches!(
         event_type,
-        PLAN_UPDATE
+        TODO_UPDATE
             | USER_INPUT_REQUEST
             | STDIN_WRITE
             | COLLAB_SPAWN_AGENT

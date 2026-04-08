@@ -837,7 +837,7 @@ fn subagent_update_plan_function_call_and_output_normalization() {
             &mut subagent_counts,
         )
         .expect("update_plan function_call should produce event");
-    assert_eq!(call.event_type, "plan.update");
+    assert_eq!(call.event_type, "todo.update");
     assert_eq!(call.payload["tool_name"].as_str(), Some("update_plan"));
     assert_eq!(call.payload["tool_use_id"].as_str(), Some("plan-1"));
     assert_eq!(call.payload["phase"].as_str(), Some("started"));
@@ -858,7 +858,7 @@ fn subagent_update_plan_function_call_and_output_normalization() {
             &mut subagent_counts,
         )
         .expect("update_plan function_call_output should produce event");
-    assert_eq!(output.event_type, "plan.update");
+    assert_eq!(output.event_type, "todo.update");
     assert_eq!(output.payload["tool_use_id"].as_str(), Some("plan-1"));
     assert_eq!(output.payload["phase"].as_str(), Some("completed"));
     assert_eq!(
@@ -892,7 +892,7 @@ fn subagent_update_plan_function_call_sample_is_normalized() {
         )
         .expect("update_plan sample function_call should produce event");
 
-    assert_eq!(call.event_type, "plan.update");
+    assert_eq!(call.event_type, "todo.update");
     assert_eq!(call.payload["tool_name"].as_str(), Some("update_plan"));
     assert_eq!(
         call.payload["tool_use_id"].as_str(),
@@ -1811,7 +1811,7 @@ fn subagent_legacy_event_msg_item_completed_and_web_search_end_are_normalized() 
             &mut subagent_counts,
         )
         .expect("item_completed should produce event");
-    assert_eq!(item_event.event_type, "plan.update");
+    assert_eq!(item_event.event_type, "todo.update");
     assert_eq!(
         item_event.payload["tool_name"].as_str(),
         Some("update_plan")

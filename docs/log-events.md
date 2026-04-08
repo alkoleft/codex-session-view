@@ -162,11 +162,12 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `agent.session.foreign`, `agent.meta`, `task.started`, `task.completed`, `runtime.context`, `context.compacted`, `context.compacted.duplicate`, `agent.aborted` | `AgentMetaPayload` |
 | `info.tokens` | `InfoTokensPayload` |
 | `tool.call`, `shell.call` | `ToolCallPayload` |
-| `tool.result`, `shell.result`, `stdin.write`, `web.search`, `web.open`, `plan.update`, `user.input.request`, `patch.apply`, `patch.apply.duplicate`, `collab.*` | `ToolResultPayload` |
+| `tool.result`, `shell.result`, `stdin.write`, `web.search`, `web.open`, `user.input.request`, `patch.apply`, `patch.apply.duplicate`, `collab.*` | `ToolResultPayload` |
+| `todo.update` c payload формы `update_plan` | `ToolResultPayload` |
 | `mcp.call` | `McpCallPayload` |
 | `mcp.result` | `McpResultPayload` |
 | `file.change` | `FileChangePayload` |
-| `todo.update` | `TodoUpdatePayload` |
+| `todo.update` c payload формы `todo_list` | `TodoUpdatePayload` |
 | `error` | `ErrorPayload` |
 | `raw.unparsed` | `RawPayload` |
 | `stderr.line` | `StderrPayload` |
@@ -192,7 +193,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 
 | Tool name | Старт | Завершение |
 | --- | --- | --- |
-| `update_plan` | `plan.update` | `plan.update` |
+| `update_plan` | `todo.update` | `todo.update` |
 | `request_user_input` | `user.input.request` | `user.input.request` |
 | `write_stdin` | `stdin.write` | `stdin.write` |
 | `spawn_agent` | `collab.spawn_agent` | `collab.spawn_agent` |
@@ -282,8 +283,8 @@ subagent session / standalone rollout и поверх неё агрегируе�
 
 | `payload.type` | Канонический `event_type` | Нормализованный payload |
 | --- | --- | --- |
-| `function_call` | `mcp.call`, `shell.call`, `tool.call`, `plan.update`, `user.input.request`, `stdin.write`, `collab.*` | `call_id` -> `tool_use_id`, `arguments` -> `input`, `session_path`, subagent metadata. Для `exec_command` в `input` могут приходить `cmd`, `workdir`, `yield_time_ms`, `max_output_tokens`, `login`, `tty`, `shell`. |
-| `function_call_output` | `mcp.result`, `shell.result`, `tool.result`, `plan.update`, `user.input.request`, `stdin.write`, `collab.*` | `output`, `status=completed`, `phase=completed`; если `output` строка с JSON, сначала пробуется parse JSON. Для subagent `exec_command` formatted output дополнительно разбирается на предмет строк `Process exited with code N` и `Original token count: N`, чтобы восстановить `exit_code` и `original_token_count`; исходный wrapper-текст сохраняется в `formatted_output`. |
+| `function_call` | `mcp.call`, `shell.call`, `tool.call`, `todo.update`, `user.input.request`, `stdin.write`, `collab.*` | `call_id` -> `tool_use_id`, `arguments` -> `input`, `session_path`, subagent metadata. Для `exec_command` в `input` могут приходить `cmd`, `workdir`, `yield_time_ms`, `max_output_tokens`, `login`, `tty`, `shell`. Для `update_plan` тот же `todo.update` несёт tool-shaped payload. |
+| `function_call_output` | `mcp.result`, `shell.result`, `tool.result`, `todo.update`, `user.input.request`, `stdin.write`, `collab.*` | `output`, `status=completed`, `phase=completed`; если `output` строка с JSON, сначала пробуется parse JSON. Для subagent `exec_command` formatted output дополнительно разбирается на предмет строк `Process exited with code N` и `Original token count: N`, чтобы восстановить `exit_code` и `original_token_count`; исходный wrapper-текст сохраняется в `formatted_output`. Для `update_plan` canonical `event_type` теперь тоже `todo.update`. |
 | `custom_tool_call` | `patch.apply` или `tool.call` | для `apply_patch` старт тоже хранится как `ToolResultPayload` с `phase=started` |
 | `custom_tool_call_output` | `patch.apply`, `patch.apply.duplicate` или `tool.result` | для `apply_patch` возможен duplicate-режим, см. раздел 7 |
 | `web_search_call` | `web.search` или `web.open` | `query`, `action`, `phase`, `status`, `session_path` |
@@ -321,7 +322,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `collab_waiting_end` | `collab.wait` | legacy wait result, `receiver_thread_ids`, `agents_states`, `duplicate_of=response_item.function_call_output` |
 | `collab_close_end` | `collab.close_agent` | legacy close result, `receiver_thread_ids`, `duplicate_of=response_item.function_call_output` |
 | `collab_agent_interaction_end` | `collab.send_input` | legacy send_input result, `receiver_thread_ids`, `prompt`, `duplicate_of=response_item.function_call_output` |
-| `item_completed` c `item.type=Plan` | `plan.update` | `tool_name=update_plan`, `output.text`, `duplicate_of=response_item.message` |
+| `item_completed` c `item.type=Plan` | `todo.update` | `tool_name=update_plan`, `output.text`, `duplicate_of=response_item.message` |
 | всё остальное | `raw.unparsed` | `raw`, `reason`, `session_path`, `parse_status=best_effort` |
 
 ### 5.5. `turn_context`
@@ -362,7 +363,6 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `stdin.write` | root stdout, subagent session | singleton tool event |
 | `web.search` | root stdout, subagent session | search action |
 | `web.open` | root stdout, subagent session | `open_page` action |
-| `plan.update` | root stdout, subagent session | singleton tool event или legacy plan item |
 | `user.input.request` | root stdout, subagent session | singleton tool event |
 | `patch.apply` | subagent session | `apply_patch` start/end |
 | `patch.apply.duplicate` | subagent session | duplicate completion после `patch_apply_end` |
@@ -372,7 +372,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `collab.close_agent` | root stdout, subagent session | singleton collab event |
 | `collab.resume_agent` | root stdout, subagent session | singleton collab event |
 | `file.change` | root stdout | file change item |
-| `todo.update` | root stdout | todo list item |
+| `todo.update` | root stdout, subagent session | либо root `todo_list`, либо `update_plan`/legacy plan item |
 | `error` | root stdout, subagent session | top-level или item error |
 | `raw.unparsed` | root stdout, subagent session | fallback для неподдержанного/битого ввода |
 | `stderr.line` | runner | отдельная линия stderr |
@@ -383,7 +383,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | --- | --- |
 | `agent.meta` | compatibility/derived тип, поддержан projector и payload parser, но текущие readers его почти не генерируют |
 | `message.commentary` | константа существует, но текущая нормализация обычно использует `message.assistant` + `phase=commentary` |
-| `message.plan` | это не сырой `events.jsonl`, а производное tree/view-событие после merge `plan.update` + message |
+| `message.plan` | это не сырой `events.jsonl`, а производное tree/view-событие после merge `todo.update` (shape `update_plan`) + message |
 
 ### 6.3. Реестр известных канонических `event_type`
 
@@ -429,7 +429,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `agent.aborted` | `yes` | `no` | `yes` |  |
 | `message.commentary` | `no` | `yes` | `yes` | downstream-only тип из docs 6.2 и `types.rs`; текущая нормализация обычно выражает commentary через `message.assistant` + `phase=commentary` |
 | `message.user` | `yes` | `no` | `yes` |  |
-| `message.plan` | `no` | `yes` | `yes` | downstream-only производный merge `plan.update` + `response_item.message`; не сырой ingestion event |
+| `message.plan` | `no` | `yes` | `yes` | downstream-only производный merge `todo.update` (shape `update_plan`) + `response_item.message`; не сырой ingestion event |
 | `message.assistant` | `yes` | `no` | `no` | docs-only явный член динамического namespace `message.<role>`; в `types.rs` отдельной константы нет |
 | `task.started` | `yes` | `no` | `yes` |  |
 | `task.completed` | `yes` | `no` | `yes` |  |
@@ -446,7 +446,6 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `stdin.write` | `yes` | `no` | `yes` |  |
 | `web.search` | `yes` | `no` | `yes` |  |
 | `web.open` | `yes` | `no` | `yes` |  |
-| `plan.update` | `yes` | `no` | `yes` |  |
 | `user.input.request` | `yes` | `no` | `yes` |  |
 | `patch.apply` | `yes` | `no` | `yes` |  |
 | `patch.apply.duplicate` | `yes` | `no` | `yes` |  |
@@ -456,7 +455,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `collab.close_agent` | `yes` | `no` | `yes` |  |
 | `collab.resume_agent` | `yes` | `no` | `yes` |  |
 | `file.change` | `yes` | `no` | `yes` |  |
-| `todo.update` | `yes` | `no` | `yes` |  |
+| `todo.update` | `yes` | `no` | `yes` | root `todo_list` и normalized `update_plan` делят один canonical `event_type`; точная форма определяется по payload shape |
 | `error` | `yes` | `no` | `yes` |  |
 | `raw.unparsed` | `yes` | `no` | `yes` |  |
 | `stderr.line` | `yes` | `no` | `yes` |  |
@@ -494,7 +493,6 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `stdin.write` | `lifecycle` | singleton lifecycle: один `event_type`, различение через `payload.phase` |
 | `web.search` | `lifecycle` | phased lifecycle search-path; `open_page` вынесен в `web.open` |
 | `web.open` | `lifecycle` | phased lifecycle open-page path внутри web search surface |
-| `plan.update` | `lifecycle` | singleton lifecycle; legacy completion также приходит через `event_msg.item_completed` |
 | `user.input.request` | `lifecycle` | singleton lifecycle; различение через `payload.phase` |
 | `patch.apply` | `lifecycle` | phased lifecycle с legacy completion `event_msg.patch_apply_end` |
 | `patch.apply.duplicate` | `atomic` | duplicate-marker после `event_msg.patch_apply_end`; не owner lifecycle state |
@@ -504,7 +502,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `collab.close_agent` | `lifecycle` | singleton lifecycle; legacy completion есть в коде, но не наблюдалась в двух логах |
 | `collab.resume_agent` | `lifecycle` | singleton lifecycle без legacy `event_msg.*` completion |
 | `file.change` | `lifecycle` | root-only phased lifecycle по `item.started/updated/completed` |
-| `todo.update` | `lifecycle` | root-only phased lifecycle по `item.started/updated/completed` |
+| `todo.update` | `lifecycle` | единый canonical lifecycle для root `todo_list` и tool-shaped `update_plan`; legacy completion `Plan` тоже приходит сюда |
 | `error` | `atomic` |  |
 | `raw.unparsed` | `atomic` |  |
 | `stderr.line` | `atomic` |  |
@@ -537,7 +535,6 @@ Boundary-профиль ниже зафиксирован только для `l
 | `stdin.write` | `phased singleton` | start: `item.started(tool_use:name=write_stdin)`<br>end: `item.updated(tool_result:name=write_stdin)`, `item.completed(tool_result:name=write_stdin)` | start: `response_item.function_call(write_stdin)`<br>end: `response_item.function_call_output(write_stdin)` | — | observed в regular-agent rollout по `response_item.*` |
 | `web.search` | `phased same-type` | start: `item.started(web_search:action!=open_page)`<br>end: `item.updated(web_search:action!=open_page)`, `item.completed(web_search:action!=open_page)` | start: `response_item.web_search_call(action!=open_page, phase=started)`<br>end: `response_item.web_search_call(action!=open_page, phase=updated|completed)` | end: `event_msg.web_search_end(action!=open_page)` | observed в regular-agent rollout; `open_page` path в двух логах не встретился |
 | `web.open` | `phased same-type` | start: `item.started(web_search:action=open_page)`<br>end: `item.updated(web_search:action=open_page)`, `item.completed(web_search:action=open_page)` | start: `response_item.web_search_call(action=open_page, phase=started)`<br>end: `response_item.web_search_call(action=open_page, phase=updated|completed)` | end: `event_msg.web_search_end(action=open_page)` | code/docs-only in provided logs |
-| `plan.update` | `phased singleton` | start: `item.started(tool_use:name=update_plan)`<br>end: `item.updated(tool_result:name=update_plan)`, `item.completed(tool_result:name=update_plan)` | start: `response_item.function_call(update_plan)`<br>end: `response_item.function_call_output(update_plan)` | end: `event_msg.item_completed(item.type=Plan)` | `response_item.*` и legacy end observed в regular-agent rollout |
 | `user.input.request` | `phased singleton` | start: `item.started(tool_use:name=request_user_input)`<br>end: `item.updated(tool_result:name=request_user_input)`, `item.completed(tool_result:name=request_user_input)` | start: `response_item.function_call(request_user_input)`<br>end: `response_item.function_call_output(request_user_input)` | — | observed один раз в regular-agent rollout по `response_item.*` |
 | `patch.apply` | `phased same-type` | — | start: `response_item.custom_tool_call(apply_patch)`<br>end: `response_item.custom_tool_call_output(apply_patch)` | end: `event_msg.patch_apply_end` | both completion paths observed в regular-agent rollout; если `patch_apply_end` пришёл первым, поздний `custom_tool_call_output` уходит в atomic `patch.apply.duplicate` |
 | `collab.spawn_agent` | `phased singleton` | start: `item.started(tool_use:name=spawn_agent)`, `item.started(collab_tool_call:tool=spawn_agent)`<br>end: `item.updated(tool_result:name=spawn_agent)`, `item.completed(tool_result:name=spawn_agent)`, `item.updated(collab_tool_call:tool=spawn_agent)`, `item.completed(collab_tool_call:tool=spawn_agent)` | start: `response_item.function_call(spawn_agent)`<br>end: `response_item.function_call_output(spawn_agent)` | end: `event_msg.collab_agent_spawn_end` | `response_item.*` и legacy end observed в regular-agent rollout |
@@ -546,7 +543,7 @@ Boundary-профиль ниже зафиксирован только для `l
 | `collab.close_agent` | `phased singleton` | start: `item.started(tool_use:name=close_agent)`, `item.started(collab_tool_call:tool=close_agent)`<br>end: `item.updated(tool_result:name=close_agent)`, `item.completed(tool_result:name=close_agent)`, `item.updated(collab_tool_call:tool=close_agent)`, `item.completed(collab_tool_call:tool=close_agent)` | start: `response_item.function_call(close_agent)`<br>end: `response_item.function_call_output(close_agent)` | end: `event_msg.collab_close_end` | code/docs-only in provided logs |
 | `collab.resume_agent` | `phased singleton` | start: `item.started(tool_use:name=resume_agent)`, `item.started(collab_tool_call:tool=resume_agent)`<br>end: `item.updated(tool_result:name=resume_agent)`, `item.completed(tool_result:name=resume_agent)`, `item.updated(collab_tool_call:tool=resume_agent)`, `item.completed(collab_tool_call:tool=resume_agent)` | start: `response_item.function_call(resume_agent)`<br>end: `response_item.function_call_output(resume_agent)` | — | code/docs-only in provided logs; legacy `event_msg.*` completion в current reader нет |
 | `file.change` | `phased same-type` | start: `item.started(file_change)`<br>end: `item.updated(file_change)`, `item.completed(file_change)` | — | — | root-only lifecycle; session rollout logs его не показывают |
-| `todo.update` | `phased same-type` | start: `item.started(todo_list)`<br>end: `item.updated(todo_list)`, `item.completed(todo_list)` | — | — | root-only lifecycle; session rollout logs его не показывают |
+| `todo.update` | `phased same-type` | start: `item.started(todo_list)` или `item.started(tool_use:name=update_plan)`<br>end: `item.updated(todo_list)`, `item.completed(todo_list)`, `item.updated(tool_result:name=update_plan)`, `item.completed(tool_result:name=update_plan)` | start: `response_item.function_call(update_plan)`<br>end: `response_item.function_call_output(update_plan)` | end: `event_msg.item_completed(item.type=Plan)` | один canonical `event_type` для двух payload-shape: root todo-list и subagent/root `update_plan` |
 
 ## 7. Правила дедупликации при ingestion
 
@@ -661,7 +658,7 @@ Incremental tail для standalone rollout и live-import subagent sessions ра
 - `tool.call` / `tool.result`
 - `shell.call` / `shell.result`
 - `mcp.call` / `mcp.result`
-- singleton tool-событий (`stdin.write`, `web.*`, `plan.update`, `user.input.request`, `patch.apply`, `collab.*`)
+- singleton tool-событий (`stdin.write`, `web.*`, `todo.update` для `update_plan`, `user.input.request`, `patch.apply`, `collab.*`)
 - `file.change`
 - `todo.update`
 
@@ -685,16 +682,16 @@ Barrier event:
 - `context.compacted*`
 - `patch.apply.duplicate`
 
-### 8.3. `plan.update` + message -> производный `message.plan`
+### 8.3. `todo.update` + message -> производный `message.plan`
 
 В `build_event_tree` выполняется специальная склейка пары:
 
-- `plan.update` из `event_msg.item_completed`
+- `todo.update` из `event_msg.item_completed`
 - следующий за ним `response_item.message`
 
 если одновременно верно:
 
-- у `plan.update` стоит `duplicate_of = "response_item.message"`;
+- у `todo.update` стоит `duplicate_of = "response_item.message"`;
 - текст плана совпадает;
 - события соседние в потоке thread.
 
