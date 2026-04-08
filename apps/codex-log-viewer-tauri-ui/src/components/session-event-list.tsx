@@ -1,9 +1,22 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { Check, CircleAlert, CircleX } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import {
+  agentSelectionThreadIdForEvent,
+  buildThreadPresentationIndex,
+  formatAgentDisplayLabel,
+  type ThreadPresentationMeta,
+} from "@/components/agent-thread-view-model";
 import {
   sortEntriesByRenderSeq,
   sortTimelineItemsForRender,
@@ -150,34 +163,101 @@ type MergedCard =
   | PlanUpdateMergedCard;
 
 const TaskTimelinePaletteContext = createContext<TaskTimelinePalette | null>(null);
+const TimelineThreadMetaContext = createContext<Record<string, ThreadPresentationMeta>>({});
 
-export function SessionEventList({ session }: { session: LoadedSession }) {
+export function SessionEventList({
+  focusEventId = null,
+  focusRevision = 0,
+  onAgentSelect,
+  selectedAgentThreadId = null,
+  session,
+}: {
+  focusEventId?: string | null;
+  focusRevision?: number;
+  onAgentSelect?: (threadId: string) => void;
+  selectedAgentThreadId?: string | null;
+  session: LoadedSession;
+}) {
   const rootItems = session.tree.roots.flatMap((thread) => thread.items);
+  const threadMetaById = buildThreadPresentationIndex(session);
+  const eventElementMapRef = useRef(new Map<string, HTMLDivElement>());
+
+  useEffect(() => {
+    if (!focusEventId) {
+      return;
+    }
+
+    const element = eventElementMapRef.current.get(focusEventId);
+    element?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  }, [focusEventId, focusRevision]);
+
+  const registerEventIds = (eventIds: string[], element: HTMLDivElement | null) => {
+    const map = eventElementMapRef.current;
+    eventIds.forEach((eventId) => {
+      if (!eventId) {
+        return;
+      }
+
+      if (element) {
+        map.set(eventId, element);
+        return;
+      }
+
+      map.delete(eventId);
+    });
+  };
 
   return (
-    <div className="flex flex-col">
-      {rootItems.length > 0 ? <TimelineItemsView items={rootItems} path="root" /> : null}
+    <TimelineThreadMetaContext.Provider value={threadMetaById}>
+      <div className="flex flex-col">
+        {rootItems.length > 0 ? (
+          <TimelineItemsView
+            items={rootItems}
+            onAgentSelect={onAgentSelect}
+            path="root"
+            registerEventIds={registerEventIds}
+            selectedAgentThreadId={selectedAgentThreadId}
+          />
+        ) : null}
 
-      {session.tree.orphan_events.length > 0 ? (
-        <div className="flex flex-col">
-          {session.tree.orphan_events.map((event, index) => (
-            <TimelineListItem key={`orphan-${event.event_id}-${index}`} withDivider={index > 0}>
-              <EventCard event={event} />
-            </TimelineListItem>
-          ))}
-        </div>
-      ) : null}
-    </div>
+        {session.tree.orphan_events.length > 0 ? (
+          <div className="flex flex-col">
+            {session.tree.orphan_events.map((event, index) => (
+              <TimelineListItem key={`orphan-${event.event_id}-${index}`} withDivider={index > 0}>
+                <TimelineEventCard
+                  eventIds={[event.event_id]}
+                  onAgentSelect={onAgentSelect}
+                  registerEventIds={registerEventIds}
+                  selectedAgentThreadId={selectedAgentThreadId}
+                  threadId={agentSelectionThreadIdForEvent(event)}
+                >
+                  <EventCard event={event} />
+                </TimelineEventCard>
+              </TimelineListItem>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </TimelineThreadMetaContext.Provider>
   );
 }
 
 function TimelineItemsView({
   items,
+  onAgentSelect,
   path,
+  registerEventIds,
+  selectedAgentThreadId,
   groupTaskLifecycles = true,
 }: {
   items: TimelineItem[];
+  onAgentSelect?: (threadId: string) => void;
   path: string;
+  registerEventIds: (eventIds: string[], element: HTMLDivElement | null) => void;
+  selectedAgentThreadId: string | null;
   groupTaskLifecycles?: boolean;
 }) {
   const renderedItems = groupTaskLifecycles ? buildTimelineRenderItems(items) : sortTimelineItemsForRender(items).map((item, index) => ({
@@ -197,7 +277,10 @@ function TimelineItemsView({
                 isClosed={entry.isClosed}
                 items={entry.items}
                 mode={entry.mode}
+                onAgentSelect={onAgentSelect}
                 path={`${path}-task-${index}`}
+                registerEventIds={registerEventIds}
+                selectedAgentThreadId={selectedAgentThreadId}
               />
             </TimelineListItem>
           );
@@ -205,7 +288,13 @@ function TimelineItemsView({
 
         return (
           <TimelineListItem key={timelineItemKey(entry.item, path, index)} withDivider={index > 0}>
-            <TimelineItemView item={entry.item} path={`${path}-item-${index}`} />
+            <TimelineItemView
+              item={entry.item}
+              onAgentSelect={onAgentSelect}
+              path={`${path}-item-${index}`}
+              registerEventIds={registerEventIds}
+              selectedAgentThreadId={selectedAgentThreadId}
+            />
           </TimelineListItem>
         );
       })}
@@ -215,19 +304,36 @@ function TimelineItemsView({
 
 function TimelineItemView({
   item,
+  onAgentSelect,
   path,
+  registerEventIds,
+  selectedAgentThreadId,
 }: {
   item: TimelineItem;
+  onAgentSelect?: (threadId: string) => void;
   path: string;
+  registerEventIds: (eventIds: string[], element: HTMLDivElement | null) => void;
+  selectedAgentThreadId: string | null;
 }) {
   if ("Event" in item) {
-    return <EventNodeView node={item.Event} path={`${path}-event`} />;
+    return (
+      <EventNodeView
+        node={item.Event}
+        onAgentSelect={onAgentSelect}
+        path={`${path}-event`}
+        registerEventIds={registerEventIds}
+        selectedAgentThreadId={selectedAgentThreadId}
+      />
+    );
   }
 
   return (
     <TimelineItemsView
       items={item.Thread.items}
+      onAgentSelect={onAgentSelect}
       path={`${path}-thread-${item.Thread.thread_id}`}
+      registerEventIds={registerEventIds}
+      selectedAgentThreadId={selectedAgentThreadId}
     />
   );
 }
@@ -236,12 +342,18 @@ function TaskLifecycleSegmentView({
   items,
   isClosed,
   mode,
+  onAgentSelect,
   path,
+  registerEventIds,
+  selectedAgentThreadId,
 }: {
   items: TimelineItem[];
   isClosed: boolean;
   mode: string | null;
+  onAgentSelect?: (threadId: string) => void;
   path: string;
+  registerEventIds: (eventIds: string[], element: HTMLDivElement | null) => void;
+  selectedAgentThreadId: string | null;
 }) {
   const palette = taskModePalette(mode);
 
@@ -258,7 +370,10 @@ function TaskLifecycleSegmentView({
         <TimelineItemsView
           groupTaskLifecycles={false}
           items={items}
+          onAgentSelect={onAgentSelect}
           path={path}
+          registerEventIds={registerEventIds}
+          selectedAgentThreadId={selectedAgentThreadId}
         />
       </div>
     </TaskTimelinePaletteContext.Provider>
@@ -279,27 +394,95 @@ function TimelineListItem({
   );
 }
 
+function TimelineEventCard({
+  children,
+  eventIds,
+  onAgentSelect,
+  registerEventIds,
+  selectedAgentThreadId,
+  threadId,
+}: {
+  children: ReactNode;
+  eventIds: string[];
+  onAgentSelect?: (threadId: string) => void;
+  registerEventIds: (eventIds: string[], element: HTMLDivElement | null) => void;
+  selectedAgentThreadId: string | null;
+  threadId: string | null;
+}) {
+  const isSelected = Boolean(threadId && selectedAgentThreadId === threadId);
+
+  return (
+    <div
+      className={cn(
+        "rounded-xl transition-colors",
+        threadId ? "cursor-pointer" : "",
+        isSelected ? "bg-muted/20 ring-1 ring-[color:var(--accent-strong)]/40" : "",
+      )}
+      onClick={() => {
+        if (threadId) {
+          onAgentSelect?.(threadId);
+        }
+      }}
+      ref={(element) => {
+        registerEventIds(eventIds, element);
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function EventNodeView({
   node,
+  onAgentSelect,
   path,
+  registerEventIds,
+  selectedAgentThreadId,
 }: {
   node: EventNode;
+  onAgentSelect?: (threadId: string) => void;
   path: string;
+  registerEventIds: (eventIds: string[], element: HTMLDivElement | null) => void;
+  selectedAgentThreadId: string | null;
 }) {
   const card = buildMergedCard(node);
   const hiddenSingle = card.kind === "single" && shouldHideSingleEvent(card.event);
+  const cardEventIds = mergedCardEventIds(card);
+  const cardThreadId = mergedCardThreadId(card);
 
   return (
     <>
       {card.kind === "single" ? (
         !hiddenSingle ? (
-        <EventCard event={card.event} />
+          <TimelineEventCard
+            eventIds={cardEventIds}
+            onAgentSelect={onAgentSelect}
+            registerEventIds={registerEventIds}
+            selectedAgentThreadId={selectedAgentThreadId}
+            threadId={cardThreadId}
+          >
+            <EventCard event={card.event} />
+          </TimelineEventCard>
         ) : null
       ) : (
-        <MergedEventCard card={card} />
+        <TimelineEventCard
+          eventIds={cardEventIds}
+          onAgentSelect={onAgentSelect}
+          registerEventIds={registerEventIds}
+          selectedAgentThreadId={selectedAgentThreadId}
+          threadId={cardThreadId}
+        >
+          <MergedEventCard card={card} />
+        </TimelineEventCard>
       )}
       {card.children.length > 0 ? (
-        <TimelineItemsView items={card.children} path={`${path}-children`} />
+        <TimelineItemsView
+          items={card.children}
+          onAgentSelect={onAgentSelect}
+          path={`${path}-children`}
+          registerEventIds={registerEventIds}
+          selectedAgentThreadId={selectedAgentThreadId}
+        />
       ) : null}
     </>
   );
@@ -495,6 +678,7 @@ function taskModeFallbackPalette(mode: string) {
 
 function EventCard({ event }: { event: EventEntry }) {
   const inheritedTaskPalette = useContext(TaskTimelinePaletteContext);
+  const threadMetaById = useContext(TimelineThreadMetaContext);
 
   if (isStandaloneShellResult(event)) {
     return <SingleShellEventCard event={event} />;
@@ -525,12 +709,17 @@ function EventCard({ event }: { event: EventEntry }) {
 
   const summary = eventSummaryText(event);
   const detail = singleDetailText(event);
-  const subagentLabel = eventSubagentLabel(event);
+  const subagentLabel = eventSubagentLabel(event, threadMetaById);
   const runtimeContext = runtimeContextRenderData(event);
-  const taskMetaItems = taskEventMetaItems(event);
+  const metaItems = [
+    ...taskEventMetaItems(event),
+    ...genericEventMetaItems(event, threadMetaById),
+  ];
   const taskModeBadge = taskEventModeBadge(event);
   const taskMessage = taskCompletedMessage(event);
   const taskMarker = taskLifecycleMarker(event, inheritedTaskPalette);
+  const eventLabel = eventHeaderLabel(event, threadMetaById);
+  const terminalBadge = eventTerminalBadge(event);
 
   return (
     <div className="relative">
@@ -546,11 +735,12 @@ function EventCard({ event }: { event: EventEntry }) {
           <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             <span className="font-mono">#{event.seq}</span>
             <time>{formatTime(event.ts)}</time>
-            <span className="font-mono">{event.event_type}</span>
+            <span className="font-mono">{eventLabel}</span>
             {taskModeBadge ? <TaskModeBadge badge={taskModeBadge} /> : null}
+            {terminalBadge ? <TerminalEventBadge badge={terminalBadge} /> : null}
             {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
           </div>
-          {taskMetaItems.length > 0 ? <EventMetaRow items={taskMetaItems} /> : null}
+          {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
           {runtimeContext ? <RuntimeContextBlock data={runtimeContext} /> : null}
           {summary ? <CardText text={summary} tone="default" /> : null}
           {taskMessage ? <TaskCompletedMessageBlock text={taskMessage} /> : null}
@@ -568,7 +758,8 @@ function SinglePatchApplyEventCard({
   event: EventEntry;
   data: PatchApplyRenderData;
 }) {
-  const subagentLabel = eventSubagentLabel(event);
+  const threadMetaById = useContext(TimelineThreadMetaContext);
+  const subagentLabel = eventSubagentLabel(event, threadMetaById);
   const status = patchApplyStatus(data.status, data.phase);
 
   return (
@@ -622,6 +813,18 @@ function TaskModeBadge({
   );
 }
 
+function TerminalEventBadge({
+  badge,
+}: {
+  badge: { className: string; label: string };
+}) {
+  return (
+    <span className={badge.className}>
+      {badge.label}
+    </span>
+  );
+}
+
 function TaskLifecycleMarker({
   marker,
 }: {
@@ -644,6 +847,8 @@ function MergedEventCard({
 }: {
   card: Exclude<MergedCard, { kind: "single" }>;
 }) {
+  const threadMetaById = useContext(TimelineThreadMetaContext);
+
   if (card.kind === "shell") {
     return <MergedShellEventCard card={card} />;
   }
@@ -668,11 +873,11 @@ function MergedEventCard({
 
   const summary = mergedSummaryText(card.call, card.result);
   const detail = mergedDetailText(card);
-  const subagentLabel = eventSubagentLabel(card.call) ?? eventSubagentLabel(card.result);
-  const eventLabel =
-    card.call.event_type === card.result.event_type
-      ? card.call.event_type
-      : `${card.call.event_type}/${card.result.event_type}`;
+  const subagentLabel =
+    eventSubagentLabel(card.call, threadMetaById)
+    ?? eventSubagentLabel(card.result, threadMetaById);
+  const eventLabel = mergedEventHeaderLabel(card.call, card.result, threadMetaById);
+  const metaItems = mergedGenericEventMetaItems(card.call, card.result, threadMetaById);
   const timeLabel =
     card.call.ts === card.result.ts
       ? formatTime(card.call.ts)
@@ -695,6 +900,7 @@ function MergedEventCard({
           <span className="font-mono">{eventLabel}</span>
           {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
         </div>
+        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
         {summary ? <CardText text={summary} tone="default" /> : null}
         {detail ? <CardText text={detail} tone="muted" /> : null}
       </CardContent>
@@ -707,7 +913,10 @@ function MergedPatchApplyEventCard({
 }: {
   card: PatchApplyMergedCard;
 }) {
-  const subagentLabel = eventSubagentLabel(card.call) ?? eventSubagentLabel(card.result);
+  const threadMetaById = useContext(TimelineThreadMetaContext);
+  const subagentLabel =
+    eventSubagentLabel(card.call, threadMetaById)
+    ?? eventSubagentLabel(card.result, threadMetaById);
   const patchApply = mergedPatchApplyRenderData(card.call, card.result);
   const status = patchApplyStatus(patchApply.status, patchApply.phase);
 
@@ -734,7 +943,8 @@ function MergedPatchApplyEventCard({
 }
 
 function SingleShellEventCard({ event }: { event: EventEntry }) {
-  const subagentLabel = eventSubagentLabel(event);
+  const threadMetaById = useContext(TimelineThreadMetaContext);
+  const subagentLabel = eventSubagentLabel(event, threadMetaById);
   const metaItems = singleShellMetaItems(event);
   const outputSizeLabel = shellOutputSizeLabel(event.aggregated_output);
   const durationLabel = formatShellDurationNs(event.shell_duration_ns);
@@ -774,7 +984,10 @@ function MergedShellEventCard({
 }: {
   card: ShellMergedCard;
 }) {
-  const subagentLabel = eventSubagentLabel(card.call) ?? eventSubagentLabel(card.result);
+  const threadMetaById = useContext(TimelineThreadMetaContext);
+  const subagentLabel =
+    eventSubagentLabel(card.call, threadMetaById)
+    ?? eventSubagentLabel(card.result, threadMetaById);
   const metaItems = mergedShellMetaItems(card.call, card.result);
   const outputSizeLabel = shellOutputSizeLabel(card.result.aggregated_output);
   const durationLabel = formatShellDurationNs(
@@ -970,7 +1183,8 @@ function InfoTokensEventCard({
     fallbackText: string | null;
   };
 }) {
-  const subagentLabel = eventSubagentLabel(event);
+  const threadMetaById = useContext(TimelineThreadMetaContext);
+  const subagentLabel = eventSubagentLabel(event, threadMetaById);
 
   return (
     <Card
@@ -1035,7 +1249,8 @@ function PlanUpdateEventCard({
   event: EventEntry;
   data: PlanUpdateRenderData;
 }) {
-  const subagentLabel = eventSubagentLabel(event);
+  const threadMetaById = useContext(TimelineThreadMetaContext);
+  const subagentLabel = eventSubagentLabel(event, threadMetaById);
   const metaItems = singlePlanUpdateMetaItems(event, data);
 
   return (
@@ -1067,7 +1282,10 @@ function MergedPlanUpdateEventCard({
   card: PlanUpdateMergedCard;
   data: PlanUpdateRenderData;
 }) {
-  const subagentLabel = eventSubagentLabel(card.call) ?? eventSubagentLabel(card.result);
+  const threadMetaById = useContext(TimelineThreadMetaContext);
+  const subagentLabel =
+    eventSubagentLabel(card.call, threadMetaById)
+    ?? eventSubagentLabel(card.result, threadMetaById);
   const metaItems = mergedPlanUpdateMetaItems(card.call, card.result, data);
   const eventLabel =
     card.call.event_type === card.result.event_type
@@ -1168,7 +1386,8 @@ function UserInputRequestEventCard({
   event: EventEntry;
   request: UserInputRequestEntry;
 }) {
-  const subagentLabel = eventSubagentLabel(event);
+  const threadMetaById = useContext(TimelineThreadMetaContext);
+  const subagentLabel = eventSubagentLabel(event, threadMetaById);
   const metaItems = userInputRequestMetaItems(request);
 
   return (
@@ -1200,7 +1419,10 @@ function MergedUserInputRequestEventCard({
   card: UserInputMergedCard;
   request: UserInputRequestEntry;
 }) {
-  const subagentLabel = eventSubagentLabel(card.call) ?? eventSubagentLabel(card.result);
+  const threadMetaById = useContext(TimelineThreadMetaContext);
+  const subagentLabel =
+    eventSubagentLabel(card.call, threadMetaById)
+    ?? eventSubagentLabel(card.result, threadMetaById);
   const metaItems = userInputRequestMetaItems(request);
   const eventLabel =
     card.call.event_type === card.result.event_type
@@ -1791,13 +2013,194 @@ function buildMergedCard(node: EventNode): MergedCard {
   };
 }
 
-function eventSubagentLabel(event: EventEntry) {
+function mergedCardEventIds(card: MergedCard) {
+  if (card.kind === "single") {
+    return [card.event.event_id];
+  }
+
+  return uniqueEventIds([card.call.event_id, card.result.event_id]);
+}
+
+function mergedCardThreadId(card: MergedCard) {
+  if (card.kind === "single") {
+    return agentSelectionThreadIdForEvent(card.event);
+  }
+
+  const callThreadId = agentSelectionThreadIdForEvent(card.call);
+  const resultThreadId = agentSelectionThreadIdForEvent(card.result);
+  if (callThreadId && resultThreadId && callThreadId !== resultThreadId) {
+    return null;
+  }
+  return callThreadId ?? resultThreadId ?? null;
+}
+
+function eventSubagentLabel(
+  event: EventEntry,
+  threadMetaById: Record<string, ThreadPresentationMeta>,
+) {
   if (event.actor_type !== "subagent") {
     return null;
   }
 
-  const label = event.subagent_nickname?.trim();
-  return label ? label : null;
+  return threadDisplayLabel(event.thread_id, threadMetaById)
+    ?? normalizeDisplayText(event.subagent_nickname)
+    ?? normalizeDisplayText(event.thread_id)
+    ?? null;
+}
+
+function eventHeaderLabel(
+  event: EventEntry,
+  threadMetaById: Record<string, ThreadPresentationMeta>,
+) {
+  if (event.event_type !== COLLAB_SPAWN_AGENT) {
+    return event.event_type;
+  }
+
+  const sourceLabel = threadDisplayLabel(event.thread_id, threadMetaById) ?? "main";
+  const targetLabel = collabTargetLabels(event, threadMetaById)[0] ?? "unknown";
+  return `spawn ${sourceLabel} -> ${targetLabel}`;
+}
+
+function mergedEventHeaderLabel(
+  call: EventEntry,
+  result: EventEntry,
+  threadMetaById: Record<string, ThreadPresentationMeta>,
+) {
+  const callLabel = eventHeaderLabel(call, threadMetaById);
+  const resultLabel = eventHeaderLabel(result, threadMetaById);
+  return callLabel === resultLabel ? callLabel : `${callLabel}/${resultLabel}`;
+}
+
+function genericEventMetaItems(
+  event: EventEntry,
+  threadMetaById: Record<string, ThreadPresentationMeta>,
+) {
+  const items: Array<{ label: string; value: string }> = [];
+  const targetLabels = collabTargetLabels(event, threadMetaById);
+
+  if (event.event_type === COLLAB_SPAWN_AGENT) {
+    if (targetLabels[0]) {
+      items.push({ label: "agent", value: targetLabels[0] });
+    }
+    const requestedType = normalizeDisplayText(event.spawn_agent?.requested_agent_type);
+    if (requestedType) {
+      items.push({ label: "agent type", value: requestedType });
+    }
+    const model = normalizeDisplayText(event.spawn_agent?.model);
+    if (model) {
+      items.push({ label: "model", value: model });
+    }
+    const effort = normalizeDisplayText(event.spawn_agent?.reasoning_effort);
+    if (effort) {
+      items.push({ label: "effort", value: effort });
+    }
+    return items;
+  }
+
+  if (isPairableCollabOperationEvent(event)) {
+    items.push({
+      label: targetLabels.length > 1 ? "agents" : "agent",
+      value: targetLabels.length > 0 ? targetLabels.join(", ") : "unknown/unbound",
+    });
+  }
+
+  return items;
+}
+
+function mergedGenericEventMetaItems(
+  call: EventEntry,
+  result: EventEntry,
+  threadMetaById: Record<string, ThreadPresentationMeta>,
+) {
+  const items = [...genericEventMetaItems(call, threadMetaById), ...genericEventMetaItems(result, threadMetaById)];
+  return items.filter(
+    (item, index) =>
+      items.findIndex(
+        (candidate) => candidate.label === item.label && candidate.value === item.value,
+      ) === index,
+  );
+}
+
+function collabTargetLabels(
+  event: EventEntry,
+  threadMetaById: Record<string, ThreadPresentationMeta>,
+) {
+  const labels = collabTargetThreadIds(event).map((threadId) => threadDisplayLabel(threadId, threadMetaById) ?? threadId);
+  return labels.filter(
+    (label, index) => labels.findIndex((candidate) => candidate === label) === index,
+  );
+}
+
+function collabTargetThreadIds(event: EventEntry) {
+  if (event.event_type === COLLAB_SPAWN_AGENT) {
+    return uniqueEventIds([normalizeDisplayText(event.spawn_agent?.receiver_thread_id)]);
+  }
+
+  return uniqueEventIds(event.receiver_thread_ids.map((threadId) => normalizeDisplayText(threadId)));
+}
+
+function threadDisplayLabel(
+  threadId: string | null | undefined,
+  threadMetaById: Record<string, ThreadPresentationMeta>,
+) {
+  const normalizedThreadId = normalizeDisplayText(threadId);
+  if (!normalizedThreadId) {
+    return null;
+  }
+
+  const threadMeta = threadMetaById[normalizedThreadId];
+  if (!threadMeta) {
+    return normalizedThreadId;
+  }
+
+  return formatAgentDisplayLabel(
+    threadMeta.nickname,
+    threadMeta.role,
+    threadMeta.threadId,
+    threadMeta.isRoot,
+  );
+}
+
+function eventTerminalBadge(event: EventEntry) {
+  if (event.actor_type !== "subagent") {
+    return null;
+  }
+
+  switch (event.event_type) {
+    case TASK_COMPLETED:
+      return {
+        className:
+          "inline-flex items-center rounded-full border border-emerald-500/35 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700 dark:text-emerald-300",
+        label: "completed",
+      };
+    case "agent.failed":
+      return {
+        className:
+          "inline-flex items-center rounded-full border border-rose-500/35 bg-rose-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-rose-700 dark:text-rose-300",
+        label: "failed",
+      };
+    case "agent.aborted":
+      return {
+        className:
+          "inline-flex items-center rounded-full border border-amber-500/35 bg-amber-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700 dark:text-amber-300",
+        label: "aborted",
+      };
+    default:
+      return null;
+  }
+}
+
+function uniqueEventIds(values: Array<string | null | undefined>) {
+  return values.filter(
+    (value, index): value is string =>
+      Boolean(value)
+      && values.findIndex((candidate) => candidate === value) === index,
+  );
+}
+
+function normalizeDisplayText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
 }
 
 function formatTime(value: string | null) {

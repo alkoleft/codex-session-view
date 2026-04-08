@@ -789,6 +789,59 @@ payload на стороне UI:
 - `shell_parsed_commands[]`: нормализованный список записей из `parsed_cmd` с полями
   `kind`, `command`, `query`, `name`, `path`.
 
+### 8.8. Agent-centric derivation в `codex-log-viewer-tauri-ui`
+
+Начиная с viewer redesign для фоновых агентов, `apps/codex-log-viewer-tauri-ui` строит
+дополнительную frontend-only модель `AgentThreadViewModel` поверх уже загруженного `LoadedSession`.
+Это не новый backend/API контракт и не отдельный persisted слой: timeline и `EventTree` остаются
+источником истины, а правая панель `Agents` является производным представлением.
+
+Правила derivation:
+
+- модель строится только из уже доступных `ThreadNode`, `TimelineItem` и `EventEntry`;
+- viewer обходит subagent-thread не только в верхнем `ThreadNode.items`, но и во вложенных
+  `EventNode.children`, потому что `EventTree` может заякоривать thread под конкретным событием;
+- `parentThreadId` выводится только из текущего tree nesting; viewer не делает backend fallback;
+- `spawnEventId` назначается только по точному `collab.spawn_agent.spawn_agent.receiver_thread_id`;
+  если для одного thread найдено несколько `spawn_agent`, earliest считается каноническим, остальные
+  идут в anomaly/unbound bucket;
+- `collab.wait`, `collab.send_input`, `collab.close_agent` привязываются только по явному
+  `receiver_thread_ids`; событие без target thread не угадывается эвристикой и остаётся
+  `unknown/unbound`;
+- сами `unknown/unbound` события не скрываются из timeline и продолжают рендериться в ленте как
+  обычные event cards.
+
+Порядок статусов агента в viewer строго `terminal-first`:
+
+1. `failed`
+2. `aborted`
+3. `closed`
+4. `completed`
+5. `waiting`
+6. `running`
+7. `unknown`
+
+Детали:
+
+- `failed` определяется по `agent.failed`;
+- `aborted` определяется по `agent.aborted`, если нет `failed`;
+- `closed` определяется по привязанному `collab.close_agent`, даже если `task.completed`
+  отсутствует;
+- `completed` определяется по `task.completed` или `thread.status=completed`, если нет более
+  сильного terminal-state выше;
+- `waiting` определяется только по привязанному `collab.wait`;
+- `running` используется для уже созданного/активного thread без terminal-state;
+- `unknown` остаётся fallback-статусом при нехватке данных.
+
+Дополнительно viewer:
+
+- показывает subagent label в формате `Nickname · Role`, если соответствующие thread metadata
+  доступны;
+- для `collab.spawn_agent` рендерит header формата `spawn <parent> -> <child>`;
+- для `collab.wait/send_input/close` выводит target agent в meta-row;
+- синхронизирует выбор между timeline и правой панелью через `thread_id`/`receiver_thread_ids`,
+  но не пытается выбирать агента для multi-target collab события без однозначного соответствия.
+
 Правила:
 
 - поля заполняются только для canonical shell-family `command_execution` / `exec_command`;

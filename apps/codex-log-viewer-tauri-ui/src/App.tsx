@@ -56,6 +56,11 @@ import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { SessionEventList } from "@/components/session-event-list";
+import { AgentsPanel } from "@/components/agents-panel";
+import {
+  buildAgentGraphViewModel,
+  preferredAgentThreadId,
+} from "@/components/agent-thread-view-model";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
@@ -439,10 +444,13 @@ export default function App() {
   const [selectedLoadedSession, setSelectedLoadedSession] = useState<LoadedSession | null>(null);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [selectedAgentThreadId, setSelectedAgentThreadId] = useState<string | null>(null);
   const [tailCursor, setTailCursor] = useState<TailCursor | null>(null);
   const [liveTailEnabled, setLiveTailEnabled] = useState(false);
   const [tailStatus, setTailStatus] = useState("Ожидание инициализации viewer backend.");
   const [liveEvents, setLiveEvents] = useState<EventRecord[]>([]);
+  const [timelineFocusEventId, setTimelineFocusEventId] = useState<string | null>(null);
+  const [timelineFocusRevision, setTimelineFocusRevision] = useState(0);
   const tailCursorRef = useRef<TailCursor | null>(null);
   const selectedSessionRefRef = useRef<string | null>(null);
   const sessionCatalogRequestIdRef = useRef(0);
@@ -525,6 +533,15 @@ export default function App() {
           : null,
       ].filter((field): field is SessionSummaryField => field != null)
     : [];
+  const agentGraph = selectedLoadedSession ? buildAgentGraphViewModel(selectedLoadedSession) : null;
+  const activeAgentThreadId =
+    selectedAgentThreadId && agentGraph?.byThreadId[selectedAgentThreadId]
+      ? selectedAgentThreadId
+      : preferredAgentThreadId(agentGraph);
+  const activeAgent =
+    activeAgentThreadId && agentGraph
+      ? agentGraph.byThreadId[activeAgentThreadId] ?? null
+      : null;
 
   const applyPreview = useCallback((preview: SessionPreview) => {
     tailCursorRef.current = preview.tail_cursor;
@@ -538,10 +555,13 @@ export default function App() {
     selectedSessionRefRef.current = null;
     tailCursorRef.current = null;
     setSelectedSessionId(null);
+    setSelectedAgentThreadId(null);
     setSelectedSessionRef(null);
     setSelectedPreview(null);
     setSelectedLoadedSession(null);
     setTailCursor(null);
+    setTimelineFocusEventId(null);
+    setTimelineFocusRevision(0);
     setSessionError(null);
     setSessionBusy(false);
     setLiveEvents([]);
@@ -566,6 +586,25 @@ export default function App() {
 
     setTailStatus("Live tail выключен. Автоматическое обновление остановлено.");
   }, [liveTailEnabled, selectedSessionRef]);
+
+  const focusTimelineEvent = useCallback((eventId: string | null) => {
+    if (!eventId) {
+      return;
+    }
+
+    setTimelineFocusEventId(eventId);
+    setTimelineFocusRevision((current) => current + 1);
+  }, []);
+
+  const activateAgent = useCallback(
+    (threadId: string, focusEventId?: string | null) => {
+      setSelectedAgentThreadId(threadId);
+      if (focusEventId) {
+        focusTimelineEvent(focusEventId);
+      }
+    },
+    [focusTimelineEvent],
+  );
 
   const refreshSessionCatalog = useCallback(
     async ({
@@ -629,11 +668,14 @@ export default function App() {
       const requestId = ++sessionRequestIdRef.current;
       selectedSessionRefRef.current = normalizedSessionRef;
       setSelectedSessionId(null);
+      setSelectedAgentThreadId(null);
       setSelectedSessionRef(normalizedSessionRef);
       setSessionBusy(true);
       setSessionError(null);
       setSelectedLoadedSession(null);
       setLiveEvents([]);
+      setTimelineFocusEventId(null);
+      setTimelineFocusRevision(0);
       tailCursorRef.current = null;
       setTailCursor(null);
       setTailStatus("Загружаю preview выбранной сессии.");
@@ -685,11 +727,14 @@ export default function App() {
       const requestId = ++sessionRequestIdRef.current;
       selectedSessionRefRef.current = null;
       setSelectedSessionId(normalizedSessionId);
+      setSelectedAgentThreadId(null);
       setSelectedSessionRef(null);
       setSessionBusy(true);
       setSessionError(null);
       setSelectedLoadedSession(null);
       setLiveEvents([]);
+      setTimelineFocusEventId(null);
+      setTimelineFocusRevision(0);
       tailCursorRef.current = null;
       setTailCursor(null);
       setTailStatus("Открываю rollout для выбранной записи каталога.");
@@ -1190,7 +1235,15 @@ export default function App() {
                 <ScrollArea className="min-h-0 flex-1">
                   <div className="flex flex-col gap-2 pr-4">
                     {selectedLoadedSession ? (
-                      <SessionEventList session={selectedLoadedSession} />
+                      <SessionEventList
+                        focusEventId={timelineFocusEventId}
+                        focusRevision={timelineFocusRevision}
+                        onAgentSelect={(threadId) => {
+                          setSelectedAgentThreadId(threadId);
+                        }}
+                        selectedAgentThreadId={activeAgentThreadId}
+                        session={selectedLoadedSession}
+                      />
                     ) : (
                       <Alert>
                         <Target className="size-4" />
@@ -1207,8 +1260,11 @@ export default function App() {
 
             <Card className={cn(PANEL_CARD_CLASS, "h-full")}>
               <CardHeader className="gap-3">
-                <CardTitle className="text-base">Inspector</CardTitle>
-                <CardDescription>Live state и служебная информация выбранной сессии.</CardDescription>
+                <CardTitle className="text-base">Agents</CardTitle>
+                <CardDescription>
+                  Причинность фоновых агентов, сохранённый live state и служебная информация
+                  выбранной сессии.
+                </CardDescription>
               </CardHeader>
 
               <CardContent className="min-h-0 flex-1 pt-4">
@@ -1327,6 +1383,13 @@ export default function App() {
                         </div>
                       </CardContent>
                     </Card>
+
+                    <AgentsPanel
+                      activeAgent={activeAgent}
+                      graph={agentGraph}
+                      onFocusEvent={focusTimelineEvent}
+                      onSelectAgent={activateAgent}
+                    />
 
                     <Card className={SURFACE_CARD_CLASS} size="sm">
                       <CardHeader className="gap-2">
