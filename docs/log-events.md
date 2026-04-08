@@ -5,13 +5,15 @@
 - какие источники событий есть;
 - как сырой лог маппится в канонический `EventRecord`;
 - какие `event_type` реально попадают в `events.jsonl`;
-- какие правила дедупликации и объединения применяются при импорте и при построении дерева событий.
+- какие правила дедупликации и объединения применяются при импорте, operation-stream агрегации
+  и при построении дерева событий.
 
 Источник истины в коде:
 
 - `crates/codex-log/src/events/readers/stdout.rs`
 - `crates/codex-log/src/events/readers/session.rs`
 - `crates/codex-log/src/events/record.rs`
+- `crates/codex-log/src/events/operation_stream.rs`
 - `crates/codex-log/src/events/payloads.rs`
 - `crates/codex-log/src/session.rs`
 - `crates/codex-log/src/tree.rs`
@@ -70,7 +72,11 @@ worker crate. Каноническая логика ingestion, session discovery
 
 ### 1.2. Канонический on-disk формат
 
-Все поддержанные события приводятся к `EventRecord` и пишутся в `events.jsonl`.
+Все поддержанные события приводятся к `EventRecord`.
+Worker по-прежнему зеркалит их в `events.jsonl`, но этот файл теперь рассматривается как
+compatibility artifact для runner/tests/manual inspection, а не как источник runtime correlation.
+Runtime correlation для viewer/session/tree строится по replay-цепочке `stdout.jsonl` +
+subagent session / standalone rollout и поверх неё агрегируется через `operation_stream`.
 
 ```json
 {
@@ -108,6 +114,35 @@ worker crate. Каноническая логика ingestion, session discovery
 - `event_log`
 
 Поле `source` в `events.jsonl` не сохраняется.
+
+### 1.4. Runtime operation stream
+
+После нормализации `EventRecord` runtime correlation больше не опирается на исторические
+`tree.rs`-эвристики напрямую. Сначала события классифицируются в `atomic` / `lifecycle` и
+агрегируются в operation stream:
+
+- lifecycle surface задаётся per-kind policy registry в
+  `crates/codex-log/src/events/operation_stream.rs`;
+- на этом слое вычисляются `OperationSnapshot`, `revision` и terminal/update semantics;
+- перед thread grouping, child-thread anchors и lifecycle parent/root anchoring `tree.rs`
+  канонизирует `run_id`, `thread_id`, `sender_thread_id`, `parent_thread_id` и
+  `receiver_thread_ids` теми же trim/empty->`None` правилами, что и `operation_stream`;
+- если lifecycle terminal из legacy `event_msg.*_end` уже помечен как `duplicate_of` для
+  `response_item.*`, snapshot должен сохранять этот canonical terminal и не переключаться на более
+  поздний `response_item.function_call_output`;
+- `tree.rs` использует snapshot metadata как приоритетный источник parent/root anchors для
+  lifecycle-операций;
+- поддерживаемый downstream renderer сейчас один: `codex-log-viewer-tauri-ui`; он должен
+  предпочитать snapshot-selected terminal/result и откатываться к старым UI-эвристикам только как
+  fallback для старых логов, где operation metadata ещё нет;
+- `src/bin/events_tree_html.rs` остаётся reference artifact и может отставать от поддерживаемой
+  runtime-поверхности.
+
+Следствие для `events.jsonl`:
+
+- файл может оставаться на диске ради совместимости;
+- отсутствие или устаревание `events.jsonl` не должно менять runtime correlation, если replay
+  строится из исходных raw run/session sources.
 
 ## 2. Внутренняя payload-модель
 

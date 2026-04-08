@@ -157,6 +157,13 @@ export type EventEntry = {
   tool_name: string | null;
   receiver_thread_ids: string[];
   operation_id: string | null;
+  operation_kind: string | null;
+  operation_root_event_id: string | null;
+  operation_revision: number | null;
+  operation_started_seq: number | null;
+  operation_terminal_seq: number | null;
+  operation_last_seq: number | null;
+  operation_is_preferred_terminal: boolean;
   phase: string | null;
   aggregated_output: string | null;
   output_value: unknown;

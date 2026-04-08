@@ -1,3 +1,5 @@
+pub mod operation_stream;
+pub mod operations;
 pub mod payloads;
 pub mod projector;
 pub mod readers;

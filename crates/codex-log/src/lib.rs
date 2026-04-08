@@ -5,6 +5,8 @@ pub mod tree;
 mod util;
 
 pub use error::{AppError, AppResult};
+pub use events::operation_stream;
+pub use events::operations;
 pub use events::payloads;
 pub use events::projector;
 pub use events::readers;

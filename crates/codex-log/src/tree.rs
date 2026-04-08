@@ -4,8 +4,15 @@ use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
 use crate::error::{AppError, AppResult};
+use crate::events::operation_stream::{
+    classify_event as classify_operation_event,
+    normalize_scope_value as normalize_operation_scope_value, operation_id as operation_stream_id,
+    operation_scope as operation_stream_scope, project_operation_stream, EventClassification,
+    OperationKey as OperationStreamKey, OperationKind as OperationStreamKind,
+    OperationProjection as OperationStreamProjection, OperationSnapshot as OperationStreamSnapshot,
+};
 use crate::events::projector::{
-    categorize_event, load_event_records, summarize_event_full, EventProjector,
+    categorize_event, load_event_records, summarize_event_full, AgentSnapshot, EventProjector,
     EventSummaryCategory,
 };
 use crate::events::readers::{JsonOutputEventReader, RunEventContext};
@@ -15,11 +22,10 @@ use crate::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_META, AGENT_REASONING, AGENT_SESSION,
     AGENT_SESSION_FOREIGN, AGENT_STARTED, COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT,
     COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT, CONTEXT_COMPACTED,
-    CONTEXT_COMPACTED_DUPLICATE, FILE_CHANGE, INFO_TOKENS, MCP_CALL, MCP_RESULT,
-    MESSAGE_COMMENTARY, MESSAGE_PLAN, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE,
-    PLAN_UPDATE, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE,
-    TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT,
-    USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
+    CONTEXT_COMPACTED_DUPLICATE, INFO_TOKENS, MCP_CALL, MCP_RESULT, MESSAGE_COMMENTARY,
+    MESSAGE_PLAN, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, PLAN_UPDATE, RUNTIME_CONTEXT,
+    SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED, TASK_STARTED,
+    THREAD_STARTED, TOOL_CALL, TOOL_RESULT, USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -112,6 +118,20 @@ pub struct EventEntry {
     pub tool_name: Option<String>,
     pub receiver_thread_ids: Vec<String>,
     pub operation_id: Option<String>,
+    #[serde(default)]
+    pub operation_kind: Option<String>,
+    #[serde(default)]
+    pub operation_root_event_id: Option<String>,
+    #[serde(default)]
+    pub operation_revision: Option<u64>,
+    #[serde(default)]
+    pub operation_started_seq: Option<u64>,
+    #[serde(default)]
+    pub operation_terminal_seq: Option<u64>,
+    #[serde(default)]
+    pub operation_last_seq: Option<u64>,
+    #[serde(default)]
+    pub operation_is_preferred_terminal: bool,
     pub phase: Option<String>,
     pub aggregated_output: Option<String>,
     pub output_value: Option<Value>,
@@ -350,25 +370,32 @@ pub fn build_event_tree_with_standalone_startup_metadata(
         .to_string();
     let run_id = events
         .first()
-        .map(|event| event.run_id.as_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("-")
-        .to_string();
+        .and_then(|event| normalize_operation_scope_value(event.run_id.as_str()))
+        .unwrap_or_else(|| "-".to_string());
 
     let mut projector = EventProjector::new(events.len().max(1), 8);
     projector.apply_events(events.iter());
+    let operation_projection = project_operation_stream(events);
+    let operation_snapshots = index_operation_snapshots(&operation_projection);
+    let normalized_agents = normalize_agent_snapshots(&projector.snapshot.agents);
 
     let root_thread_id = projector
         .snapshot
         .root_thread_id
-        .clone()
+        .as_deref()
+        .and_then(|value| normalize_thread_identifier(Some(value)))
         .or_else(|| events.iter().find_map(|event| event_thread_id(event, None)))
         .unwrap_or_else(|| "root".to_string());
 
     let mut events_by_thread: BTreeMap<String, Vec<EventEntry>> = BTreeMap::new();
     let mut orphan_events = Vec::new();
     for event in events {
-        let entry = format_event_entry(event, &projector, root_thread_id.as_str());
+        let entry = format_event_entry(
+            event,
+            &normalized_agents,
+            root_thread_id.as_str(),
+            &operation_snapshots,
+        );
         if let Some(thread_id) = event_thread_id(event, Some(root_thread_id.as_str())) {
             events_by_thread.entry(thread_id).or_default().push(entry);
         } else {
@@ -382,13 +409,13 @@ pub fn build_event_tree_with_standalone_startup_metadata(
 
     let mut all_thread_ids = BTreeSet::new();
     all_thread_ids.insert(root_thread_id.clone());
-    all_thread_ids.extend(projector.snapshot.agents.keys().cloned());
+    all_thread_ids.extend(normalized_agents.keys().cloned());
     all_thread_ids.extend(events_by_thread.keys().cloned());
 
     let first_seq_by_thread = first_seq_by_thread(&all_thread_ids, &events_by_thread);
     let (mut root_threads, mut children_by_parent) = build_thread_index(
         &all_thread_ids,
-        &projector,
+        &normalized_agents,
         &first_seq_by_thread,
         &root_thread_id,
     );
@@ -408,7 +435,7 @@ pub fn build_event_tree_with_standalone_startup_metadata(
             let flat = build_flat_thread_node(
                 &thread_id,
                 &root_thread_id,
-                &projector,
+                &normalized_agents,
                 &events_by_thread,
                 &children_by_parent,
             );
@@ -634,10 +661,9 @@ fn collect_receiver_thread_ids_from_value(value: &Value, out: &mut BTreeSet<Stri
                 for thread_id in ids
                     .iter()
                     .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .filter(|id| !id.is_empty())
+                    .filter_map(|thread_id| normalize_thread_identifier(Some(thread_id)))
                 {
-                    out.insert(thread_id.to_string());
+                    out.insert(thread_id);
                 }
             }
             for nested in map.values() {
@@ -780,11 +806,11 @@ fn is_run_dir(path: &Path) -> bool {
 fn build_flat_thread_node(
     thread_id: &str,
     root_thread_id: &str,
-    projector: &EventProjector,
+    agents: &HashMap<String, AgentSnapshot>,
     events_by_thread: &BTreeMap<String, Vec<EventEntry>>,
     children_by_parent: &HashMap<String, Vec<String>>,
 ) -> FlatThreadNode {
-    let agent = projector.snapshot.agents.get(thread_id);
+    let agent = agents.get(thread_id);
     let children = children_by_parent
         .get(thread_id)
         .into_iter()
@@ -793,7 +819,7 @@ fn build_flat_thread_node(
             build_flat_thread_node(
                 child_thread_id,
                 root_thread_id,
-                projector,
+                agents,
                 events_by_thread,
                 children_by_parent,
             )
@@ -861,44 +887,13 @@ fn materialize_thread(flat: FlatThreadNode, parent_event_id: Option<String>) -> 
 }
 
 fn assign_operation_parent_ids(events: &mut [EventEntry]) {
-    let mut started_by_operation: HashMap<(String, String), String> = HashMap::new();
-
     for event in events.iter_mut() {
-        let Some(operation_kind) = operation_kind(event) else {
-            continue;
-        };
-        let Some(operation_id) = event.operation_id.clone() else {
-            continue;
-        };
-        let key = (operation_kind.to_string(), operation_id);
-        let phase = event.phase.as_deref().unwrap_or_default();
-
-        if is_operation_start(event) {
-            started_by_operation.insert(key, event.event_id.clone());
-            continue;
-        }
-
-        if matches!(phase, "completed" | "updated")
-            || matches!(
-                event.event_type.as_str(),
-                TOOL_RESULT
-                    | SHELL_RESULT
-                    | MCP_RESULT
-                    | STDIN_WRITE
-                    | FILE_CHANGE
-                    | TODO_UPDATE
-                    | WEB_SEARCH
-                    | WEB_OPEN
-                    | COLLAB_SPAWN_AGENT
-                    | COLLAB_SEND_INPUT
-                    | COLLAB_WAIT
-                    | COLLAB_CLOSE_AGENT
-                    | COLLAB_RESUME_AGENT
-            )
+        if let Some(parent_event_id) = event
+            .operation_root_event_id
+            .clone()
+            .filter(|root_event_id| root_event_id != &event.event_id)
         {
-            if let Some(parent_event_id) = started_by_operation.get(&key) {
-                event.parent_event_id = Some(parent_event_id.clone());
-            }
+            event.parent_event_id = Some(parent_event_id);
         }
     }
 }
@@ -1165,39 +1160,6 @@ fn is_follow_up_event(event: &EventEntry) -> bool {
         )
 }
 
-fn operation_kind(event: &EventEntry) -> Option<&'static str> {
-    match event.event_type.as_str() {
-        TOOL_CALL | TOOL_RESULT => Some("tool"),
-        SHELL_CALL | SHELL_RESULT => Some("shell"),
-        MCP_CALL | MCP_RESULT => Some("mcp"),
-        STDIN_WRITE => Some("stdin.write"),
-        WEB_SEARCH => Some("web.search"),
-        WEB_OPEN => Some("web.open"),
-        PLAN_UPDATE => Some("plan.update"),
-        USER_INPUT_REQUEST => Some("user.input.request"),
-        PATCH_APPLY => Some("patch.apply"),
-        COLLAB_SPAWN_AGENT => Some("collab.spawn_agent"),
-        COLLAB_SEND_INPUT => Some("collab.send_input"),
-        COLLAB_WAIT => Some("collab.wait"),
-        COLLAB_CLOSE_AGENT => Some("collab.close_agent"),
-        COLLAB_RESUME_AGENT => Some("collab.resume_agent"),
-        FILE_CHANGE => Some("file.change"),
-        TODO_UPDATE => Some("todo.update"),
-        _ => None,
-    }
-}
-
-fn is_operation_start(event: &EventEntry) -> bool {
-    match event.event_type.as_str() {
-        TOOL_CALL | SHELL_CALL | MCP_CALL => true,
-        STDIN_WRITE | WEB_SEARCH | WEB_OPEN | PLAN_UPDATE | USER_INPUT_REQUEST | PATCH_APPLY
-        | COLLAB_SPAWN_AGENT | COLLAB_SEND_INPUT | COLLAB_WAIT | COLLAB_CLOSE_AGENT
-        | COLLAB_RESUME_AGENT => event.phase.as_deref() == Some("started"),
-        FILE_CHANGE | TODO_UPDATE => event.phase.as_deref() == Some("started"),
-        _ => false,
-    }
-}
-
 fn is_spawn_agent_event(event: &EventEntry) -> bool {
     event.event_type == COLLAB_SPAWN_AGENT || event.tool_name.as_deref() == Some("spawn_agent")
 }
@@ -1217,19 +1179,56 @@ fn flat_thread_first_seq(thread: &FlatThreadNode) -> u64 {
     own_first.min(child_first)
 }
 
+fn index_operation_snapshots(
+    projection: &OperationStreamProjection,
+) -> HashMap<OperationStreamKey, OperationStreamSnapshot> {
+    projection
+        .snapshots
+        .iter()
+        .cloned()
+        .map(|snapshot| (snapshot.key.clone(), snapshot))
+        .collect()
+}
+
+fn resolve_operation_snapshot<'a>(
+    event: &EventRecord,
+    operation_snapshots: &'a HashMap<OperationStreamKey, OperationStreamSnapshot>,
+) -> Option<&'a OperationStreamSnapshot> {
+    let operation_kind = operation_kind_from_event(event)?;
+    let operation_id = operation_stream_id(event.payload.as_object())?;
+    let scope = operation_stream_scope(event);
+    let key = OperationStreamKey {
+        kind: operation_kind,
+        scope,
+        operation_id,
+    };
+    operation_snapshots.get(&key)
+}
+
+fn operation_kind_from_event(event: &EventRecord) -> Option<OperationStreamKind> {
+    match classify_operation_event(event) {
+        EventClassification::Lifecycle { kind, .. } => Some(kind),
+        _ => None,
+    }
+}
+
+fn operation_root_event_id(run_id: &str, snapshot: &OperationStreamSnapshot) -> String {
+    let root_seq = snapshot.started_seq.unwrap_or(snapshot.last_seq);
+    format!("{}:{root_seq}", canonical_run_id(run_id))
+}
+
 fn format_event_entry(
     event: &EventRecord,
-    projector: &EventProjector,
+    agents: &HashMap<String, AgentSnapshot>,
     root_thread_id: &str,
+    operation_snapshots: &HashMap<OperationStreamKey, OperationStreamSnapshot>,
 ) -> EventEntry {
     let payload = event.payload.as_object();
     let actor_type = actor_type(event).map(str::to_string);
     let thread_id = event_thread_id(event, Some(root_thread_id));
     let subagent_nickname = if actor_type.as_deref() == Some("subagent") {
         thread_id.as_ref().and_then(|thread_id| {
-            projector
-                .snapshot
-                .agents
+            agents
                 .get(thread_id)
                 .and_then(|agent| agent.nickname.clone())
         })
@@ -1245,8 +1244,12 @@ fn format_event_entry(
         .map(str::to_string);
     let plan_message_text =
         extract_plan_message_text(&event.event_type, payload, message_text.as_deref());
+    let operation_snapshot = resolve_operation_snapshot(event, operation_snapshots);
+    let operation_root_event_id = operation_snapshot
+        .as_ref()
+        .map(|snapshot| operation_root_event_id(&event.run_id, snapshot));
     EventEntry {
-        event_id: format!("{}:{}", event.run_id, event.seq),
+        event_id: format!("{}:{}", canonical_run_id(&event.run_id), event.seq),
         parent_event_id: None,
         seq: event.seq,
         ts: event.ts.clone(),
@@ -1304,16 +1307,27 @@ fn format_event_entry(
             }
             ids.into_iter().collect()
         },
-        operation_id: payload
-            .and_then(|obj| obj.get("tool_use_id"))
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                payload
-                    .and_then(|obj| obj.get("item_id"))
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
+        operation_id: operation_stream_id(payload),
+        operation_kind: operation_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.key.kind.as_str().to_string()),
+        operation_root_event_id,
+        operation_revision: operation_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.revision),
+        operation_started_seq: operation_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.started_seq),
+        operation_terminal_seq: operation_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.terminal_seq),
+        operation_last_seq: operation_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.last_seq),
+        operation_is_preferred_terminal: operation_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.terminal_seq)
+            == Some(event.seq),
         phase: payload
             .and_then(|obj| obj.get("phase"))
             .and_then(Value::as_str)
@@ -1576,7 +1590,7 @@ fn extract_spawn_agent_entry(
     } else {
         let state = spawn_agent_state(payload, None);
         if let Some((thread_id, _)) = state {
-            receiver_thread_id = Some(thread_id.to_string());
+            receiver_thread_id = normalize_thread_identifier(Some(thread_id));
         }
         state
     };
@@ -1878,10 +1892,25 @@ fn spawn_agent_state<'a>(
 ) -> Option<(&'a str, &'a serde_json::Map<String, Value>)> {
     let states = payload.get("agents_states").and_then(Value::as_object)?;
     if let Some(thread_id) = thread_id {
-        return states
+        if let Some(state) = states
             .get(thread_id)
             .and_then(Value::as_object)
-            .map(|state| (thread_id, state));
+            .map(|state| (thread_id, state))
+        {
+            return Some(state);
+        }
+
+        let normalized_thread_id = normalize_thread_identifier(Some(thread_id))?;
+        return states.iter().find_map(|(state_thread_id, value)| {
+            (normalize_thread_identifier(Some(state_thread_id.as_str())).as_deref()
+                == Some(normalized_thread_id.as_str()))
+            .then(|| {
+                value
+                    .as_object()
+                    .map(|state| (state_thread_id.as_str(), state))
+            })
+            .flatten()
+        });
     }
     states
         .iter()
@@ -2138,15 +2167,44 @@ fn extract_shell_command(
         .and_then(|obj| obj.get("input"))
         .and_then(Value::as_object)?;
     for key in ["command", "cmd"] {
-        let Some(value) = input.get(key).and_then(Value::as_str) else {
+        let Some(value) = input.get(key) else {
             continue;
         };
-        let trimmed = value.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
+        if let Some(command) = render_shell_command_value(value) {
+            return Some(command);
         }
     }
     None
+}
+
+fn render_shell_command_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        Value::Array(parts) => {
+            let rendered_parts = parts
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>();
+            if rendered_parts.is_empty() {
+                return None;
+            }
+
+            if rendered_parts.len() >= 3
+                && matches!(rendered_parts[1], "-c" | "-lc")
+                && matches!(rendered_parts[0], "bash" | "/bin/bash" | "sh" | "/bin/sh")
+            {
+                return Some(rendered_parts[2..].join(" "));
+            }
+
+            Some(rendered_parts.join(" "))
+        }
+        _ => None,
+    }
 }
 
 fn extract_shell_exit_code(
@@ -2210,15 +2268,17 @@ fn event_thread_id(event: &EventRecord, root_thread_id: Option<&str>) -> Option<
     payload
         .and_then(|obj| obj.get("thread_id"))
         .and_then(Value::as_str)
-        .map(str::to_string)
+        .and_then(|value| normalize_thread_identifier(Some(value)))
         .or_else(|| {
             payload
                 .and_then(|obj| obj.get("sender_thread_id"))
                 .and_then(Value::as_str)
-                .map(str::to_string)
+                .and_then(|value| normalize_thread_identifier(Some(value)))
         })
         .or_else(|| match actor_type(event).as_deref() {
-            Some("agent") => root_thread_id.map(str::to_string),
+            Some("agent") => {
+                root_thread_id.and_then(|value| normalize_thread_identifier(Some(value)))
+            }
             _ => None,
         })
 }
@@ -2250,7 +2310,7 @@ fn first_seq_by_thread(
 
 fn build_thread_index(
     all_thread_ids: &BTreeSet<String>,
-    projector: &EventProjector,
+    agents: &HashMap<String, AgentSnapshot>,
     first_seq_by_thread: &HashMap<String, u64>,
     root_thread_id: &str,
 ) -> (Vec<String>, HashMap<String, Vec<String>>) {
@@ -2258,9 +2318,7 @@ fn build_thread_index(
     let mut children_by_parent: HashMap<String, Vec<String>> = HashMap::new();
 
     for thread_id in all_thread_ids {
-        let parent_thread_id = projector
-            .snapshot
-            .agents
+        let parent_thread_id = agents
             .get(thread_id)
             .and_then(|agent| agent.parent_thread_id.clone())
             .filter(|parent| all_thread_ids.contains(parent));
@@ -2281,6 +2339,70 @@ fn build_thread_index(
     }
 
     (root_threads, children_by_parent)
+}
+
+fn canonical_run_id(run_id: &str) -> String {
+    normalize_operation_scope_value(run_id).unwrap_or_else(|| run_id.to_string())
+}
+
+fn normalize_thread_identifier(value: Option<&str>) -> Option<String> {
+    value.and_then(normalize_operation_scope_value)
+}
+
+fn normalize_agent_snapshots(
+    agents: &HashMap<String, AgentSnapshot>,
+) -> HashMap<String, AgentSnapshot> {
+    let mut normalized = HashMap::new();
+    let mut entries: Vec<_> = agents.iter().collect();
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    for (raw_thread_id, agent) in entries {
+        let Some(thread_id) = normalize_thread_identifier(Some(agent.thread_id.as_str()))
+            .or_else(|| normalize_thread_identifier(Some(raw_thread_id.as_str())))
+        else {
+            continue;
+        };
+
+        let mut candidate = agent.clone();
+        candidate.thread_id = thread_id.clone();
+        candidate.parent_thread_id =
+            normalize_thread_identifier(candidate.parent_thread_id.as_deref());
+
+        if let Some(existing) = normalized.get_mut(&thread_id) {
+            merge_agent_snapshot(existing, candidate);
+        } else {
+            normalized.insert(thread_id, candidate);
+        }
+    }
+
+    normalized
+}
+
+fn merge_agent_snapshot(existing: &mut AgentSnapshot, candidate: AgentSnapshot) {
+    if existing.parent_thread_id.is_none() {
+        existing.parent_thread_id = candidate.parent_thread_id.clone();
+    }
+    if existing.status.is_empty() && !candidate.status.is_empty() {
+        existing.status = candidate.status.clone();
+    }
+    if existing.nickname.is_none() {
+        existing.nickname = candidate.nickname.clone();
+    }
+    if existing.role.is_none() {
+        existing.role = candidate.role.clone();
+    }
+    if existing.cwd.is_none() {
+        existing.cwd = candidate.cwd.clone();
+    }
+    if existing.color.is_none() {
+        existing.color = candidate.color.clone();
+    }
+    if existing.pending_response_category.is_none() {
+        existing.pending_response_category = candidate.pending_response_category;
+    }
+    if existing.recent_lines.len() < candidate.recent_lines.len() {
+        existing.recent_lines = candidate.recent_lines.clone();
+    }
 }
 
 fn sort_threads(
@@ -2832,9 +2954,86 @@ mod tests {
         assert_eq!(web_search_started.event.event_type, "web.search");
         assert_eq!(web_search_completed.event.event_type, "web.search");
         assert_eq!(
+            web_search_started.event.operation_kind.as_deref(),
+            Some("web.search")
+        );
+        assert_eq!(web_search_started.event.operation_started_seq, Some(2));
+        assert_eq!(web_search_started.event.operation_terminal_seq, Some(3));
+        assert_eq!(
+            web_search_completed
+                .event
+                .operation_root_event_id
+                .as_deref(),
+            Some("run-1:2")
+        );
+        assert!(web_search_completed.event.operation_is_preferred_terminal);
+        assert_eq!(
             web_search_completed.event.parent_event_id.as_deref(),
             Some("run-1:2")
         );
+    }
+
+    #[test]
+    fn build_event_tree_normalizes_scope_identifiers_for_operation_parenting() {
+        let mut completed = make_event(
+            "web.search",
+            json!({
+                "actor_type":"agent",
+                "thread_id":" root-thread ",
+                "tool_name":"web_search",
+                "tool_use_id":"web-1",
+                "phase":"completed"
+            }),
+            3,
+        );
+        completed.run_id = " run-1 ".to_string();
+
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":" root-thread "}), 1),
+            make_event(
+                "web.search",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"web_search",
+                    "tool_use_id":"web-1",
+                    "phase":"started"
+                }),
+                2,
+            ),
+            completed,
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        assert_eq!(tree.run_id, "run-1");
+        assert_eq!(tree.root_thread_id, "root-thread");
+        assert_eq!(tree.thread_count, 1);
+        assert!(tree.orphan_events.is_empty());
+
+        let root = &tree.roots[0];
+        assert_eq!(root.thread_id, "root-thread");
+        let web_search_started = match &root.items[1] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected web_search start event"),
+        };
+        let web_search_completed = match &web_search_started.children[0] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected web_search completion child"),
+        };
+
+        assert_eq!(web_search_completed.event.event_id, "run-1:3");
+        assert_eq!(
+            web_search_completed
+                .event
+                .operation_root_event_id
+                .as_deref(),
+            Some("run-1:2")
+        );
+        assert_eq!(
+            web_search_completed.event.parent_event_id.as_deref(),
+            Some("run-1:2")
+        );
+        assert!(web_search_completed.event.operation_is_preferred_terminal);
     }
 
     #[test]
@@ -2988,8 +3187,119 @@ mod tests {
         assert_eq!(patch_started.event.event_type, "patch.apply");
         assert_eq!(patch_completed.event.event_type, "patch.apply");
         assert_eq!(
+            patch_started.event.operation_kind.as_deref(),
+            Some("patch.apply")
+        );
+        assert_eq!(patch_started.event.operation_started_seq, Some(2));
+        assert_eq!(patch_completed.event.operation_terminal_seq, Some(3));
+        assert!(patch_completed.event.operation_is_preferred_terminal);
+        assert_eq!(
             patch_completed.event.parent_event_id.as_deref(),
             Some("run-1:2")
+        );
+    }
+
+    #[test]
+    fn build_event_tree_prefers_event_msg_shell_terminal_over_response_item_duplicate() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "shell.call",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-1",
+                    "input":{"cmd":"git status --short"}
+                }),
+                2,
+            ),
+            make_event(
+                "shell.result",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-1",
+                    "duplicate_of":"response_item.function_call_output",
+                    "input":{"command":["/bin/bash","-lc","git status --short"]},
+                    "output":"",
+                    "exit_code":0
+                }),
+                3,
+            ),
+            make_event(
+                "shell.result",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-1",
+                    "output":"Command: /bin/bash -lc 'git status --short'\nOutput:\n",
+                    "phase":"completed"
+                }),
+                4,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let root = &tree.roots[0];
+        let shell_call = match &root.items[1] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected shell call event"),
+        };
+        let canonical_result = match &shell_call.children[0] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected shell result child"),
+        };
+        let duplicate_result = match &shell_call.children[1] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected duplicate shell result child"),
+        };
+
+        assert_eq!(
+            shell_call.event.shell_command.as_deref(),
+            Some("git status --short")
+        );
+        assert_eq!(
+            canonical_result.event.shell_command.as_deref(),
+            Some("git status --short")
+        );
+        assert!(canonical_result.event.operation_is_preferred_terminal);
+        assert_eq!(canonical_result.event.operation_terminal_seq, Some(3));
+        assert!(!duplicate_result.event.operation_is_preferred_terminal);
+        assert_eq!(duplicate_result.event.operation_terminal_seq, Some(3));
+    }
+
+    #[test]
+    fn build_event_tree_extracts_shell_command_from_command_array() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "shell.result",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"command_execution",
+                    "tool_use_id":"cmd-array",
+                    "input":{"command":["/bin/bash","-lc","git branch --show-current"]},
+                    "output":"main\n",
+                    "exit_code":0
+                }),
+                2,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let root = &tree.roots[0];
+        let shell_result = match &root.items[1] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected shell result event"),
+        };
+
+        assert_eq!(
+            shell_result.event.shell_command.as_deref(),
+            Some("git branch --show-current")
         );
     }
 
@@ -3378,6 +3688,50 @@ mod tests {
                     "actor_type":"subagent",
                     "thread_id":"sub-1",
                     "parent_thread_id":"root-thread"
+                }),
+                3,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let root = &tree.roots[0];
+        let spawn_call = match &root.items[1] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected spawn event"),
+        };
+        let child_thread = match &spawn_call.children[0] {
+            TimelineItem::Thread(thread) => thread,
+            TimelineItem::Event(_) => panic!("expected child thread under spawn event"),
+        };
+
+        assert_eq!(child_thread.thread_id, "sub-1");
+        assert_eq!(child_thread.parent_event_id.as_deref(), Some("run-1:2"));
+    }
+
+    #[test]
+    fn build_event_tree_normalizes_receiver_thread_ids_for_child_anchor() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "collab.spawn_agent",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"spawn_agent",
+                    "tool_use_id":"ct-1",
+                    "phase":"completed",
+                    "status":"completed",
+                    "receiver_thread_ids":[" sub-1 "],
+                    "agents_states":{" sub-1 ":{"status":"pending_init"}}
+                }),
+                2,
+            ),
+            make_event(
+                "agent.session",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":" sub-1 ",
+                    "parent_thread_id":" root-thread "
                 }),
                 3,
             ),

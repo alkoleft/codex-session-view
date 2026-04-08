@@ -4,6 +4,7 @@ import { Check, CircleAlert, CircleX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { preferredTerminalChildIndexFromSnapshot } from "@/components/session-event-list-selection";
 import type {
   EventEntry,
   EventNode,
@@ -1605,6 +1606,11 @@ function pairedCommandShellResultChildIndex(node: EventNode) {
     return null;
   }
 
+  const snapshotIndex = preferredTerminalChildIndexFromSnapshot(node);
+  if (snapshotIndex != null) {
+    return snapshotIndex;
+  }
+
   return preferredChildIndex(
     node.children,
     (item) =>
@@ -1619,6 +1625,11 @@ function pairedCommandShellResultChildIndex(node: EventNode) {
 function pairedPatchApplyResultChildIndex(node: EventNode) {
   if (node.event.event_type !== PATCH_APPLY || node.event.phase !== "started") {
     return null;
+  }
+
+  const snapshotIndex = preferredTerminalChildIndexFromSnapshot(node);
+  if (snapshotIndex != null) {
+    return snapshotIndex;
   }
 
   return preferredChildIndex(
@@ -1708,6 +1719,11 @@ function pairedSpawnAgentResultChildIndex(node: EventNode) {
     return null;
   }
 
+  const snapshotIndex = preferredTerminalChildIndexFromSnapshot(node);
+  if (snapshotIndex != null) {
+    return snapshotIndex;
+  }
+
   return preferredChildIndex(
     node.children,
     (item) =>
@@ -1762,6 +1778,11 @@ function pairedUserInputRequestResultChildIndex(node: EventNode) {
     return null;
   }
 
+  const snapshotIndex = preferredTerminalChildIndexFromSnapshot(node);
+  if (snapshotIndex != null) {
+    return snapshotIndex;
+  }
+
   return preferredChildIndex(
     node.children,
     (item) =>
@@ -1809,6 +1830,11 @@ function userInputRequestResultPreference(event: EventEntry) {
 function pairedCollabOperationResultChildIndex(node: EventNode) {
   if (!isPairableCollabOperationEvent(node.event) || node.event.phase !== "started") {
     return null;
+  }
+
+  const snapshotIndex = preferredTerminalChildIndexFromSnapshot(node);
+  if (snapshotIndex != null) {
+    return snapshotIndex;
   }
 
   return preferredChildIndex(

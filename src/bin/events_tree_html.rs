@@ -757,9 +757,36 @@ fn timeline_item_event(item: &TimelineItem) -> Option<&EventEntry> {
     }
 }
 
+fn preferred_terminal_child_index_from_snapshot(node: &EventNode) -> Option<usize> {
+    let terminal_seq = node.event.operation_terminal_seq?;
+    let root_event_id = node
+        .event
+        .operation_root_event_id
+        .as_deref()
+        .unwrap_or(node.event.event_id.as_str());
+
+    node.children
+        .iter()
+        .enumerate()
+        .find_map(|(index, item)| match item {
+            TimelineItem::Event(child)
+                if child.event.seq == terminal_seq
+                    && child.event.operation_root_event_id.as_deref() == Some(root_event_id)
+                    && child.event.operation_is_preferred_terminal =>
+            {
+                Some(index)
+            }
+            TimelineItem::Event(_) | TimelineItem::Thread(_) => None,
+        })
+}
+
 fn paired_command_shell_result_child_index(node: &EventNode) -> Option<usize> {
     if node.event.event_type != SHELL_CALL || !is_command_shell_event(&node.event) {
         return None;
+    }
+
+    if let Some(index) = preferred_terminal_child_index_from_snapshot(node) {
+        return Some(index);
     }
 
     node.children
@@ -817,6 +844,10 @@ fn paired_spawn_agent_result_child_index(node: &EventNode) -> Option<usize> {
     if node.event.event_type != COLLAB_SPAWN_AGENT || node.event.phase.as_deref() != Some("started")
     {
         return None;
+    }
+
+    if let Some(index) = preferred_terminal_child_index_from_snapshot(node) {
+        return Some(index);
     }
 
     node.children
@@ -900,6 +931,10 @@ fn paired_user_input_request_result_child_index(node: &EventNode) -> Option<usiz
         return None;
     }
 
+    if let Some(index) = preferred_terminal_child_index_from_snapshot(node) {
+        return Some(index);
+    }
+
     node.children
         .iter()
         .enumerate()
@@ -979,6 +1014,10 @@ fn paired_collab_operation_result_child_index(node: &EventNode) -> Option<usize>
         || node.event.phase.as_deref() != Some("started")
     {
         return None;
+    }
+
+    if let Some(index) = preferred_terminal_child_index_from_snapshot(node) {
+        return Some(index);
     }
 
     node.children
