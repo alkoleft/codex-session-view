@@ -1,8 +1,7 @@
 [workspace]
 members = [
     "crates/codex-log",
-    "apps/codex-log-viewer/src-tauri",
-    "apps/codex-log-viewer-tauri-ui/src-tauri",
+    "apps/log-viewer/src-tauri",
 ]
 
 [package]

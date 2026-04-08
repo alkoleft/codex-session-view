@@ -3,6 +3,7 @@ description = "Разрешает только backend IPC-команды viewer
 permissions = [
   "allow-detect-codex-home",
   "allow-initialize-codex-home",
+  "allow-list-sessions",
   "allow-list-indexed-sessions",
   "allow-load-session",
   "allow-load-session-preview",

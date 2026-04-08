@@ -1,5 +1,5 @@
 {
-  "name": "codex-log-viewer-tauri-ui",
+  "name": "log-viewer",
   "private": true,
   "version": "0.1.0",
   "type": "module",

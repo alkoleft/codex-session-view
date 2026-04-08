@@ -65,6 +65,10 @@ const AGENT_META = "agent.meta";
 const RESPONSE_ITEM_FUNCTION_CALL_OUTPUT = "response_item.function_call_output";
 const TEXT_COLLAPSE_CHAR_LIMIT = 240;
 const TEXT_COLLAPSE_LINE_LIMIT = 4;
+const COMPACT_CARD_CONTENT_CLASS = "min-w-0 flex flex-col gap-1.5 p-3";
+const COMPACT_CARD_CONTENT_SPACED_CLASS = "min-w-0 flex flex-col gap-2 p-3";
+const COMPACT_EVENT_HEADER_CLASS =
+  "flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground";
 
 type CollabOperationStateEntry = {
   threadId: string | null;
@@ -369,11 +373,11 @@ function TaskLifecycleSegmentView({
   return (
     <TaskTimelinePaletteContext.Provider value={palette}>
       <div
-        className="relative overflow-hidden py-1 pl-5"
+        className="relative overflow-hidden py-0.5 pl-4"
         style={{ backgroundColor: palette.surface }}
       >
         <div
-          className="absolute bottom-1 left-[9px] top-1 w-px"
+          className="absolute bottom-0.5 left-[7px] top-0.5 w-px"
           style={{ backgroundColor: isClosed ? palette.line : palette.lineOpen }}
         />
         <TimelineItemsView
@@ -397,7 +401,7 @@ function TimelineListItem({
   withDivider: boolean;
 }) {
   return (
-    <div className={cn(withDivider ? "border-t border-border/60 pt-2" : "")}>
+    <div className={cn(withDivider ? "border-t border-border/60 pt-1.5" : "")}>
       {children}
     </div>
   );
@@ -740,8 +744,8 @@ function EventCard({ event }: { event: EventEntry }) {
         )}
         size="sm"
       >
-        <CardContent className="flex flex-col gap-2 p-4">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <CardContent className={COMPACT_CARD_CONTENT_CLASS}>
+          <div className={COMPACT_EVENT_HEADER_CLASS}>
             <span className="font-mono">#{event.seq}</span>
             <time>{formatTime(event.ts)}</time>
             <span className="font-mono">{eventLabel}</span>
@@ -779,7 +783,7 @@ function SinglePatchApplyEventCard({
       )}
       size="sm"
     >
-      <CardContent className="flex flex-col gap-2 p-4">
+      <CardContent className={COMPACT_CARD_CONTENT_CLASS}>
         <PatchApplyEventHeader
           eventLabel={event.event_type}
           seqLabel={`#${event.seq}`}
@@ -795,8 +799,8 @@ function SinglePatchApplyEventCard({
 
 function TaskCompletedMessageBlock({ text }: { text: string }) {
   return (
-    <div className="flex flex-col gap-1">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+    <div className="flex flex-col gap-0.5">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
         Last Agent Message
       </div>
       <CardText text={text} tone="default" />
@@ -842,7 +846,7 @@ function TaskLifecycleMarker({
   return (
     <span
       aria-hidden="true"
-      className="absolute -left-4 top-5 z-10 size-2.5 rounded-full border-2"
+      className="absolute -left-4 top-4 z-10 size-2.5 rounded-full border-2"
       style={{
         borderColor: marker.accent,
         backgroundColor: marker.completed ? "var(--background)" : marker.accent,
@@ -900,8 +904,8 @@ function MergedEventCard({
       )}
       size="sm"
     >
-      <CardContent className="flex flex-col gap-2 p-4">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <CardContent className={COMPACT_CARD_CONTENT_CLASS}>
+        <div className={COMPACT_EVENT_HEADER_CLASS}>
           <span className="font-mono">
             #{card.call.seq}, #{card.result.seq}
           </span>
@@ -937,7 +941,7 @@ function MergedPatchApplyEventCard({
       )}
       size="sm"
     >
-      <CardContent className="flex flex-col gap-2 p-4">
+      <CardContent className={COMPACT_CARD_CONTENT_CLASS}>
         <PatchApplyEventHeader
           eventLabel={card.call.event_type}
           seqLabel={`#${card.call.seq}`}
@@ -967,7 +971,7 @@ function SingleShellEventCard({ event }: { event: EventEntry }) {
       )}
       size="sm"
     >
-      <CardContent className="min-w-0 flex flex-col gap-3 p-4">
+      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
         <ShellEventHeader
           durationLabel={durationLabel}
           eventLabel={event.event_type}
@@ -1016,7 +1020,7 @@ function MergedShellEventCard({
       )}
       size="sm"
     >
-      <CardContent className="min-w-0 flex flex-col gap-3 p-4">
+      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
         <ShellEventHeader
           durationLabel={durationLabel}
           eventLabel={`${card.call.event_type}, ${card.result.event_type}`}
@@ -1060,7 +1064,7 @@ function ShellEventHeader({
   const statusText = shellStatusDetailText(exitCode);
 
   return (
-    <div className="grid min-w-0 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 text-xs text-muted-foreground">
+    <div className="grid min-w-0 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-2.5 text-[11px] text-muted-foreground">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="font-mono">{seqLabel}</span>
         <time>{timestampLabel}</time>
@@ -1108,7 +1112,7 @@ function EventMetaRow({
   items: Array<{ label: string; value: string }>;
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
       {items.map((item) => (
         <span className="inline-flex items-center gap-1" key={`${item.label}-${item.value}`}>
           <span>{item.label}</span>
@@ -1140,7 +1144,7 @@ function PatchApplyEventHeader({
         : CircleAlert;
 
   return (
-    <div className="grid min-w-0 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 text-xs text-muted-foreground">
+    <div className="grid min-w-0 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-2.5 text-[11px] text-muted-foreground">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="font-mono">{seqLabel}</span>
         <time>{timestampLabel}</time>
@@ -1203,14 +1207,15 @@ function InfoTokensEventCard({
       )}
       size="sm"
     >
-      <CardContent className="flex flex-col gap-1.5 p-4">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-mono">#{event.seq}</span>
-          <time>{formatTime(event.ts)}</time>
-          <span className="font-mono">{event.event_type}</span>
-          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
+      <CardContent className="min-w-0 p-3">
+        <div className="grid min-w-0 w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
+          <div className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[11px] text-muted-foreground">
+            <span className="font-mono">#{event.seq}</span>
+            <time>{formatTime(event.ts)}</time>
+            {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
+          </div>
+          <InfoTokensBlock fallbackText={data.fallbackText} pairs={data.pairs} />
         </div>
-        <InfoTokensBlock fallbackText={data.fallbackText} pairs={data.pairs} />
       </CardContent>
     </Card>
   );
@@ -1223,31 +1228,40 @@ function InfoTokensBlock({
   pairs: Array<{ label: string; value: string }>;
   fallbackText: string | null;
 }) {
-  return (
-    <div className="flex w-full flex-col items-end gap-1 text-right">
-      {pairs.length > 0 ? (
-        <div className="flex w-full flex-wrap items-start justify-end gap-x-4 gap-y-1">
+  if (pairs.length > 0) {
+    return (
+      <div className="min-w-0 overflow-x-auto">
+        <div className="flex min-w-max flex-nowrap items-center justify-end gap-3 text-right">
           {pairs.map((pair) => (
             <div
-              className="flex min-w-[84px] flex-col items-end"
+              className="inline-flex shrink-0 items-baseline gap-1.5 whitespace-nowrap"
               key={`${pair.label}-${pair.value}`}
             >
               <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                 {pair.label}
               </span>
-              <span className="ui-selectable font-mono text-xs text-foreground/80">
+              <span className="ui-selectable font-mono text-xs text-foreground">
                 {pair.value}
               </span>
             </div>
           ))}
         </div>
-      ) : null}
-      {fallbackText ? (
-        <div className="ui-selectable whitespace-pre-wrap break-words text-xs text-muted-foreground">
+      </div>
+    );
+  }
+
+  if (fallbackText) {
+    return (
+      <div className="min-w-0 overflow-x-auto">
+        <div className="ui-selectable min-w-max whitespace-nowrap text-right text-xs text-muted-foreground">
           {fallbackText}
         </div>
-      ) : null}
-    </div>
+      </div>
+    );
+  }
+
+  return (
+    <div />
   );
 }
 
@@ -1270,8 +1284,8 @@ function PlanUpdateEventCard({
       )}
       size="sm"
     >
-      <CardContent className="flex flex-col gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
+        <div className={COMPACT_EVENT_HEADER_CLASS}>
           <span className="font-mono">#{event.seq}</span>
           <time>{formatTime(event.ts)}</time>
           <span className="font-mono">{event.event_type}</span>
@@ -1313,8 +1327,8 @@ function MergedPlanUpdateEventCard({
       )}
       size="sm"
     >
-      <CardContent className="flex flex-col gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
+        <div className={COMPACT_EVENT_HEADER_CLASS}>
           <span className="font-mono">
             #{card.call.seq}, #{card.result.seq}
           </span>
@@ -1407,8 +1421,8 @@ function UserInputRequestEventCard({
       )}
       size="sm"
     >
-      <CardContent className="flex flex-col gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
+        <div className={COMPACT_EVENT_HEADER_CLASS}>
           <span className="font-mono">#{event.seq}</span>
           <time>{formatTime(event.ts)}</time>
           <span className="font-mono">{event.event_type}</span>
@@ -1450,8 +1464,8 @@ function MergedUserInputRequestEventCard({
       )}
       size="sm"
     >
-      <CardContent className="flex flex-col gap-3 p-4">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
+        <div className={COMPACT_EVENT_HEADER_CLASS}>
           <span className="font-mono">
             #{card.call.seq}, #{card.result.seq}
           </span>
@@ -1766,7 +1780,7 @@ function CardText({
       <p
         className={cn(
           "ui-selectable whitespace-pre-wrap break-words",
-          tone === "default" ? "text-sm leading-6" : "text-xs leading-5 text-muted-foreground",
+          tone === "default" ? "text-sm leading-5" : "text-xs leading-4 text-muted-foreground",
         )}
       >
         {displayedText}
@@ -1894,7 +1908,7 @@ function RuntimeContextBlock({
   return (
     <details className="group/runtime">
       <summary className="flex cursor-pointer list-none items-start justify-between gap-3 text-xs [&::-webkit-details-marker]:hidden">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
           {data.summaryItems.length > 0 ? (
             data.summaryItems.map((item) => (
               <span className="inline-flex items-center gap-1" key={`${item.label}-${item.value}`}>

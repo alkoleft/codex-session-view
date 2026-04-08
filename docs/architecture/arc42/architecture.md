@@ -212,7 +212,7 @@ flowchart TD
   live sync с subagent sessions;
 - `crates/codex-log` содержит source of truth для `EventRecord`, readers, replay, tree/view-model,
   `SessionCatalog`, `SessionLoader`, `SessionReader` и `TailCursor`;
-- `apps/codex-log-viewer` это отдельный desktop product на Tauri + React, который читает
+- `apps/log-viewer` это desktop product на Tauri + React, который читает
   `CODEX_HOME` напрямую через backend-команды и не зависит от run-dir worker.
 
 ### 5.2 Уровень 2: внутренняя структура runner
@@ -373,7 +373,7 @@ flowchart TB
     subgraph Хост
         OP[Разработчик или оператор]
         WK[codex-worker-rs]
-        VW[codex-log-viewer]
+        VW[log-viewer]
         CX[codex CLI]
         TF[Файл задач]
         ART[.codex-worker артефакты]
@@ -395,7 +395,7 @@ flowchart TB
 |------|------------|------------|
 | Терминал разработчика / оператора | Запуск воркера и просмотр результата | Локальная оболочка |
 | `codex-worker-rs` | Исполняющий рантайм orchestration | Rust binary |
-| `codex-log-viewer` | Read-only desktop viewer для Codex sessions | Tauri + React |
+| `log-viewer` | Read-only desktop viewer для Codex sessions | Tauri + React |
 | `codex` CLI | Внешний execution engine | Установленный Codex CLI |
 | Файл задач | Изменяемая очередь задач в `v1` | Markdown file |
 | Каталог артефактов | История запусков и диагностика | Local filesystem |
@@ -522,9 +522,9 @@ classDiagram
 - session files в `CODEX_HOME/sessions/**` остаются source of truth для file-backed discovery,
   preview и tail;
 - `session_index.jsonl` используется как metadata overlay для viewer v1 и как fallback-каталог
-  для dialog picker в `codex-log-viewer-tauri-ui`, если недоступен `state_*.sqlite`.
+  для dialog picker в `log-viewer`, если недоступен `state_*.sqlite`.
 - `state_*.sqlite`, таблица `threads`, используется как основной каталог для
-  `list_indexed_sessions` и dialog picker в `codex-log-viewer-tauri-ui`.
+  `list_indexed_sessions` и dialog picker в `log-viewer`.
 
 ### 8.4 Наблюдаемость и телеметрия
 
@@ -578,10 +578,11 @@ classDiagram
 
 ### 8.8 Trust boundary viewer
 
-`codex-log-viewer` намеренно проектируется как read-only desktop-клиент с жёсткой backend границей:
+`log-viewer` намеренно проектируется как read-only desktop-клиент с жёсткой backend границей:
 
-- frontend использует только пять IPC-команд: `detect_codex_home`, `initialize_codex_home`,
-  `list_sessions`, `load_session`, `tail_session`;
+- frontend использует только объявленные IPC-команды: `detect_codex_home`,
+  `initialize_codex_home`, `list_sessions`, `list_indexed_sessions`, `load_session_preview`,
+  `load_session_preview_by_id`, `load_session`, `tail_session`;
 - после `initialize_codex_home()` backend фиксирует канонический `ResolvedCodexHome`, а чтение до
   инициализации запрещено;
 - frontend работает только с `session_ref`, а не с произвольными filesystem path;

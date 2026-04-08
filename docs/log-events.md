@@ -17,12 +17,12 @@
 - `crates/codex-log/src/events/payloads.rs`
 - `crates/codex-log/src/session.rs`
 - `crates/codex-log/src/tree.rs`
-- `apps/codex-log-viewer-tauri-ui/src/components/session-event-list.tsx`
+- `apps/log-viewer/src/components/session-event-list.tsx`
 - `src/runner.rs`
 
 Совместимые re-export файлы в `src/events/*` сохранены только для плавной миграции существующего
 worker crate. Каноническая логика ingestion, session discovery, tail и tree/view-model теперь
-находится в `crates/codex-log`, а UI-склейка парных operation-cards для `codex-log-viewer-tauri-ui`
+находится в `crates/codex-log`, а UI-склейка парных operation-cards для `log-viewer`
 живёт отдельно во frontend-компоненте viewer.
 
 ## 1. Источники логов
@@ -42,7 +42,7 @@ worker crate. Каноническая логика ingestion, session discovery
 - `SessionCatalog::list_sessions` и viewer v1 продолжают считать источником истины файловую
   структуру `CODEX_HOME/sessions/YYYY/MM/DD/*.jsonl`, а `session_index.jsonl` используют как
   metadata overlay;
-- `SessionCatalog::list_indexed_sessions` и dialog picker в `codex-log-viewer-tauri-ui`
+- `SessionCatalog::list_indexed_sessions` и dialog picker в `log-viewer`
   в первую очередь читают `CODEX_HOME/state_*.sqlite`, таблицу `threads`, и только при
   недоступности SQLite откатываются к `session_index.jsonl`.
 
@@ -132,7 +132,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
   поздний `response_item.function_call_output`;
 - `tree.rs` использует snapshot metadata как приоритетный источник parent/root anchors для
   lifecycle-операций;
-- поддерживаемый downstream renderer сейчас один: `codex-log-viewer-tauri-ui`; он должен
+- поддерживаемый downstream renderer сейчас один: `log-viewer`; он должен
   предпочитать snapshot-selected terminal/result и откатываться к старым UI-эвристикам только как
   fallback для старых логов, где operation metadata ещё нет;
 - `src/bin/events_tree_html.rs` остаётся reference artifact и может отставать от поддерживаемой
@@ -629,13 +629,13 @@ Incremental tail для standalone rollout и live-import subagent sessions ра
 
 Дедупликация выше отвечает за содержимое `events.jsonl`. Ниже описано вторичное
 объединение уже нормализованных событий при построении дерева и при UI-рендере merged cards
-в `codex-log-viewer-tauri-ui`.
+в `log-viewer`.
 
 Источник истины этого слоя разделён на два уровня:
 
 - `crates/codex-log/src/tree.rs` строит базовое дерево событий и привязку child-thread к якорным
   операциям;
-- `apps/codex-log-viewer-tauri-ui/src/components/session-event-list.tsx` поверх этого дерева
+- `apps/log-viewer/src/components/session-event-list.tsx` поверх этого дерева
   склеивает парные `started/completed` события в одну карточку и inline-раскрывает subagent
   timeline в общую хронологическую ленту.
 
@@ -751,7 +751,7 @@ HTML renderer рендерит единые карточки для пар:
 ### 8.6. Дополнительные projected fields для `patch.apply`
 
 Для `load_session` / event tree `EventEntry` теперь отдельно проецирует patch-specific поля,
-которые нужны `codex-log-viewer-tauri-ui` для detail-рендера `patch.apply` без парсинга сырого
+которые нужны `log-viewer` для detail-рендера `patch.apply` без парсинга сырого
 payload на стороне UI:
 
 - `patch_apply_status`: строка из `payload.status` для `patch.apply` / `patch.apply.duplicate`;
@@ -789,9 +789,9 @@ payload на стороне UI:
 - `shell_parsed_commands[]`: нормализованный список записей из `parsed_cmd` с полями
   `kind`, `command`, `query`, `name`, `path`.
 
-### 8.8. Agent-centric derivation в `codex-log-viewer-tauri-ui`
+### 8.8. Agent-centric derivation в `log-viewer`
 
-Начиная с viewer redesign для фоновых агентов, `apps/codex-log-viewer-tauri-ui` строит
+Начиная с viewer redesign для фоновых агентов, `apps/log-viewer` строит
 дополнительную frontend-only модель `AgentThreadViewModel` поверх уже загруженного `LoadedSession`.
 Это не новый backend/API контракт и не отдельный persisted слой: timeline и `EventTree` остаются
 источником истины, а правая панель `Agents` является производным представлением.

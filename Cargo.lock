@@ -686,30 +686,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-log-viewer"
-version = "0.1.0"
-dependencies = [
- "codex-log",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tempfile",
-]
-
-[[package]]
-name = "codex-log-viewer-tauri-ui"
-version = "0.1.0"
-dependencies = [
- "codex-log-viewer",
- "log",
- "tauri",
- "tauri-build",
- "tauri-plugin-log",
- "tauri-plugin-opener",
-]
-
-[[package]]
 name = "codex-worker-rs"
 version = "0.1.0"
 dependencies = [
@@ -2355,6 +2331,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 dependencies = [
  "value-bag",
+]
+
+[[package]]
+name = "log-viewer"
+version = "0.1.0"
+dependencies = [
+ "codex-log",
+ "log",
+ "serde",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-log",
+ "tauri-plugin-opener",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,14 +1,14 @@
-# Codex Log Viewer Tauri UI
+# Log Viewer
 
-Отдельное desktop-приложение для просмотра Codex sessions на базе `agmmnn/tauri-ui`.
+Desktop-приложение для просмотра Codex sessions на базе `agmmnn/tauri-ui`.
 
 ## Что внутри
 
 - React + Vite frontend с Tailwind/shadcn shell.
 - Tauri 2 shell с startup flash prevention.
 - `tauri-ui` batteries: external link guard и dev-only debug panel по `Cmd/Ctrl + D`.
-- Read-only IPC к каталогу сессий, preview и live tail.
-- Отдельный app identity, не заменяющий `apps/codex-log-viewer`.
+- Read-only IPC к каталогу сессий, preview и live tail в том же `src-tauri` crate.
+- Единый viewer app в репозитории: `apps/log-viewer`.
 
 ## Примечание по scaffold
 

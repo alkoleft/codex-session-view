@@ -1,9 +1,22 @@
+mod backend;
+#[cfg(feature = "desktop")]
+mod commands;
+
+pub use backend::{
+    DetectCodexHomeResponse, InitializeCodexHomeResponse, SessionPreview, ViewerBackend,
+};
+
 #[cfg(feature = "desktop")]
 use tauri::webview::PageLoadEvent;
 #[cfg(feature = "desktop")]
 use tauri_plugin_log::{Target, TargetKind};
 #[cfg(feature = "desktop")]
 use tauri_plugin_opener::OpenerExt;
+
+#[cfg(feature = "desktop")]
+fn viewer_builder_base() -> tauri::Builder<tauri::Wry> {
+    tauri::Builder::default().manage(ViewerBackend::default())
+}
 
 #[cfg(feature = "desktop")]
 fn external_navigation_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
@@ -34,8 +47,18 @@ fn external_navigation_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin
 }
 
 #[cfg(feature = "desktop")]
-pub fn run() {
-    codex_log_viewer::slim_desktop_builder()
+fn desktop_builder() -> tauri::Builder<tauri::Wry> {
+    viewer_builder_base()
+        .invoke_handler(tauri::generate_handler![
+            commands::detect_codex_home,
+            commands::initialize_codex_home,
+            commands::list_sessions,
+            commands::list_indexed_sessions,
+            commands::load_session_preview,
+            commands::load_session_preview_by_id,
+            commands::load_session,
+            commands::tail_session
+        ])
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets([
@@ -53,6 +76,11 @@ pub fn run() {
                 let _ = webview.window().show();
             }
         })
+}
+
+#[cfg(feature = "desktop")]
+pub fn run() {
+    desktop_builder()
         .run(tauri::generate_context!())
-        .expect("tauri-ui viewer should run");
+        .expect("log viewer should run");
 }
