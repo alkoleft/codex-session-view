@@ -135,6 +135,14 @@ export type PatchApplyChangeEntry = {
   move_path: string | null;
 };
 
+export type ShellParsedCommandEntry = {
+  kind: string | null;
+  command: string | null;
+  query: string | null;
+  name: string | null;
+  path: string | null;
+};
+
 export type EventEntry = {
   event_id: string;
   parent_event_id: string | null;
@@ -169,6 +177,18 @@ export type EventEntry = {
   output_value: unknown;
   shell_command: string | null;
   shell_exit_code: number | null;
+  shell_workdir: string | null;
+  shell_cwd: string | null;
+  shell_yield_time_ms: number | null;
+  shell_max_output_tokens: number | null;
+  shell_login: boolean | null;
+  shell_tty: boolean | null;
+  shell_binary: string | null;
+  shell_process_id: string | null;
+  shell_source: string | null;
+  shell_duration_ns: number | null;
+  shell_formatted_output: string | null;
+  shell_parsed_commands: ShellParsedCommandEntry[];
   summary_pairs: Array<[string, string]>;
   input_tokens: number | null;
   cached_input_tokens: number | null;

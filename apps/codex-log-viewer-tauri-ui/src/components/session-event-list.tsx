@@ -10,6 +10,7 @@ import type {
   EventNode,
   LoadedSession,
   PatchApplyChangeEntry,
+  ShellParsedCommandEntry,
   TimelineItem,
   UserInputOptionEntry,
   UserInputQuestionEntry,
@@ -655,6 +656,8 @@ function SingleShellEventCard({ event }: { event: EventEntry }) {
   const subagentLabel = eventSubagentLabel(event);
   const metaItems = singleShellMetaItems(event);
   const outputSizeLabel = shellOutputSizeLabel(event.aggregated_output);
+  const durationLabel = formatShellDurationNs(event.shell_duration_ns);
+  const detailData = shellDetailData(event, event);
 
   return (
     <Card
@@ -666,6 +669,7 @@ function SingleShellEventCard({ event }: { event: EventEntry }) {
     >
       <CardContent className="min-w-0 flex flex-col gap-3 p-4">
         <ShellEventHeader
+          durationLabel={durationLabel}
           eventLabel={event.event_type}
           exitCode={event.shell_exit_code}
           outputSizeLabel={outputSizeLabel}
@@ -676,6 +680,7 @@ function SingleShellEventCard({ event }: { event: EventEntry }) {
         {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
         <ShellBlock
           command={event.shell_command}
+          detailData={detailData}
           output={event.aggregated_output}
         />
       </CardContent>
@@ -691,6 +696,10 @@ function MergedShellEventCard({
   const subagentLabel = eventSubagentLabel(card.call) ?? eventSubagentLabel(card.result);
   const metaItems = mergedShellMetaItems(card.call, card.result);
   const outputSizeLabel = shellOutputSizeLabel(card.result.aggregated_output);
+  const durationLabel = formatShellDurationNs(
+    card.result.shell_duration_ns ?? card.call.shell_duration_ns,
+  );
+  const detailData = shellDetailData(card.call, card.result);
   const timestampLabel =
     card.call.ts === card.result.ts
       ? formatTime(card.call.ts)
@@ -706,6 +715,7 @@ function MergedShellEventCard({
     >
       <CardContent className="min-w-0 flex flex-col gap-3 p-4">
         <ShellEventHeader
+          durationLabel={durationLabel}
           eventLabel={`${card.call.event_type}, ${card.result.event_type}`}
           exitCode={card.result.shell_exit_code}
           outputSizeLabel={outputSizeLabel}
@@ -718,6 +728,7 @@ function MergedShellEventCard({
         {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
         <ShellBlock
           command={card.call.shell_command ?? card.result.shell_command}
+          detailData={detailData}
           output={card.result.aggregated_output}
         />
       </CardContent>
@@ -726,6 +737,7 @@ function MergedShellEventCard({
 }
 
 function ShellEventHeader({
+  durationLabel,
   seqLabel,
   timestampLabel,
   eventLabel,
@@ -733,6 +745,7 @@ function ShellEventHeader({
   exitCode,
   outputSizeLabel,
 }: {
+  durationLabel: string | null;
   seqLabel: string;
   timestampLabel: string;
   eventLabel: string;
@@ -764,6 +777,7 @@ function ShellEventHeader({
             {statusText}
           </span>
         ) : null}
+        {durationLabel ? <span className="whitespace-nowrap">{durationLabel}</span> : null}
         {outputSizeLabel ? <span className="whitespace-nowrap">{outputSizeLabel}</span> : null}
         <span
           className={cn(
@@ -1107,45 +1121,125 @@ function UserInputAnswerChips({
 
 function ShellBlock({
   command,
+  detailData,
   output,
 }: {
   command: string | null;
+  detailData: {
+    parsedHeaders: Array<{ kind: string; typeLabel: string; present: string | null }>;
+    items: Array<{ label: string; value: string }>;
+  };
   output: string | null;
 }) {
-  const [outputVisible, setOutputVisible] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const hasOutput = Boolean(output?.trim());
+  const hasDetails = detailData.items.length > 0;
+  const hasExpandable = hasOutput || hasDetails;
+  const hasParsedHeaders = detailData.parsedHeaders.length > 0;
+  const showCommandInline = !hasExpandable || !hasParsedHeaders;
+  const showCommandInExpandedBlock = Boolean(command?.trim()) && hasExpandable && hasParsedHeaders;
+  const toggleLabel = shellExpandToggleLabel(expanded, hasDetails, hasOutput);
 
   return (
     <div className="min-w-0 w-full flex flex-col gap-2">
       <div className="grid min-w-0 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
-        <div className="min-w-0 flex-1">
-          {command ? (
+        <div className="min-w-0 flex flex-1 flex-col gap-1">
+          {detailData.parsedHeaders.length > 0 ? (
+            <div className="flex min-w-0 flex-col gap-1">
+              {detailData.parsedHeaders.map((header, index) => (
+                <code
+                  className="ui-selectable block max-w-full whitespace-pre-wrap break-words text-sm font-medium text-foreground"
+                  key={`${header.kind}-${header.typeLabel}-${header.present ?? ""}-${index}`}
+                >
+                  <span className={shellParsedCommandPalette(header.kind)}>
+                    {header.typeLabel}
+                  </span>
+                  {header.present ? ` ${header.present}` : ""}
+                </code>
+              ))}
+            </div>
+          ) : null}
+          {showCommandInline && command ? (
             <code className="ui-selectable block max-w-full whitespace-pre-wrap break-words text-sm font-medium text-foreground">
               {`$ ${command}`}
             </code>
-          ) : (
+          ) : null}
+          {showCommandInline && !command ? (
             <span className="text-sm text-muted-foreground">command unavailable</span>
-          )}
+          ) : null}
         </div>
-        {hasOutput ? (
+        {toggleLabel ? (
           <button
             className="inline-flex shrink-0 items-center justify-self-end text-xs font-medium text-[color:var(--accent-strong)] transition-opacity hover:opacity-80"
-            onClick={() => setOutputVisible((current) => !current)}
+            onClick={() => setExpanded((current) => !current)}
             type="button"
           >
-            {outputVisible ? "Скрыть вывод" : "Показать вывод"}
+            {toggleLabel}
           </button>
         ) : null}
       </div>
-      {hasOutput && outputVisible ? (
-        <div className="border-l border-border/60 pl-3">
-          <code className="ui-selectable block whitespace-pre-wrap break-words text-xs text-foreground">
-            {output}
-          </code>
+      {expanded && hasExpandable ? (
+        <div className="grid gap-2 border-l border-border/60 pl-3">
+          {showCommandInExpandedBlock ? (
+            <code className="ui-selectable block whitespace-pre-wrap break-words text-sm font-medium text-foreground">
+              {`$ ${command}`}
+            </code>
+          ) : null}
+          {detailData.items.map((item) => (
+            <div
+              className="grid gap-1 sm:grid-cols-[minmax(0,132px)_minmax(0,1fr)] sm:items-start sm:gap-3"
+              key={`${item.label}-${item.value}`}
+            >
+              <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                {item.label}
+              </div>
+              <div className="ui-selectable whitespace-pre-wrap break-words text-xs text-foreground">
+                {item.value}
+              </div>
+            </div>
+          ))}
+          {hasOutput ? (
+            <code className="ui-selectable block whitespace-pre-wrap break-words text-xs text-foreground">
+              {output}
+            </code>
+          ) : null}
         </div>
       ) : null}
     </div>
   );
+}
+
+function shellExpandToggleLabel(
+  expanded: boolean,
+  hasDetails: boolean,
+  hasOutput: boolean,
+) {
+  if (!hasDetails && !hasOutput) {
+    return null;
+  }
+
+  if (hasDetails && hasOutput) {
+    return expanded ? "Скрыть детали и вывод" : "Показать детали и вывод";
+  }
+  if (hasDetails) {
+    return expanded ? "Скрыть детали" : "Показать детали";
+  }
+  return expanded ? "Скрыть вывод" : "Показать вывод";
+}
+
+function shellParsedCommandPalette(kind: string) {
+  switch (kind.toLowerCase()) {
+    case "read":
+      return "text-sky-700 dark:text-sky-300";
+    case "search":
+      return "text-amber-700 dark:text-amber-300";
+    case "list_files":
+      return "text-emerald-700 dark:text-emerald-300";
+    case "write":
+      return "text-rose-700 dark:text-rose-300";
+    default:
+      return "text-cyan-700 dark:text-cyan-300";
+  }
 }
 
 function CardText({
@@ -2516,6 +2610,50 @@ function shellStatus(exitCode: number | null) {
   };
 }
 
+function shellDetailData(call: EventEntry, result: EventEntry) {
+  const cwd = normalizedShellText(result.shell_cwd) ?? normalizedShellText(call.shell_cwd);
+  const workdir =
+    normalizedShellText(call.shell_workdir) ?? normalizedShellText(result.shell_workdir);
+  const yieldTime = formatShellYieldTimeMs(
+    call.shell_yield_time_ms ?? result.shell_yield_time_ms,
+  );
+  const maxOutputTokens = formatShellMaxOutputTokens(
+    call.shell_max_output_tokens ?? result.shell_max_output_tokens,
+  );
+  const shellBinary =
+    normalizedShellText(call.shell_binary) ?? normalizedShellText(result.shell_binary);
+  const login = (call.shell_login ?? result.shell_login) === true;
+  const tty = (call.shell_tty ?? result.shell_tty) === true;
+  const items: Array<{ label: string; value: string }> = [];
+
+  if (cwd) {
+    items.push({ label: "cwd", value: cwd });
+  }
+  if (workdir && workdir !== cwd) {
+    items.push({ label: "workdir", value: workdir });
+  }
+  if (yieldTime) {
+    items.push({ label: "yield", value: yieldTime });
+  }
+  if (maxOutputTokens) {
+    items.push({ label: "max output", value: maxOutputTokens });
+  }
+  if (shellBinary && !["bash", "/bin/bash", "sh", "/bin/sh"].includes(shellBinary)) {
+    items.push({ label: "shell", value: shellBinary });
+  }
+  if (login) {
+    items.push({ label: "login", value: "yes" });
+  }
+  if (tty) {
+    items.push({ label: "tty", value: "yes" });
+  }
+
+  return {
+    parsedHeaders: shellParsedCommandHeaders(call, result),
+    items,
+  };
+}
+
 function shellStatusDetailText(exitCode: number | null) {
   if (exitCode != null) {
     return exitCode === 0 ? null : `код ${exitCode}`;
@@ -2543,6 +2681,97 @@ function shellOutputSizeLabel(output: string | null) {
 
 function formatCompactNumber(value: number) {
   return new Intl.NumberFormat("ru-RU").format(value);
+}
+
+function normalizedShellText(value: string | null | undefined) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function formatShellYieldTimeMs(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+
+  return `${formatCompactNumber(Math.trunc(value))} ms`;
+}
+
+function formatShellMaxOutputTokens(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+
+  return `${formatCompactNumber(Math.trunc(value))} tok`;
+}
+
+function formatShellDurationNs(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+
+  if (value >= 1_000_000_000) {
+    return formatShellDurationUnit(value / 1_000_000_000, "s");
+  }
+  if (value >= 1_000_000) {
+    return formatShellDurationUnit(value / 1_000_000, "ms");
+  }
+  if (value >= 1_000) {
+    return formatShellDurationUnit(value / 1_000, "us");
+  }
+  return `${formatCompactNumber(Math.trunc(value))} ns`;
+}
+
+function formatShellDurationUnit(value: number, unit: string) {
+  const maximumFractionDigits = value >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits }).format(value)} ${unit}`;
+}
+
+function normalizedShellParsedKind(value: string | null | undefined) {
+  const kind = normalizedShellText(value);
+  if (!kind) {
+    return null;
+  }
+  return kind.toLowerCase() === "unknown" ? null : kind;
+}
+
+function shellParsedCommandHeaders(call: EventEntry, result: EventEntry) {
+  const sourceEntries =
+    result.shell_parsed_commands.length > 0
+      ? result.shell_parsed_commands
+      : call.shell_parsed_commands;
+  const seen = new Set<string>();
+  const headers: Array<{ kind: string; typeLabel: string; present: string | null }> = [];
+
+  sourceEntries.forEach((entry) => {
+    const kind = normalizedShellParsedKind(entry.kind);
+    if (!kind) {
+      return;
+    }
+
+    const present = shellParsedCommandPresent(entry, kind);
+    const key = `${kind}\u0000${present ?? ""}`;
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    headers.push({ kind, typeLabel: kind, present });
+  });
+
+  return headers;
+}
+
+function shellParsedCommandPresent(entry: ShellParsedCommandEntry, kind: string) {
+  switch (kind.toLowerCase()) {
+    case "read":
+      return normalizedShellText(entry.path) ?? normalizedShellText(entry.name);
+    case "search":
+      return normalizedShellText(entry.query) ?? normalizedShellText(entry.command);
+    case "list_files":
+      return normalizedShellText(entry.path);
+    default:
+      return null;
+  }
 }
 
 function infoTokensRenderData(event: EventEntry) {

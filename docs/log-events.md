@@ -253,7 +253,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `agent_message` | `message.agent` | `item_id`, `text`, `text_links`, `thread_id` |
 | `reasoning` | `agent.reasoning` | `text`, `text_links`, `thread_id` |
 | `error` | `error` | `item_id`, `status`, `phase`, `message`, `error_type` |
-| `command_execution` | `shell.call` или `shell.result` | `tool_name=command_execution`, `tool_use_id`, `input.command`, `output`, `stderr`, `exit_code`; для root stdout reader `shell.result.output` берётся из `aggregated_output` с fallback на `stdout` |
+| `command_execution` | `shell.call` или `shell.result` | `tool_name=command_execution`, `tool_use_id`, `input.command`, `output`, `stderr`, `exit_code`; для root stdout reader `shell.result.output` берётся из `aggregated_output` с fallback на `stdout`. Дополнительные tool-args вроде `workdir`, `yield_time_ms`, `max_output_tokens`, `login`, `tty`, `shell` здесь обычно отсутствуют и характерны прежде всего для subagent `exec_command`. |
 | `mcp_tool_call` | `mcp.call` или `mcp.result` | `tool_use_id`, `arguments`, `result`, `error`, `server`, `tool` |
 | `web_search` | `web.search` или `web.open` | `tool_name=web_search`, `query`, `action`; `open_page` уходит в `web.open` |
 | `todo_list` | `todo.update` | `items[]`, `completed_count`, `total_count`, `status`, `phase` |
@@ -282,7 +282,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 
 | `payload.type` | Канонический `event_type` | Нормализованный payload |
 | --- | --- | --- |
-| `function_call` | `mcp.call`, `shell.call`, `tool.call`, `plan.update`, `user.input.request`, `stdin.write`, `collab.*` | `call_id` -> `tool_use_id`, `arguments` -> `input`, `session_path`, subagent metadata |
+| `function_call` | `mcp.call`, `shell.call`, `tool.call`, `plan.update`, `user.input.request`, `stdin.write`, `collab.*` | `call_id` -> `tool_use_id`, `arguments` -> `input`, `session_path`, subagent metadata. Для `exec_command` в `input` могут приходить `cmd`, `workdir`, `yield_time_ms`, `max_output_tokens`, `login`, `tty`, `shell`. |
 | `function_call_output` | `mcp.result`, `shell.result`, `tool.result`, `plan.update`, `user.input.request`, `stdin.write`, `collab.*` | `output`, `status=completed`, `phase=completed`; если `output` строка с JSON, сначала пробуется parse JSON |
 | `custom_tool_call` | `patch.apply` или `tool.call` | для `apply_patch` старт тоже хранится как `ToolResultPayload` с `phase=started` |
 | `custom_tool_call_output` | `patch.apply`, `patch.apply.duplicate` или `tool.result` | для `apply_patch` возможен duplicate-режим, см. раздел 7 |
@@ -315,7 +315,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `context_compacted` | `context.compacted` или `context.compacted.duplicate` | зависит от pending-флага, см. раздел 7 |
 | `turn_aborted` | `agent.aborted` | `turn_id`, `reason`, `session_path` |
 | `patch_apply_end` | `patch.apply` | `tool_name=apply_patch`, `success`, `changes`, `stdout`, `stderr`, `phase=completed` |
-| `exec_command_end` | `shell.result` | legacy форма завершения команды, помечается `duplicate_of=response_item.function_call_output` |
+| `exec_command_end` | `shell.result` | legacy форма завершения команды, помечается `duplicate_of=response_item.function_call_output`; дополнительно сохраняет `cwd`, `process_id`, `source`, `duration`, `parsed_cmd`, `formatted_output` |
 | `web_search_end` | `web.search` или `web.open` | legacy форма web search, помечается `duplicate_of=response_item.web_search_call` |
 | `collab_agent_spawn_end` | `collab.spawn_agent` | legacy завершение spawn, с enrichment по `new_thread_id`, `new_agent_*`, `model`, `reasoning_effort`, `agents_states` |
 | `collab_waiting_end` | `collab.wait` | legacy wait result, `receiver_thread_ids`, `agents_states`, `duplicate_of=response_item.function_call_output` |
@@ -771,6 +771,37 @@ payload на стороне UI:
   `"null"`;
 - список сортируется по `path`;
 - для других `event_type` эти поля остаются пустыми.
+
+### 8.7. Дополнительные projected fields для `shell.call` / `shell.result`
+
+Для `load_session` / event tree `EventEntry` теперь отдельно проецирует shell-specific поля,
+чтобы viewer не парсил сырой `payload.input` и legacy `payload.duration/parsed_cmd` вручную:
+
+- `shell_workdir`: requested `input.workdir` из `exec_command`, если задан;
+- `shell_cwd`: фактический `cwd` из `shell.result`, если он присутствует;
+- `shell_yield_time_ms`: `input.yield_time_ms`;
+- `shell_max_output_tokens`: `input.max_output_tokens`;
+- `shell_login`: `input.login`;
+- `shell_tty`: `input.tty`;
+- `shell_binary`: `input.shell`;
+- `shell_process_id`: `process_id` из legacy/result payload;
+- `shell_source`: `source` из legacy/result payload;
+- `shell_duration_ns`: нормализованная длительность из `duration.{secs,nanos}`;
+- `shell_formatted_output`: `formatted_output` из legacy/result payload;
+- `shell_parsed_commands[]`: нормализованный список записей из `parsed_cmd` с полями
+  `kind`, `command`, `query`, `name`, `path`.
+
+Правила:
+
+- поля заполняются только для canonical shell-family `command_execution` / `exec_command`;
+- call-specific поля (`workdir`, `yield_time_ms`, `max_output_tokens`, `login`, `tty`, `shell`)
+  берутся из `payload.input` и доступны и у `shell.call`, и у `shell.result`, если там есть
+  `input`;
+- result-specific поля (`cwd`, `process_id`, `source`, `duration`, `formatted_output`,
+  `parsed_cmd`) проецируются только для `shell.result`;
+- `shell_duration_ns` хранит полную длительность в наносекундах;
+- пустые или отсутствующие значения не превращаются в строки вроде `"null"` и остаются `null`
+  / пустым массивом.
 
 ## 9. Нюансы и ограничения
 

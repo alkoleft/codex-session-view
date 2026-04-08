@@ -84,6 +84,15 @@ pub struct PatchApplyChangeEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShellParsedCommandEntry {
+    pub kind: Option<String>,
+    pub command: Option<String>,
+    pub query: Option<String>,
+    pub name: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventEntry {
     pub event_id: String,
     pub parent_event_id: Option<String>,
@@ -137,6 +146,30 @@ pub struct EventEntry {
     pub output_value: Option<Value>,
     pub shell_command: Option<String>,
     pub shell_exit_code: Option<i32>,
+    #[serde(default)]
+    pub shell_workdir: Option<String>,
+    #[serde(default)]
+    pub shell_cwd: Option<String>,
+    #[serde(default)]
+    pub shell_yield_time_ms: Option<u64>,
+    #[serde(default)]
+    pub shell_max_output_tokens: Option<u64>,
+    #[serde(default)]
+    pub shell_login: Option<bool>,
+    #[serde(default)]
+    pub shell_tty: Option<bool>,
+    #[serde(default)]
+    pub shell_binary: Option<String>,
+    #[serde(default)]
+    pub shell_process_id: Option<String>,
+    #[serde(default)]
+    pub shell_source: Option<String>,
+    #[serde(default)]
+    pub shell_duration_ns: Option<u64>,
+    #[serde(default)]
+    pub shell_formatted_output: Option<String>,
+    #[serde(default)]
+    pub shell_parsed_commands: Vec<ShellParsedCommandEntry>,
     pub summary_pairs: Vec<(String, String)>,
     pub input_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
@@ -1342,6 +1375,18 @@ fn format_event_entry(
         output_value: payload.and_then(|obj| obj.get("output")).cloned(),
         shell_command: extract_shell_command(&event.event_type, payload),
         shell_exit_code: extract_shell_exit_code(&event.event_type, payload),
+        shell_workdir: extract_shell_workdir(&event.event_type, payload),
+        shell_cwd: extract_shell_cwd(&event.event_type, payload),
+        shell_yield_time_ms: extract_shell_yield_time_ms(&event.event_type, payload),
+        shell_max_output_tokens: extract_shell_max_output_tokens(&event.event_type, payload),
+        shell_login: extract_shell_login(&event.event_type, payload),
+        shell_tty: extract_shell_tty(&event.event_type, payload),
+        shell_binary: extract_shell_binary(&event.event_type, payload),
+        shell_process_id: extract_shell_process_id(&event.event_type, payload),
+        shell_source: extract_shell_source(&event.event_type, payload),
+        shell_duration_ns: extract_shell_duration_ns(&event.event_type, payload),
+        shell_formatted_output: extract_shell_formatted_output(&event.event_type, payload),
+        shell_parsed_commands: extract_shell_parsed_commands(&event.event_type, payload),
         summary_pairs: extract_summary_pairs(&event.event_type, payload),
         input_tokens: extract_token_value(&event.event_type, payload, "input_tokens"),
         cached_input_tokens: extract_token_value(&event.event_type, payload, "cached_input_tokens"),
@@ -2147,25 +2192,37 @@ fn extract_command_aggregated_output(
     }
 }
 
+fn is_command_shell_event(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> bool {
+    matches!(event_type, SHELL_CALL | SHELL_RESULT)
+        && matches!(
+            payload
+                .and_then(|obj| obj.get("tool_name"))
+                .and_then(Value::as_str),
+            Some("command_execution" | "exec_command")
+        )
+}
+
+fn extract_shell_input<'a>(
+    event_type: &str,
+    payload: Option<&'a serde_json::Map<String, Value>>,
+) -> Option<&'a serde_json::Map<String, Value>> {
+    if !is_command_shell_event(event_type, payload) {
+        return None;
+    }
+
+    payload
+        .and_then(|obj| obj.get("input"))
+        .and_then(Value::as_object)
+}
+
 fn extract_shell_command(
     event_type: &str,
     payload: Option<&serde_json::Map<String, Value>>,
 ) -> Option<String> {
-    if !matches!(event_type, SHELL_CALL | SHELL_RESULT) {
-        return None;
-    }
-    if !matches!(
-        payload
-            .and_then(|obj| obj.get("tool_name"))
-            .and_then(Value::as_str),
-        Some("command_execution" | "exec_command")
-    ) {
-        return None;
-    }
-
-    let input = payload
-        .and_then(|obj| obj.get("input"))
-        .and_then(Value::as_object)?;
+    let input = extract_shell_input(event_type, payload)?;
     for key in ["command", "cmd"] {
         let Some(value) = input.get(key) else {
             continue;
@@ -2227,20 +2284,155 @@ fn extract_shell_exit_code(
         })
 }
 
+fn extract_shell_workdir(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    extract_shell_input(event_type, payload)
+        .and_then(|input| extract_map_scalar_string(input, "workdir"))
+}
+
+fn extract_shell_cwd(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    if event_type != SHELL_RESULT || !is_command_shell_event(event_type, payload) {
+        return None;
+    }
+
+    extract_payload_scalar_string(payload, "cwd")
+}
+
+fn extract_shell_yield_time_ms(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<u64> {
+    extract_shell_input(event_type, payload)
+        .and_then(|input| extract_map_u64(input, "yield_time_ms"))
+}
+
+fn extract_shell_max_output_tokens(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<u64> {
+    extract_shell_input(event_type, payload)
+        .and_then(|input| extract_map_u64(input, "max_output_tokens"))
+}
+
+fn extract_shell_login(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<bool> {
+    extract_shell_input(event_type, payload).and_then(|input| extract_map_bool(input, "login"))
+}
+
+fn extract_shell_tty(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<bool> {
+    extract_shell_input(event_type, payload).and_then(|input| extract_map_bool(input, "tty"))
+}
+
+fn extract_shell_binary(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    extract_shell_input(event_type, payload)
+        .and_then(|input| extract_map_scalar_string(input, "shell"))
+}
+
+fn extract_shell_process_id(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    if event_type != SHELL_RESULT || !is_command_shell_event(event_type, payload) {
+        return None;
+    }
+
+    extract_payload_scalar_string(payload, "process_id")
+}
+
+fn extract_shell_source(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    if event_type != SHELL_RESULT || !is_command_shell_event(event_type, payload) {
+        return None;
+    }
+
+    extract_payload_scalar_string(payload, "source")
+}
+
+fn extract_shell_duration_ns(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<u64> {
+    if event_type != SHELL_RESULT || !is_command_shell_event(event_type, payload) {
+        return None;
+    }
+
+    let duration = payload.and_then(|obj| obj.get("duration"))?;
+    let object = duration.as_object()?;
+    let secs = object.get("secs").and_then(extract_value_u64).unwrap_or(0);
+    let nanos = object.get("nanos").and_then(extract_value_u64).unwrap_or(0);
+    secs.checked_mul(1_000_000_000)?.checked_add(nanos)
+}
+
+fn extract_shell_formatted_output(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    if event_type != SHELL_RESULT || !is_command_shell_event(event_type, payload) {
+        return None;
+    }
+
+    extract_payload_scalar_string(payload, "formatted_output")
+}
+
+fn extract_shell_parsed_commands(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Vec<ShellParsedCommandEntry> {
+    if event_type != SHELL_RESULT || !is_command_shell_event(event_type, payload) {
+        return Vec::new();
+    }
+
+    payload
+        .and_then(|obj| obj.get("parsed_cmd"))
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let object = entry.as_object()?;
+                    let parsed = ShellParsedCommandEntry {
+                        kind: extract_map_scalar_string(object, "type"),
+                        command: extract_map_scalar_string(object, "cmd"),
+                        query: extract_map_scalar_string(object, "query"),
+                        name: extract_map_scalar_string(object, "name"),
+                        path: extract_map_scalar_string(object, "path"),
+                    };
+                    if parsed.kind.is_none()
+                        && parsed.command.is_none()
+                        && parsed.query.is_none()
+                        && parsed.name.is_none()
+                        && parsed.path.is_none()
+                    {
+                        None
+                    } else {
+                        Some(parsed)
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn is_command_shell_result(
     event_type: &str,
     payload: Option<&serde_json::Map<String, Value>>,
 ) -> bool {
-    if event_type != SHELL_RESULT {
-        return false;
-    }
-
-    matches!(
-        payload
-            .and_then(|obj| obj.get("tool_name"))
-            .and_then(Value::as_str),
-        Some("command_execution" | "exec_command")
-    )
+    event_type == SHELL_RESULT && is_command_shell_event(event_type, payload)
 }
 
 fn render_event_value(value: &Value) -> String {
@@ -2260,6 +2452,38 @@ fn render_event_value(value: &Value) -> String {
         }
         Value::Array(_) => serde_json::to_string_pretty(value).unwrap_or_default(),
         other => other.to_string(),
+    }
+}
+
+fn extract_map_scalar_string(map: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    extract_payload_scalar_string(Some(map), key)
+}
+
+fn extract_map_u64(map: &serde_json::Map<String, Value>, key: &str) -> Option<u64> {
+    map.get(key).and_then(extract_value_u64)
+}
+
+fn extract_map_bool(map: &serde_json::Map<String, Value>, key: &str) -> Option<bool> {
+    map.get(key).and_then(extract_value_bool)
+}
+
+fn extract_value_u64(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(number) => number.as_u64(),
+        Value::String(text) => text.trim().parse::<u64>().ok(),
+        _ => None,
+    }
+}
+
+fn extract_value_bool(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(value) => Some(*value),
+        Value::String(text) => match text.trim().to_ascii_lowercase().as_str() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -3300,6 +3524,119 @@ mod tests {
         assert_eq!(
             shell_result.event.shell_command.as_deref(),
             Some("git branch --show-current")
+        );
+    }
+
+    #[test]
+    fn build_event_tree_extracts_shell_execution_metadata() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "shell.call",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"root-thread",
+                    "tool_name":"exec_command",
+                    "tool_use_id":"cmd-meta",
+                    "input":{
+                        "cmd":"sed -n '1,20p' README.md",
+                        "workdir":"/repo",
+                        "yield_time_ms":1000,
+                        "max_output_tokens":2000,
+                        "login":true,
+                        "tty":true,
+                        "shell":"/bin/zsh"
+                    }
+                }),
+                2,
+            ),
+            make_event(
+                "shell.result",
+                json!({
+                    "actor_type":"subagent",
+                    "thread_id":"root-thread",
+                    "tool_name":"exec_command",
+                    "tool_use_id":"cmd-meta",
+                    "input":{"command":["/bin/bash","-lc","sed -n '1,20p' README.md"]},
+                    "output":"# README\n",
+                    "exit_code":0,
+                    "cwd":"/repo",
+                    "process_id":"4242",
+                    "source":"unified_exec_startup",
+                    "duration":{"secs":1,"nanos":250000000},
+                    "formatted_output":"Command: ...",
+                    "parsed_cmd":[
+                        {
+                            "type":"read",
+                            "cmd":"sed -n '1,20p' README.md",
+                            "name":"README.md",
+                            "path":"README.md"
+                        },
+                        {
+                            "type":"search",
+                            "cmd":"rg 'README'",
+                            "query":"README"
+                        }
+                    ]
+                }),
+                3,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let root = &tree.roots[0];
+        let shell_call = match &root.items[1] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected shell call event"),
+        };
+        let shell_result = match &shell_call.children[0] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected shell result event"),
+        };
+
+        assert_eq!(shell_call.event.shell_workdir.as_deref(), Some("/repo"));
+        assert_eq!(shell_call.event.shell_yield_time_ms, Some(1000));
+        assert_eq!(shell_call.event.shell_max_output_tokens, Some(2000));
+        assert_eq!(shell_call.event.shell_login, Some(true));
+        assert_eq!(shell_call.event.shell_tty, Some(true));
+        assert_eq!(shell_call.event.shell_binary.as_deref(), Some("/bin/zsh"));
+        assert_eq!(shell_result.event.shell_cwd.as_deref(), Some("/repo"));
+        assert_eq!(shell_result.event.shell_process_id.as_deref(), Some("4242"));
+        assert_eq!(
+            shell_result.event.shell_source.as_deref(),
+            Some("unified_exec_startup")
+        );
+        assert_eq!(shell_result.event.shell_duration_ns, Some(1_250_000_000));
+        assert_eq!(
+            shell_result.event.shell_formatted_output.as_deref(),
+            Some("Command: ...")
+        );
+        assert_eq!(shell_result.event.shell_parsed_commands.len(), 2);
+        assert_eq!(
+            shell_result.event.shell_parsed_commands[0].kind.as_deref(),
+            Some("read")
+        );
+        assert_eq!(
+            shell_result.event.shell_parsed_commands[0]
+                .command
+                .as_deref(),
+            Some("sed -n '1,20p' README.md")
+        );
+        assert_eq!(
+            shell_result.event.shell_parsed_commands[0].name.as_deref(),
+            Some("README.md")
+        );
+        assert_eq!(
+            shell_result.event.shell_parsed_commands[0].path.as_deref(),
+            Some("README.md")
+        );
+        assert_eq!(
+            shell_result.event.shell_parsed_commands[1].kind.as_deref(),
+            Some("search")
+        );
+        assert_eq!(
+            shell_result.event.shell_parsed_commands[1].query.as_deref(),
+            Some("README")
         );
     }
 
