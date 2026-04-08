@@ -10,6 +10,10 @@ import {
   planUpdateRenderData,
   type PlanUpdateRenderData,
 } from "@/components/session-event-list-plan";
+import {
+  patchApplyStatus,
+  type PatchApplyStatusData,
+} from "@/components/session-event-list-patch";
 import { preferredTerminalChildIndexFromSnapshot } from "@/components/session-event-list-selection";
 import type {
   EventEntry,
@@ -489,6 +493,11 @@ function EventCard({ event }: { event: EventEntry }) {
     return <InfoTokensEventCard data={infoTokens} event={event} />;
   }
 
+  const patchApply = patchApplyRenderData(event);
+  if (patchApply) {
+    return <SinglePatchApplyEventCard data={patchApply} event={event} />;
+  }
+
   const planUpdate = planUpdateRenderData(event);
   if (planUpdate) {
     return <PlanUpdateEventCard data={planUpdate} event={event} />;
@@ -506,7 +515,6 @@ function EventCard({ event }: { event: EventEntry }) {
   const detail = singleDetailText(event);
   const subagentLabel = eventSubagentLabel(event);
   const runtimeContext = runtimeContextRenderData(event);
-  const patchApply = patchApplyRenderData(event);
   const taskMetaItems = taskEventMetaItems(event);
   const taskModeBadge = taskEventModeBadge(event);
   const taskMessage = taskCompletedMessage(event);
@@ -532,13 +540,44 @@ function EventCard({ event }: { event: EventEntry }) {
           </div>
           {taskMetaItems.length > 0 ? <EventMetaRow items={taskMetaItems} /> : null}
           {runtimeContext ? <RuntimeContextBlock data={runtimeContext} /> : null}
-          {patchApply ? <PatchApplyBlock data={patchApply} /> : null}
-          {!patchApply && summary ? <CardText text={summary} tone="default" /> : null}
-          {!patchApply && taskMessage ? <TaskCompletedMessageBlock text={taskMessage} /> : null}
-          {!patchApply && !taskMessage && detail ? <CardText text={detail} tone="muted" /> : null}
+          {summary ? <CardText text={summary} tone="default" /> : null}
+          {taskMessage ? <TaskCompletedMessageBlock text={taskMessage} /> : null}
+          {!taskMessage && detail ? <CardText text={detail} tone="muted" /> : null}
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function SinglePatchApplyEventCard({
+  event,
+  data,
+}: {
+  event: EventEntry;
+  data: PatchApplyRenderData;
+}) {
+  const subagentLabel = eventSubagentLabel(event);
+  const status = patchApplyStatus(data.status, data.phase);
+
+  return (
+    <Card
+      className={cn(
+        SURFACE_CARD_CLASS,
+        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
+      )}
+      size="sm"
+    >
+      <CardContent className="flex flex-col gap-2 p-4">
+        <PatchApplyEventHeader
+          eventLabel={event.event_type}
+          seqLabel={`#${event.seq}`}
+          status={status}
+          subagentLabel={subagentLabel}
+          timestampLabel={formatTime(event.ts)}
+        />
+        <PatchApplyBlock data={data} />
+      </CardContent>
+    </Card>
   );
 }
 
@@ -658,6 +697,7 @@ function MergedPatchApplyEventCard({
 }) {
   const subagentLabel = eventSubagentLabel(card.call) ?? eventSubagentLabel(card.result);
   const patchApply = mergedPatchApplyRenderData(card.call, card.result);
+  const status = patchApplyStatus(patchApply.status, patchApply.phase);
 
   return (
     <Card
@@ -668,12 +708,13 @@ function MergedPatchApplyEventCard({
       size="sm"
     >
       <CardContent className="flex flex-col gap-2 p-4">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-mono">#{card.call.seq}</span>
-          <time>{formatTime(card.call.ts)}</time>
-          <span className="font-mono">{card.call.event_type}</span>
-          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-        </div>
+        <PatchApplyEventHeader
+          eventLabel={card.call.event_type}
+          seqLabel={`#${card.call.seq}`}
+          status={status}
+          subagentLabel={subagentLabel}
+          timestampLabel={formatTime(card.call.ts)}
+        />
         <PatchApplyBlock data={patchApply} />
       </CardContent>
     </Card>
@@ -840,6 +881,69 @@ function EventMetaRow({
           <span className="ui-selectable font-semibold text-foreground">{item.value}</span>
         </span>
       ))}
+    </div>
+  );
+}
+
+function PatchApplyEventHeader({
+  seqLabel,
+  timestampLabel,
+  eventLabel,
+  subagentLabel,
+  status,
+}: {
+  seqLabel: string;
+  timestampLabel: string;
+  eventLabel: string;
+  subagentLabel: string | null;
+  status: PatchApplyStatusData;
+}) {
+  const Icon =
+    status.variant === "success"
+      ? Check
+      : status.variant === "failure"
+        ? CircleX
+        : CircleAlert;
+
+  return (
+    <div className="grid min-w-0 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3 text-xs text-muted-foreground">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <span className="font-mono">{seqLabel}</span>
+        <time>{timestampLabel}</time>
+        <span className="font-mono">{eventLabel}</span>
+        {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
+      </div>
+      <div className="flex shrink-0 items-center justify-self-end gap-2">
+        {status.detailText ? (
+          <span
+            className={cn(
+              "whitespace-nowrap font-medium",
+              status.variant === "success"
+                ? "text-emerald-700 dark:text-emerald-300"
+                : status.variant === "failure"
+                  ? "text-rose-700 dark:text-rose-300"
+                  : "text-amber-700 dark:text-amber-300",
+            )}
+          >
+            {status.detailText}
+          </span>
+        ) : null}
+        <span
+          className={cn(
+            "inline-flex items-center",
+            status.variant === "success"
+              ? "text-emerald-700 dark:text-emerald-300"
+              : status.variant === "failure"
+                ? "text-rose-700 dark:text-rose-300"
+                : "text-amber-700 dark:text-amber-300",
+          )}
+          aria-label={status.ariaLabel}
+          title={status.ariaLabel}
+        >
+          <Icon aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="sr-only">{status.ariaLabel}</span>
+        </span>
+      </div>
     </div>
   );
 }
@@ -1438,14 +1542,8 @@ function CardText({
 }
 
 function PatchApplyBlock({ data }: { data: PatchApplyRenderData }) {
-  const summaryItems = [
-    data.changes.length === 0 && data.phase ? { label: "phase", value: data.phase } : null,
-    data.status && data.status !== "completed" ? { label: "status", value: data.status } : null,
-  ].filter((item): item is { label: string; value: string } => item != null);
-
   return (
     <div className="flex flex-col gap-2">
-      {summaryItems.length > 0 ? <EventMetaRow items={summaryItems} /> : null}
       {data.changes.length > 0 ? (
         <div className="grid gap-1.5">
           {data.changes.map((change) => (
@@ -1463,12 +1561,7 @@ function PatchApplyBlock({ data }: { data: PatchApplyRenderData }) {
         </div>
       ) : null}
       {data.diffSections.length > 0 || data.fallbackDiffText ? (
-        <div className="flex flex-col gap-1">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            patch
-          </div>
-          <PatchDiffBlock fallbackText={data.fallbackDiffText} sections={data.diffSections} />
-        </div>
+        <PatchDiffBlock fallbackText={data.fallbackDiffText} sections={data.diffSections} />
       ) : null}
       {data.output && data.changes.length === 0 ? (
         <div className="flex flex-col gap-1">
