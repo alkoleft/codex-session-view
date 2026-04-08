@@ -4,6 +4,12 @@ import { Check, CircleAlert, CircleX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { sortTimelineItemsForRender } from "@/components/session-event-list-order";
+import {
+  mergedPlanUpdateRenderData,
+  planUpdateRenderData,
+  type PlanUpdateRenderData,
+} from "@/components/session-event-list-plan";
 import { preferredTerminalChildIndexFromSnapshot } from "@/components/session-event-list-selection";
 import type {
   EventEntry,
@@ -30,6 +36,7 @@ const USER_INPUT_REQUEST = "user.input.request";
 const RUNTIME_CONTEXT = "runtime.context";
 const PATCH_APPLY = "patch.apply";
 const PATCH_APPLY_DUPLICATE = "patch.apply.duplicate";
+const PLAN_UPDATE = "plan.update";
 const TASK_STARTED = "task.started";
 const TASK_COMPLETED = "task.completed";
 const AGENT_META = "agent.meta";
@@ -115,13 +122,21 @@ type PatchApplyMergedCard = {
   children: TimelineItem[];
 };
 
+type PlanUpdateMergedCard = {
+  kind: "plan-update";
+  call: EventEntry;
+  result: EventEntry;
+  children: TimelineItem[];
+};
+
 type MergedCard =
   | SingleCard
   | ShellMergedCard
   | SpawnMergedCard
   | UserInputMergedCard
   | CollabMergedCard
-  | PatchApplyMergedCard;
+  | PatchApplyMergedCard
+  | PlanUpdateMergedCard;
 
 const TaskTimelinePaletteContext = createContext<TaskTimelinePalette | null>(null);
 
@@ -154,7 +169,8 @@ function TimelineItemsView({
   path: string;
   groupTaskLifecycles?: boolean;
 }) {
-  const renderedItems = groupTaskLifecycles ? buildTimelineRenderItems(items) : items.map((item) => ({
+  const orderedItems = sortTimelineItemsForRender(items);
+  const renderedItems = groupTaskLifecycles ? buildTimelineRenderItems(orderedItems) : orderedItems.map((item) => ({
     kind: "item" as const,
     item,
   }));
@@ -473,6 +489,11 @@ function EventCard({ event }: { event: EventEntry }) {
     return <InfoTokensEventCard data={infoTokens} event={event} />;
   }
 
+  const planUpdate = planUpdateRenderData(event);
+  if (planUpdate) {
+    return <PlanUpdateEventCard data={planUpdate} event={event} />;
+  }
+
   if (
     event.event_type === USER_INPUT_REQUEST
     && event.user_input_request
@@ -578,6 +599,13 @@ function MergedEventCard({
 
   if (card.kind === "patch-apply") {
     return <MergedPatchApplyEventCard card={card} />;
+  }
+
+  if (card.kind === "plan-update") {
+    const data = mergedPlanUpdateRenderData(card.call, card.result);
+    if (data) {
+      return <MergedPlanUpdateEventCard card={card} data={data} />;
+    }
   }
 
   if (card.kind === "user-input") {
@@ -882,6 +910,139 @@ function InfoTokensBlock({
       ) : null}
     </div>
   );
+}
+
+function PlanUpdateEventCard({
+  event,
+  data,
+}: {
+  event: EventEntry;
+  data: PlanUpdateRenderData;
+}) {
+  const subagentLabel = eventSubagentLabel(event);
+  const metaItems = singlePlanUpdateMetaItems(event, data);
+
+  return (
+    <Card
+      className={cn(
+        SURFACE_CARD_CLASS,
+        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
+      )}
+      size="sm"
+    >
+      <CardContent className="flex flex-col gap-3 p-4">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-mono">#{event.seq}</span>
+          <time>{formatTime(event.ts)}</time>
+          <span className="font-mono">{event.event_type}</span>
+          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
+        </div>
+        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
+        <PlanUpdateBlock data={data} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function MergedPlanUpdateEventCard({
+  card,
+  data,
+}: {
+  card: PlanUpdateMergedCard;
+  data: PlanUpdateRenderData;
+}) {
+  const subagentLabel = eventSubagentLabel(card.call) ?? eventSubagentLabel(card.result);
+  const metaItems = mergedPlanUpdateMetaItems(card.call, card.result, data);
+  const eventLabel =
+    card.call.event_type === card.result.event_type
+      ? card.call.event_type
+      : `${card.call.event_type}/${card.result.event_type}`;
+  const timeLabel =
+    card.call.ts === card.result.ts
+      ? formatTime(card.call.ts)
+      : `${formatTime(card.call.ts)} -> ${formatTime(card.result.ts)}`;
+
+  return (
+    <Card
+      className={cn(
+        SURFACE_CARD_CLASS,
+        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
+      )}
+      size="sm"
+    >
+      <CardContent className="flex flex-col gap-3 p-4">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-mono">
+            #{card.call.seq}, #{card.result.seq}
+          </span>
+          <time>{timeLabel}</time>
+          <span className="font-mono">{eventLabel}</span>
+          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
+        </div>
+        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
+        <PlanUpdateBlock data={data} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function PlanUpdateBlock({ data }: { data: PlanUpdateRenderData }) {
+  return (
+    <div className="flex flex-col gap-3">
+      {data.explanation ? (
+        <div className="flex flex-col gap-1">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            explanation
+          </div>
+          <CardText text={data.explanation} tone="default" />
+        </div>
+      ) : null}
+      {data.steps.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            steps
+          </div>
+          <div className="flex flex-col gap-2">
+            {data.steps.map((step, index) => (
+              <div
+                className="grid gap-2 rounded-xl border border-border/60 bg-muted/10 px-3 py-2 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-start sm:gap-3"
+                key={`${index + 1}-${step.step}-${step.status ?? ""}`}
+              >
+                <div className="font-mono text-[11px] text-muted-foreground">
+                  {(index + 1).toString().padStart(2, "0")}
+                </div>
+                <div className="ui-selectable whitespace-pre-wrap break-words text-sm text-foreground">
+                  {step.step}
+                </div>
+                {step.status ? <PlanStepStatusBadge status={step.status} /> : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PlanStepStatusBadge({ status }: { status: string }) {
+  return (
+    <span className={planStepStatusClassName(status)}>
+      {status.replaceAll("_", " ")}
+    </span>
+  );
+}
+
+function planStepStatusClassName(status: string) {
+  switch (status.trim()) {
+    case "completed":
+      return "inline-flex items-center rounded-full border border-emerald-500/35 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700 dark:text-emerald-300";
+    case "in_progress":
+      return "inline-flex items-center rounded-full border border-sky-500/35 bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-sky-700 dark:text-sky-300";
+    case "pending":
+      return "inline-flex items-center rounded-full border border-amber-500/35 bg-amber-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700 dark:text-amber-300";
+    default:
+      return "inline-flex items-center rounded-full border border-border/60 bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground";
+  }
 }
 
 function UserInputRequestEventCard({
@@ -1466,6 +1627,19 @@ function buildMergedCard(node: EventNode): MergedCard {
     }
   }
 
+  const planUpdateResultIndex = pairedPlanUpdateResultChildIndex(node);
+  if (planUpdateResultIndex != null) {
+    const result = node.children[planUpdateResultIndex];
+    if ("Event" in result) {
+      return {
+        kind: "plan-update",
+        call: node.event,
+        result: result.Event.event,
+        children: mergedPlanUpdateOperationChildren(node, planUpdateResultIndex),
+      };
+    }
+  }
+
   const spawnResultIndex = pairedSpawnAgentResultChildIndex(node);
   if (spawnResultIndex != null) {
     const result = node.children[spawnResultIndex];
@@ -1687,6 +1861,44 @@ function mergedDetailText(card: Exclude<MergedCard, { kind: "single" }>) {
   return firstState ? firstState : null;
 }
 
+function singlePlanUpdateMetaItems(event: EventEntry, data: PlanUpdateRenderData) {
+  const items: Array<{ label: string; value: string }> = [];
+  const phase = event.phase?.trim();
+  if (phase) {
+    items.push({ label: "phase", value: phase });
+  }
+  if (data.steps.length > 0) {
+    items.push({ label: "steps", value: String(data.steps.length) });
+  }
+  return items;
+}
+
+function mergedPlanUpdateMetaItems(
+  call: EventEntry,
+  result: EventEntry,
+  data: PlanUpdateRenderData,
+) {
+  const items: Array<{ label: string; value: string }> = [];
+  const phase = mergedPlanUpdatePhase(call, result);
+  if (phase) {
+    items.push({ label: "phase", value: phase });
+  }
+  if (data.steps.length > 0) {
+    items.push({ label: "steps", value: String(data.steps.length) });
+  }
+  return items;
+}
+
+function mergedPlanUpdatePhase(call: EventEntry, result: EventEntry) {
+  const callPhase = call.phase?.trim();
+  const resultPhase = result.phase?.trim();
+  if (callPhase && resultPhase) {
+    return callPhase === resultPhase ? callPhase : `${callPhase} -> ${resultPhase}`;
+  }
+
+  return callPhase ?? resultPhase ?? null;
+}
+
 function userInputRequestCountsText(request: UserInputRequestEntry | null | undefined) {
   if (!request) {
     return null;
@@ -1767,6 +1979,62 @@ function patchApplyResultPreference(event: EventEntry) {
     boolScore(event.patch_apply_changes.length > 0),
     boolScore(Boolean(event.patch_apply_status)),
     boolScore(Boolean(event.aggregated_output)),
+    event.seq,
+  ];
+}
+
+function pairedPlanUpdateResultChildIndex(node: EventNode) {
+  if (node.event.event_type !== PLAN_UPDATE || node.event.phase !== "started") {
+    return null;
+  }
+
+  const snapshotIndex = preferredTerminalChildIndexFromSnapshot(node);
+  if (snapshotIndex != null) {
+    return snapshotIndex;
+  }
+
+  return preferredChildIndex(
+    node.children,
+    (item) =>
+      "Event" in item
+      && item.Event.event.event_type === PLAN_UPDATE
+      && item.Event.event.phase === "completed"
+      && shellOperationIdsMatch(node.event, item.Event.event),
+    (item) => planUpdateResultPreference(item.Event.event),
+  );
+}
+
+function mergedPlanUpdateOperationChildren(node: EventNode, resultIndex: number) {
+  const preferredResult = eventChildAt(node.children, resultIndex)?.event;
+  if (!preferredResult) {
+    return node.children;
+  }
+
+  const children: TimelineItem[] = [];
+  node.children.forEach((item, index) => {
+    if (index === resultIndex) {
+      if ("Event" in item) {
+        children.push(...item.Event.children);
+      }
+      return;
+    }
+
+    if (isRedundantResponseItemPlanUpdateResult(item, node.event, preferredResult)) {
+      return;
+    }
+
+    children.push(item);
+  });
+
+  return children;
+}
+
+function planUpdateResultPreference(event: EventEntry) {
+  return [
+    event.plan_steps.length,
+    boolScore(Boolean(event.plan_explanation?.trim())),
+    boolScore(event.raw_type === "response_item"),
+    boolScore(event.output_value != null),
     event.seq,
   ];
 }
@@ -2050,6 +2318,27 @@ function isRedundantResponseItemUserInputRequestResult(
   return (
     event.event_id !== preferredResult.event_id
     && event.event_type === USER_INPUT_REQUEST
+    && event.phase === "completed"
+    && event.raw_type === "response_item"
+    && event.duplicate_of == null
+    && shellOperationIdsMatch(call, event)
+    && preferredResult.raw_type !== "response_item"
+  );
+}
+
+function isRedundantResponseItemPlanUpdateResult(
+  item: TimelineItem,
+  call: EventEntry,
+  preferredResult: EventEntry,
+) {
+  if (!("Event" in item)) {
+    return false;
+  }
+
+  const event = item.Event.event;
+  return (
+    event.event_id !== preferredResult.event_id
+    && event.event_type === PLAN_UPDATE
     && event.phase === "completed"
     && event.raw_type === "response_item"
     && event.duplicate_of == null

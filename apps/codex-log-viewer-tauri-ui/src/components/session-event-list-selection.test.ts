@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { EventEntry, EventNode, TimelineItem } from "@/backend";
+import { sortTimelineItemsForRender } from "@/components/session-event-list-order";
 import { preferredTerminalChildIndexFromSnapshot } from "@/components/session-event-list-selection";
 
 function makeEvent(overrides: Partial<EventEntry> = {}): EventEntry {
@@ -23,6 +24,8 @@ function makeEvent(overrides: Partial<EventEntry> = {}): EventEntry {
     model_context_window: null,
     collaboration_mode_kind: null,
     last_agent_message: null,
+    plan_explanation: null,
+    plan_steps: [],
     tool_name: null,
     receiver_thread_ids: [],
     operation_id: null,
@@ -143,5 +146,41 @@ describe("preferredTerminalChildIndexFromSnapshot", () => {
     );
 
     expect(preferredTerminalChildIndexFromSnapshot(node)).toBeNull();
+  });
+});
+
+describe("sortTimelineItemsForRender", () => {
+  it("orders atomic events by seq and lifecycle events by terminal seq", () => {
+    const items = sortTimelineItemsForRender([
+      eventItem({
+        event_id: "run-1:25",
+        event_type: "shell.call",
+        seq: 25,
+        operation_terminal_seq: 33,
+      }),
+      eventItem({
+        event_id: "run-1:28",
+        event_type: "info.tokens",
+        seq: 28,
+      }),
+      eventItem({
+        event_id: "run-1:24",
+        event_type: "shell.call",
+        seq: 24,
+        operation_terminal_seq: 31,
+      }),
+      eventItem({
+        event_id: "run-1:35",
+        event_type: "agent.reasoning",
+        seq: 35,
+      }),
+    ]);
+
+    expect(items.map((item) => ("Event" in item ? item.Event.event.event_id : null))).toEqual([
+      "run-1:28",
+      "run-1:24",
+      "run-1:25",
+      "run-1:35",
+    ]);
   });
 });

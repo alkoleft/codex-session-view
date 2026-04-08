@@ -135,6 +135,11 @@ export type PatchApplyChangeEntry = {
   move_path: string | null;
 };
 
+export type PlanStepEntry = {
+  step: string;
+  status: string | null;
+};
+
 export type ShellParsedCommandEntry = {
   kind: string | null;
   command: string | null;
@@ -162,6 +167,8 @@ export type EventEntry = {
   model_context_window: string | null;
   collaboration_mode_kind: string | null;
   last_agent_message: string | null;
+  plan_explanation: string | null;
+  plan_steps: PlanStepEntry[];
   tool_name: string | null;
   receiver_thread_ids: string[];
   operation_id: string | null;
