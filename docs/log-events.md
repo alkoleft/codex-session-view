@@ -815,6 +815,8 @@ payload на стороне UI:
 - `atomic` события рендерятся по собственному `seq`;
 - lifecycle-узлы, для которых известен `operation_terminal_seq`, рендерятся по terminal
   sequence, то есть по моменту завершения операции;
+- synthetic `task-lifecycle` segment в viewer тоже считается lifecycle-блоком и сортируется по
+  render key конца сегмента, а не по `task.started`;
 - если terminal sequence отсутствует, viewer использует обычный `seq`;
 - при равном sort-key сохраняется исходный порядок элементов на уровне siblings.
 

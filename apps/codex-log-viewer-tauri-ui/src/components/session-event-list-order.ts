@@ -7,21 +7,32 @@ export function sortTimelineItemsForRender(items: TimelineItem[]): TimelineItem[
       index,
       renderSeq: timelineItemRenderSeq(item),
     }))
-    .sort((left, right) => {
-      if (left.renderSeq !== right.renderSeq) {
-        return left.renderSeq - right.renderSeq;
-      }
-      return left.index - right.index;
-    })
+    .sort((left, right) => compareRenderSeq(left.renderSeq, right.renderSeq, left.index, right.index))
     .map(({ item }) => item);
 }
 
-function timelineItemRenderSeq(item: TimelineItem): number {
+export function sortEntriesByRenderSeq<T extends { renderSeq: number; index: number }>(
+  entries: T[],
+): T[] {
+  return [...entries].sort((left, right) =>
+    compareRenderSeq(left.renderSeq, right.renderSeq, left.index, right.index));
+}
+
+export function timelineItemRenderSeq(item: TimelineItem): number {
   if ("Event" in item) {
     return eventNodeRenderSeq(item.Event);
   }
 
   return threadRenderSeq(item.Thread);
+}
+
+export function timelineItemsRenderSeq(items: TimelineItem[]): number {
+  const renderSeq = items.reduce<number>((max, item) => {
+    const itemRenderSeq = timelineItemRenderSeq(item);
+    return itemRenderSeq > max ? itemRenderSeq : max;
+  }, Number.NEGATIVE_INFINITY);
+
+  return Number.isFinite(renderSeq) ? renderSeq : Number.MAX_SAFE_INTEGER;
 }
 
 function eventNodeRenderSeq(node: EventNode): number {
@@ -35,4 +46,12 @@ function threadRenderSeq(thread: ThreadNode): number {
   }, Number.POSITIVE_INFINITY);
 
   return Number.isFinite(firstSeq) ? firstSeq : Number.MAX_SAFE_INTEGER;
+}
+
+function compareRenderSeq(leftRenderSeq: number, rightRenderSeq: number, leftIndex: number, rightIndex: number) {
+  if (leftRenderSeq !== rightRenderSeq) {
+    return leftRenderSeq - rightRenderSeq;
+  }
+
+  return leftIndex - rightIndex;
 }

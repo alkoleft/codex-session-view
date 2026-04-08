@@ -4,7 +4,12 @@ import { Check, CircleAlert, CircleX } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import { sortTimelineItemsForRender } from "@/components/session-event-list-order";
+import {
+  sortEntriesByRenderSeq,
+  sortTimelineItemsForRender,
+  timelineItemRenderSeq,
+  timelineItemsRenderSeq,
+} from "@/components/session-event-list-order";
 import {
   mergedPlanUpdateRenderData,
   planUpdateRenderData,
@@ -77,12 +82,14 @@ type TaskTimelinePalette = {
 };
 
 type TimelineRenderItem =
-  | { kind: "item"; item: TimelineItem }
+  | { kind: "item"; item: TimelineItem; renderSeq: number; index: number }
   | {
       kind: "task-lifecycle";
       items: TimelineItem[];
       isClosed: boolean;
       mode: string | null;
+      renderSeq: number;
+      index: number;
     };
 
 type SingleCard = {
@@ -173,10 +180,11 @@ function TimelineItemsView({
   path: string;
   groupTaskLifecycles?: boolean;
 }) {
-  const orderedItems = sortTimelineItemsForRender(items);
-  const renderedItems = groupTaskLifecycles ? buildTimelineRenderItems(orderedItems) : orderedItems.map((item) => ({
+  const renderedItems = groupTaskLifecycles ? buildTimelineRenderItems(items) : sortTimelineItemsForRender(items).map((item, index) => ({
     kind: "item" as const,
     item,
+    renderSeq: timelineItemRenderSeq(item),
+    index,
   }));
 
   return (
@@ -312,6 +320,8 @@ function buildTimelineRenderItems(items: TimelineItem[]): TimelineRenderItem[] {
         items: segmentItems,
         isClosed,
         mode,
+        renderSeq: timelineItemsRenderSeq(segmentItems),
+        index,
       });
       index = endIndex + 1;
       continue;
@@ -320,11 +330,13 @@ function buildTimelineRenderItems(items: TimelineItem[]): TimelineRenderItem[] {
     renderedItems.push({
       kind: "item",
       item: items[index],
+      renderSeq: timelineItemRenderSeq(items[index]),
+      index,
     });
     index += 1;
   }
 
-  return renderedItems;
+  return sortEntriesByRenderSeq(renderedItems);
 }
 
 function taskLifecycleSegmentEnd(items: TimelineItem[], startIndex: number) {

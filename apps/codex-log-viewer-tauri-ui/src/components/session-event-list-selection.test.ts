@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { EventEntry, EventNode, TimelineItem } from "@/backend";
-import { sortTimelineItemsForRender } from "@/components/session-event-list-order";
+import {
+  sortEntriesByRenderSeq,
+  sortTimelineItemsForRender,
+  timelineItemRenderSeq,
+  timelineItemsRenderSeq,
+} from "@/components/session-event-list-order";
 import { preferredTerminalChildIndexFromSnapshot } from "@/components/session-event-list-selection";
 
 function makeEvent(overrides: Partial<EventEntry> = {}): EventEntry {
@@ -181,6 +186,35 @@ describe("sortTimelineItemsForRender", () => {
       "run-1:24",
       "run-1:25",
       "run-1:35",
+    ]);
+  });
+});
+
+describe("sortEntriesByRenderSeq", () => {
+  it("places a task lifecycle segment by its terminal render seq", () => {
+    const taskSegment = {
+      label: "task-lifecycle",
+      index: 0,
+      renderSeq: timelineItemsRenderSeq([
+        eventItem({ event_id: "run-1:110", event_type: "task.started", seq: 110 }),
+        eventItem({ event_id: "run-1:113", event_type: "agent.reasoning", seq: 113 }),
+        eventItem({ event_id: "run-1:114", event_type: "message.assistant", seq: 114 }),
+        eventItem({ event_id: "run-1:120", event_type: "task.completed", seq: 120 }),
+      ]),
+    };
+    const atomicTokens = {
+      label: "info.tokens",
+      index: 1,
+      renderSeq: timelineItemRenderSeq(
+        eventItem({ event_id: "run-1:109", event_type: "info.tokens", seq: 109 }),
+      ),
+    };
+
+    const ordered = sortEntriesByRenderSeq([taskSegment, atomicTokens]);
+
+    expect(ordered.map((entry) => entry.label)).toEqual([
+      "info.tokens",
+      "task-lifecycle",
     ]);
   });
 });
