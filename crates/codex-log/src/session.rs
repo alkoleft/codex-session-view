@@ -154,9 +154,27 @@ pub struct IndexedSessionSummary {
     pub session_id: String,
     pub updated_at: String,
     pub thread_name: Option<String>,
+    pub thread_name_source: Option<String>,
     pub cwd: Option<String>,
     pub agent_name: Option<String>,
     pub tokens_used: Option<u64>,
+    pub created_at: Option<String>,
+    pub source: Option<String>,
+    pub model_provider: Option<String>,
+    pub sandbox_policy_kind: Option<String>,
+    pub approval_mode: Option<String>,
+    pub has_user_event: Option<bool>,
+    pub archived: Option<bool>,
+    pub archived_at: Option<String>,
+    pub git_sha: Option<String>,
+    pub git_branch: Option<String>,
+    pub git_origin_url: Option<String>,
+    pub cli_version: Option<String>,
+    pub agent_role: Option<String>,
+    pub memory_mode: Option<String>,
+    pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub agent_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,13 +337,8 @@ impl SessionCatalog {
             } else {
                 self.load_index_overlay(&mut diagnostics)?
                     .into_iter()
-                    .map(|(session_id, entry)| IndexedSessionSummary {
-                        session_id,
-                        updated_at: entry.updated_at,
-                        thread_name: entry.thread_name,
-                        cwd: None,
-                        agent_name: None,
-                        tokens_used: None,
+                    .map(|(session_id, entry)| {
+                        indexed_session_summary_from_index_entry(&session_id, &entry)
                     })
                     .collect::<Vec<_>>()
             };
@@ -351,6 +364,23 @@ impl SessionCatalog {
             next_cursor,
             diagnostics,
         })
+    }
+
+    pub fn find_indexed_session(&self, session_id: &str) -> AppResult<Option<IndexedSessionSummary>> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Ok(None);
+        }
+
+        if let Some(summary) = self.find_state_indexed_session(session_id)? {
+            return Ok(Some(summary));
+        }
+
+        let mut diagnostics = Vec::new();
+        let overlay = self.load_index_overlay(&mut diagnostics)?;
+        Ok(overlay
+            .get(session_id)
+            .map(|entry| indexed_session_summary_from_index_entry(session_id, entry)))
     }
 
     pub fn find_session(&self, session_id: &str) -> AppResult<Option<SessionSummary>> {
@@ -498,7 +528,7 @@ impl SessionCatalog {
         };
 
         let mut statement = match connection.prepare(
-            "select id, updated_at, title, first_user_message, cwd, agent_nickname, tokens_used from threads",
+            "select id, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, tokens_used, has_user_event, archived, archived_at, git_sha, git_branch, git_origin_url, cli_version, first_user_message, agent_nickname, agent_role, memory_mode, model, reasoning_effort, agent_path from threads",
         ) {
             Ok(statement) => statement,
             Err(err) => {
@@ -515,26 +545,7 @@ impl SessionCatalog {
             }
         };
 
-        let rows = match statement.query_map([], |row| {
-            let title: String = row.get(2)?;
-            let first_user_message: String = row.get(3)?;
-            let cwd: String = row.get(4)?;
-            let agent_nickname: Option<String> = row.get(5)?;
-            let tokens_used: i64 = row.get(6)?;
-
-            Ok(IndexedSessionSummary {
-                session_id: row.get(0)?,
-                updated_at: unix_seconds_to_rfc3339(row.get(1)?),
-                thread_name: select_thread_name(
-                    Some(title.as_str()),
-                    Some(first_user_message.as_str()),
-                    agent_nickname.as_deref(),
-                ),
-                cwd: optional_text(Some(cwd.as_str())),
-                agent_name: optional_text(agent_nickname.as_deref()),
-                tokens_used: u64::try_from(tokens_used).ok(),
-            })
-        }) {
+        let rows = match statement.query_map([], indexed_session_summary_from_state_row) {
             Ok(rows) => rows,
             Err(err) => {
                 diagnostics.push(SessionDiagnostic {
@@ -566,6 +577,29 @@ impl SessionCatalog {
             }
         };
         Ok(Some(sessions))
+    }
+
+    fn find_state_indexed_session(&self, session_id: &str) -> AppResult<Option<IndexedSessionSummary>> {
+        let Some(state_db_path) = find_latest_state_db_path(&self.home.root)? else {
+            return Ok(None);
+        };
+
+        let connection = match open_state_db(&state_db_path) {
+            Ok(connection) => connection,
+            Err(_) => return Ok(None),
+        };
+
+        let mut statement = match connection.prepare(
+            "select id, created_at, updated_at, source, model_provider, cwd, title, sandbox_policy, approval_mode, tokens_used, has_user_event, archived, archived_at, git_sha, git_branch, git_origin_url, cli_version, first_user_message, agent_nickname, agent_role, memory_mode, model, reasoning_effort, agent_path from threads where id = ?1 limit 1",
+        ) {
+            Ok(statement) => statement,
+            Err(_) => return Ok(None),
+        };
+
+        statement
+            .query_row([session_id], indexed_session_summary_from_state_row)
+            .optional()
+            .map_err(|err| AppError::Runner(err.to_string()))
     }
 
     fn resolve_session_ref_by_id_from_state_db(
@@ -1014,17 +1048,24 @@ fn unix_seconds_to_rfc3339(value: i64) -> String {
         .unwrap_or_else(|| value.to_string())
 }
 
-fn select_thread_name(
+fn select_thread_name_entry(
     title: Option<&str>,
     first_user_message: Option<&str>,
     agent_nickname: Option<&str>,
-) -> Option<String> {
-    [title, first_user_message, agent_nickname]
-        .into_iter()
-        .flatten()
-        .map(str::trim)
-        .find(|value| !value.is_empty())
-        .map(str::to_string)
+) -> (Option<String>, Option<String>) {
+    [
+        ("title", title),
+        ("first_user_message", first_user_message),
+        ("agent_nickname", agent_nickname),
+    ]
+    .into_iter()
+    .find_map(|(source, value)| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| (Some(value.to_string()), Some(source.to_string())))
+    })
+    .unwrap_or((None, None))
 }
 
 fn optional_text(value: Option<&str>) -> Option<String> {
@@ -1032,6 +1073,106 @@ fn optional_text(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn sandbox_policy_kind(value: Option<&str>) -> Option<String> {
+    let raw = optional_text(value)?;
+    if let Ok(Value::Object(object)) = serde_json::from_str::<Value>(&raw) {
+        if let Some(kind) = object.get("type").and_then(Value::as_str) {
+            return optional_text(Some(kind));
+        }
+    }
+    Some(raw)
+}
+
+fn indexed_session_summary_from_index_entry(
+    session_id: &str,
+    entry: &SessionIndexEntry,
+) -> IndexedSessionSummary {
+    IndexedSessionSummary {
+        session_id: session_id.to_string(),
+        updated_at: entry.updated_at.clone(),
+        thread_name: entry.thread_name.clone(),
+        thread_name_source: entry.thread_name.as_ref().map(|_| "session_index".to_string()),
+        cwd: None,
+        agent_name: None,
+        tokens_used: None,
+        created_at: None,
+        source: None,
+        model_provider: None,
+        sandbox_policy_kind: None,
+        approval_mode: None,
+        has_user_event: None,
+        archived: None,
+        archived_at: None,
+        git_sha: None,
+        git_branch: None,
+        git_origin_url: None,
+        cli_version: None,
+        agent_role: None,
+        memory_mode: None,
+        model: None,
+        reasoning_effort: None,
+        agent_path: None,
+    }
+}
+
+fn indexed_session_summary_from_state_row(
+    row: &rusqlite::Row<'_>,
+) -> Result<IndexedSessionSummary, rusqlite::Error> {
+    let title: String = row.get(6)?;
+    let first_user_message: String = row.get(17)?;
+    let cwd: String = row.get(5)?;
+    let source: String = row.get(3)?;
+    let model_provider: String = row.get(4)?;
+    let sandbox_policy: String = row.get(7)?;
+    let approval_mode: String = row.get(8)?;
+    let cli_version: String = row.get(16)?;
+    let memory_mode: String = row.get(20)?;
+    let agent_nickname: Option<String> = row.get(18)?;
+    let agent_role: Option<String> = row.get(19)?;
+    let model: Option<String> = row.get(21)?;
+    let reasoning_effort: Option<String> = row.get(22)?;
+    let agent_path: Option<String> = row.get(23)?;
+    let git_sha: Option<String> = row.get(13)?;
+    let git_branch: Option<String> = row.get(14)?;
+    let git_origin_url: Option<String> = row.get(15)?;
+    let tokens_used: i64 = row.get(9)?;
+    let has_user_event: i64 = row.get(10)?;
+    let archived: i64 = row.get(11)?;
+    let archived_at: Option<i64> = row.get(12)?;
+    let (thread_name, thread_name_source) = select_thread_name_entry(
+        Some(title.as_str()),
+        Some(first_user_message.as_str()),
+        agent_nickname.as_deref(),
+    );
+
+    Ok(IndexedSessionSummary {
+        session_id: row.get(0)?,
+        created_at: Some(unix_seconds_to_rfc3339(row.get(1)?)),
+        updated_at: unix_seconds_to_rfc3339(row.get(2)?),
+        thread_name,
+        thread_name_source,
+        cwd: optional_text(Some(cwd.as_str())),
+        agent_name: optional_text(agent_nickname.as_deref()),
+        tokens_used: u64::try_from(tokens_used).ok(),
+        source: optional_text(Some(source.as_str())),
+        model_provider: optional_text(Some(model_provider.as_str())),
+        sandbox_policy_kind: sandbox_policy_kind(Some(sandbox_policy.as_str())),
+        approval_mode: optional_text(Some(approval_mode.as_str())),
+        has_user_event: Some(has_user_event != 0),
+        archived: Some(archived != 0),
+        archived_at: archived_at.map(unix_seconds_to_rfc3339),
+        git_sha: optional_text(git_sha.as_deref()),
+        git_branch: optional_text(git_branch.as_deref()),
+        git_origin_url: optional_text(git_origin_url.as_deref()),
+        cli_version: optional_text(Some(cli_version.as_str())),
+        agent_role: optional_text(agent_role.as_deref()),
+        memory_mode: optional_text(Some(memory_mode.as_str())),
+        model: optional_text(model.as_deref()),
+        reasoning_effort: optional_text(reasoning_effort.as_deref()),
+        agent_path: optional_text(agent_path.as_deref()),
+    })
 }
 
 fn rollout_path_to_session_ref(sessions_dir: &Path, rollout_path: &str) -> Option<String> {
@@ -1390,6 +1531,11 @@ fn matches_index_query(summary: &IndexedSessionSummary, query: Option<&str>) -> 
         summary.thread_name.as_deref().unwrap_or_default(),
         summary.cwd.as_deref().unwrap_or_default(),
         summary.agent_name.as_deref().unwrap_or_default(),
+        summary.agent_role.as_deref().unwrap_or_default(),
+        summary.model.as_deref().unwrap_or_default(),
+        summary.reasoning_effort.as_deref().unwrap_or_default(),
+        summary.git_branch.as_deref().unwrap_or_default(),
+        summary.git_sha.as_deref().unwrap_or_default(),
     ]
     .iter()
     .any(|value| value.to_lowercase().contains(query))
@@ -1729,6 +1875,17 @@ mod tests {
         assert_eq!(page.items[0].cwd.as_deref(), Some("/repo/beta"));
         assert_eq!(page.items[0].agent_name.as_deref(), Some("Archimedes"));
         assert_eq!(page.items[0].tokens_used, Some(777));
+        assert_eq!(page.items[0].source.as_deref(), Some("cli"));
+        assert_eq!(page.items[0].model_provider.as_deref(), Some("openai"));
+        assert_eq!(
+            page.items[0].sandbox_policy_kind.as_deref(),
+            Some("danger-full-access")
+        );
+        assert_eq!(page.items[0].approval_mode.as_deref(), Some("never"));
+        assert_eq!(page.items[0].memory_mode.as_deref(), Some("enabled"));
+        assert_eq!(page.items[0].cli_version.as_deref(), Some("0.118.0"));
+        assert_eq!(page.items[0].archived, Some(false));
+        assert_eq!(page.items[0].has_user_event, Some(false));
         assert_eq!(page.items[1].thread_name.as_deref(), Some("SQLite Alpha"));
         assert_eq!(page.items[1].cwd.as_deref(), Some("/repo/alpha"));
         assert_eq!(page.items[1].tokens_used, Some(42));

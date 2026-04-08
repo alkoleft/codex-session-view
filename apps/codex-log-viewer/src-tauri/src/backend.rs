@@ -5,7 +5,7 @@ use codex_log::error::{AppError, AppResult};
 use codex_log::events::projector::{categorize_event, summarize_event_full, EventSummaryCategory};
 use codex_log::events::record::EventRecord;
 use codex_log::session::{
-    IndexedSessionCatalogPage, LoadedSession, ResolvedCodexHome, SessionCatalog,
+    IndexedSessionCatalogPage, IndexedSessionSummary, LoadedSession, ResolvedCodexHome, SessionCatalog,
     SessionCatalogPage, SessionLoader, SessionReadContext, SessionReader, TailCursor, TailResult,
 };
 use codex_log::tree::validate_standalone_rollout_root;
@@ -43,6 +43,7 @@ pub struct SessionPreview {
     pub event_count: usize,
     pub first_ts: Option<String>,
     pub last_ts: Option<String>,
+    pub indexed_summary: Option<IndexedSessionSummary>,
     pub tail_cursor: TailCursor,
     pub recent_events: Vec<SessionPreviewEvent>,
 }
@@ -107,9 +108,11 @@ impl ViewerBackend {
         event_limit: Option<usize>,
     ) -> AppResult<SessionPreview> {
         let home = self.require_home()?;
+        let catalog = SessionCatalog::new(home.clone());
         let path = home.resolve_session_ref(session_ref)?;
         let context = self.build_read_context(&path, session_ref, None)?;
         let read_result = SessionReader::load_all(&path, &context)?;
+        let indexed_summary = catalog.find_indexed_session(&context.session_id)?;
         let limit = event_limit
             .unwrap_or(DEFAULT_PREVIEW_LIMIT)
             .clamp(1, MAX_PREVIEW_LIMIT);
@@ -128,6 +131,7 @@ impl ViewerBackend {
             event_count: read_result.events.len(),
             first_ts: read_result.events.first().map(|event| event.ts.clone()),
             last_ts: read_result.events.last().map(|event| event.ts.clone()),
+            indexed_summary,
             tail_cursor: read_result.tail_cursor,
             recent_events,
         })
@@ -152,6 +156,7 @@ impl ViewerBackend {
         let path = home.resolve_session_ref(&session_ref)?;
         let context = self.build_read_context(&path, &session_ref, None)?;
         let read_result = SessionReader::load_all(&path, &context)?;
+        let indexed_summary = catalog.find_indexed_session(&context.session_id)?;
         let limit = event_limit
             .unwrap_or(DEFAULT_PREVIEW_LIMIT)
             .clamp(1, MAX_PREVIEW_LIMIT);
@@ -170,6 +175,7 @@ impl ViewerBackend {
             event_count: read_result.events.len(),
             first_ts: read_result.events.first().map(|event| event.ts.clone()),
             last_ts: read_result.events.last().map(|event| event.ts.clone()),
+            indexed_summary,
             tail_cursor: read_result.tail_cursor,
             recent_events,
         })
@@ -349,6 +355,13 @@ mod tests {
             .expect("session preview by id should load");
         assert_eq!(preview.session_id, "session-a");
         assert_eq!(preview.session_ref, session_ref);
+        assert_eq!(
+            preview
+                .indexed_summary
+                .as_ref()
+                .and_then(|summary| summary.thread_name.as_deref()),
+            Some("Alpha")
+        );
     }
 
     #[test]

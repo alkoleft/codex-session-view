@@ -13,6 +13,7 @@ fn main() {
             "detect_codex_home",
             "initialize_codex_home",
             "list_indexed_sessions",
+            "load_session",
             "load_session_preview",
             "load_session_preview_by_id",
             "tail_session",

@@ -70,6 +70,14 @@ pub struct UserInputRequestEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PatchApplyChangeEntry {
+    pub path: String,
+    pub change_type: Option<String>,
+    pub unified_diff: Option<String>,
+    pub move_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventEntry {
     pub event_id: String,
     pub parent_event_id: Option<String>,
@@ -98,6 +106,9 @@ pub struct EventEntry {
     pub spawn_agent: Option<SpawnAgentEntry>,
     pub user_input_request: Option<UserInputRequestEntry>,
     pub runtime_context_pairs: Vec<(String, String)>,
+    pub patch_apply_status: Option<String>,
+    pub patch_apply_input: Option<String>,
+    pub patch_apply_changes: Vec<PatchApplyChangeEntry>,
     pub tool_name: Option<String>,
     pub receiver_thread_ids: Vec<String>,
     pub operation_id: Option<String>,
@@ -1279,6 +1290,9 @@ fn format_event_entry(
         spawn_agent,
         user_input_request,
         runtime_context_pairs: extract_runtime_context_pairs(&event.event_type, payload),
+        patch_apply_status: extract_patch_apply_status(&event.event_type, payload),
+        patch_apply_input: extract_patch_apply_input(&event.event_type, payload),
+        patch_apply_changes: extract_patch_apply_changes(&event.event_type, payload),
         tool_name: payload
             .and_then(|obj| obj.get("tool_name").or_else(|| obj.get("tool")))
             .and_then(Value::as_str)
@@ -1917,6 +1931,136 @@ fn extract_runtime_context_pairs(
     }
     pairs.extend(trailing_pairs);
     pairs
+}
+
+fn extract_patch_apply_status(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    if !matches!(event_type, PATCH_APPLY | PATCH_APPLY_DUPLICATE) {
+        return None;
+    }
+
+    payload
+        .and_then(|obj| obj.get("status"))
+        .map(render_payload_value)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn extract_patch_apply_input(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    if !matches!(event_type, PATCH_APPLY | PATCH_APPLY_DUPLICATE) {
+        return None;
+    }
+
+    payload
+        .and_then(|obj| obj.get("input"))
+        .map(render_payload_value)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn extract_patch_apply_changes(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Vec<PatchApplyChangeEntry> {
+    if !matches!(event_type, PATCH_APPLY | PATCH_APPLY_DUPLICATE) {
+        return Vec::new();
+    }
+
+    let Some(changes) = payload.and_then(|obj| obj.get("changes")) else {
+        return Vec::new();
+    };
+
+    let mut entries = match changes {
+        Value::Object(object) => object
+            .iter()
+            .map(|(path, value)| PatchApplyChangeEntry {
+                path: path.clone(),
+                change_type: change_type_from_patch_value(value),
+                unified_diff: patch_unified_diff_from_value(value),
+                move_path: patch_move_path_from_value(value),
+            })
+            .collect::<Vec<_>>(),
+        Value::Array(array) => array
+            .iter()
+            .filter_map(|value| {
+                let object = value.as_object()?;
+                let path = object
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())?
+                    .to_string();
+                let change_type = object
+                    .get("type")
+                    .or_else(|| object.get("kind"))
+                    .map(render_payload_value)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                let unified_diff = object
+                    .get("unified_diff")
+                    .map(render_payload_value)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                let move_path = object
+                    .get("move_path")
+                    .map(render_payload_value)
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty());
+                Some(PatchApplyChangeEntry {
+                    path,
+                    change_type,
+                    unified_diff,
+                    move_path,
+                })
+            })
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    entries
+}
+
+fn change_type_from_patch_value(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(object) => object
+            .get("type")
+            .or_else(|| object.get("kind"))
+            .map(render_payload_value)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        Value::String(_) | Value::Bool(_) | Value::Number(_) => {
+            let rendered = render_payload_value(value);
+            let trimmed = rendered.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
+        _ => None,
+    }
+}
+
+fn patch_unified_diff_from_value(value: &Value) -> Option<String> {
+    value
+        .as_object()
+        .and_then(|object| object.get("unified_diff"))
+        .map(render_payload_value)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn patch_move_path_from_value(value: &Value) -> Option<String> {
+    value.as_object().and_then(|object| {
+        object
+            .get("move_path")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
 }
 
 fn is_runtime_context_trailing_key(key: &str) -> bool {

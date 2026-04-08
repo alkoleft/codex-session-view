@@ -21,15 +21,16 @@ import {
   extractErrorMessage,
   initializeCodexHome,
   listIndexedSessions,
+  loadSession,
   loadSessionPreviewById,
   loadSessionPreview,
   tailSession,
   type EventRecord,
   type IndexedSessionSummary,
+  type LoadedSession,
   type ResolvedCodexHome,
   type SessionDiagnostic,
   type SessionPreview,
-  type SessionPreviewEvent,
   type TailCursor,
 } from "./backend";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -54,6 +55,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { SessionEventList } from "@/components/session-event-list";
 import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
@@ -70,6 +72,7 @@ const OPEN_SESSION_EVENT = "viewer:open-session";
 const CLEAR_SESSION_EVENT = "viewer:clear-session";
 const SESSIONS_PAGE_SIZE = 50;
 const LIVE_TAIL_POLL_MS = 2500;
+const SUMMARY_TEXT_PREVIEW_LIMIT = 220;
 
 function formatTime(value: string | null) {
   if (!value) {
@@ -112,6 +115,114 @@ function formatTokenCount(value: number | null) {
   }
 
   return new Intl.NumberFormat("ru-RU").format(value);
+}
+
+function formatBoolValue(value: boolean | null) {
+  if (value == null) {
+    return "n/a";
+  }
+
+  return value ? "yes" : "no";
+}
+
+type SessionSummaryField = {
+  label: string;
+  value: string;
+  monospace?: boolean;
+};
+
+type ParsedSessionSource = {
+  label: string | null;
+  parentThreadId: string | null;
+  depth: string | null;
+};
+
+function shouldCollapseSummaryText(value: string) {
+  return value.length > SUMMARY_TEXT_PREVIEW_LIMIT || value.includes("\n");
+}
+
+function truncateSummaryText(value: string) {
+  if (!shouldCollapseSummaryText(value)) {
+    return value;
+  }
+
+  const clipped = value.slice(0, SUMMARY_TEXT_PREVIEW_LIMIT).trimEnd();
+  return `${clipped}…`;
+}
+
+function isCompactThreadSummary(value: string) {
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 96 && !trimmed.includes("\n");
+}
+
+function parseSessionSource(value: string | null): ParsedSessionSource {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return {
+      label: null,
+      parentThreadId: null,
+      depth: null,
+    };
+  }
+
+  if (!trimmed.startsWith("{")) {
+    return {
+      label: trimmed,
+      parentThreadId: null,
+      depth: null,
+    };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as {
+      subagent?: {
+        thread_spawn?: {
+          parent_thread_id?: unknown;
+          depth?: unknown;
+        };
+      };
+    };
+    const threadSpawn = parsed.subagent?.thread_spawn;
+    if (threadSpawn) {
+      return {
+        label: "subagent",
+        parentThreadId:
+          typeof threadSpawn.parent_thread_id === "string" && threadSpawn.parent_thread_id.trim()
+            ? threadSpawn.parent_thread_id.trim()
+            : null,
+        depth:
+          typeof threadSpawn.depth === "number" || typeof threadSpawn.depth === "string"
+            ? String(threadSpawn.depth)
+            : null,
+      };
+    }
+  } catch {
+    return {
+      label: trimmed,
+      parentThreadId: null,
+      depth: null,
+    };
+  }
+
+  return {
+    label: "structured",
+    parentThreadId: null,
+    depth: null,
+  };
+}
+
+function formatProviderModel(
+  provider: string | null | undefined,
+  model: string | null | undefined,
+) {
+  const providerValue = provider?.trim();
+  const modelValue = model?.trim();
+
+  if (providerValue && modelValue) {
+    return `${providerValue}/${modelValue}`;
+  }
+
+  return providerValue || modelValue || null;
 }
 
 function isAbsolutePath(value: string) {
@@ -164,24 +275,6 @@ function readSessionRef(payload: OpenSessionEventPayload) {
   return "";
 }
 
-function PreviewEventCard({ event }: { event: SessionPreviewEvent }) {
-  return (
-    <Card className={SURFACE_CARD_CLASS} size="sm">
-      <CardContent className="flex flex-col gap-2 p-4">
-        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-          <span className="font-mono">#{event.seq}</span>
-          <time>{formatTime(event.ts)}</time>
-          <span className="font-mono">{event.event_type}</span>
-        </div>
-        <p className="ui-selectable text-sm leading-6">{event.summary}</p>
-        {event.text ? (
-          <p className="ui-selectable text-xs leading-5 text-muted-foreground">{event.text}</p>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-}
-
 function CatalogMetaItem({
   label,
   title,
@@ -199,6 +292,72 @@ function CatalogMetaItem({
       <p className="ui-selectable truncate text-xs text-foreground/80" title={title ?? value}>
         {value}
       </p>
+    </div>
+  );
+}
+
+function SessionSummaryMetaItem({
+  label,
+  monospace = false,
+  value,
+}: {
+  label: string;
+  monospace?: boolean;
+  value: string;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <dt className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+        {label}
+      </dt>
+      <dd
+        className={cn(
+          "ui-selectable break-words text-sm text-foreground",
+          monospace && "font-mono text-xs",
+        )}
+        title={value}
+      >
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+function SessionSummaryLongField({
+  label,
+  monospace = false,
+  value,
+}: {
+  label: string;
+  monospace?: boolean;
+  value: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsible = shouldCollapseSummaryText(value);
+  const displayValue = collapsible && !expanded ? truncateSummaryText(value) : value;
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "ui-selectable whitespace-pre-wrap break-words text-sm text-foreground",
+          monospace && "font-mono text-xs",
+        )}
+      >
+        {displayValue}
+      </div>
+      {collapsible ? (
+        <button
+          className="inline-flex items-center self-start text-[11px] font-semibold uppercase tracking-[0.08em] text-[color:var(--accent-strong)] transition-opacity hover:opacity-80"
+          onClick={() => setExpanded((current) => !current)}
+          type="button"
+        >
+          {expanded ? "Скрыть" : "Показать полностью"}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -277,6 +436,7 @@ export default function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedSessionRef, setSelectedSessionRef] = useState<string | null>(null);
   const [selectedPreview, setSelectedPreview] = useState<SessionPreview | null>(null);
+  const [selectedLoadedSession, setSelectedLoadedSession] = useState<LoadedSession | null>(null);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [tailCursor, setTailCursor] = useState<TailCursor | null>(null);
@@ -294,6 +454,77 @@ export default function App() {
     resolvedHome?.sessions_dir ?? null,
     displayedSessionRef,
   );
+  const selectedIndexedSummary =
+    selectedPreview?.indexed_summary
+    ?? (displayedSessionId
+      ? catalogSessions.find((session) => session.session_id === displayedSessionId) ?? null
+      : null);
+  const sessionSource = parseSessionSource(selectedIndexedSummary?.source ?? null);
+  const providerModelValue = formatProviderModel(
+    selectedIndexedSummary?.model_provider,
+    selectedIndexedSummary?.model,
+  );
+  const threadSummaryValue =
+    selectedIndexedSummary?.thread_name
+    && !["title", "first_user_message"].includes(selectedIndexedSummary.thread_name_source ?? "")
+    && isCompactThreadSummary(selectedIndexedSummary.thread_name)
+      ? selectedIndexedSummary.thread_name
+      : null;
+  const sessionSummaryFields: SessionSummaryField[] = selectedIndexedSummary
+    ? [
+        threadSummaryValue ? { label: "Thread", value: threadSummaryValue } : null,
+        selectedIndexedSummary.created_at
+          ? { label: "Created", value: formatDateTime(selectedIndexedSummary.created_at) }
+          : null,
+        selectedIndexedSummary.updated_at
+          ? { label: "Updated", value: formatDateTime(selectedIndexedSummary.updated_at) }
+          : null,
+        providerModelValue
+          ? { label: "Model", value: providerModelValue }
+          : null,
+        selectedIndexedSummary.reasoning_effort
+          ? { label: "Effort", value: selectedIndexedSummary.reasoning_effort }
+          : null,
+        selectedIndexedSummary.approval_mode
+          ? { label: "Approval", value: selectedIndexedSummary.approval_mode }
+          : null,
+        selectedIndexedSummary.sandbox_policy_kind
+          ? { label: "Sandbox", value: selectedIndexedSummary.sandbox_policy_kind }
+          : null,
+        selectedIndexedSummary.memory_mode
+          ? { label: "Memory", value: selectedIndexedSummary.memory_mode }
+          : null,
+        selectedIndexedSummary.cli_version
+          ? { label: "CLI", value: selectedIndexedSummary.cli_version }
+          : null,
+        sessionSource.label
+          ? { label: "Source", value: sessionSource.label }
+          : null,
+        sessionSource.depth
+          ? { label: "Depth", value: sessionSource.depth }
+          : null,
+        selectedIndexedSummary.agent_name
+          ? { label: "Agent", value: selectedIndexedSummary.agent_name }
+          : null,
+        selectedIndexedSummary.agent_role
+          ? { label: "Role", value: selectedIndexedSummary.agent_role }
+          : null,
+        selectedIndexedSummary.tokens_used != null
+          ? { label: "Tokens", value: formatTokenCount(selectedIndexedSummary.tokens_used) }
+          : null,
+        selectedIndexedSummary.has_user_event
+          ? { label: "User event", value: formatBoolValue(selectedIndexedSummary.has_user_event) }
+          : null,
+        selectedIndexedSummary.archived
+          ? {
+              label: "Archived",
+              value: selectedIndexedSummary.archived_at
+                ? `yes · ${formatDateTime(selectedIndexedSummary.archived_at)}`
+                : "yes",
+            }
+          : null,
+      ].filter((field): field is SessionSummaryField => field != null)
+    : [];
 
   const applyPreview = useCallback((preview: SessionPreview) => {
     tailCursorRef.current = preview.tail_cursor;
@@ -309,6 +540,7 @@ export default function App() {
     setSelectedSessionId(null);
     setSelectedSessionRef(null);
     setSelectedPreview(null);
+    setSelectedLoadedSession(null);
     setTailCursor(null);
     setSessionError(null);
     setSessionBusy(false);
@@ -400,13 +632,17 @@ export default function App() {
       setSelectedSessionRef(normalizedSessionRef);
       setSessionBusy(true);
       setSessionError(null);
+      setSelectedLoadedSession(null);
       setLiveEvents([]);
       tailCursorRef.current = null;
       setTailCursor(null);
       setTailStatus("Загружаю preview выбранной сессии.");
 
       try {
-        const preview = await loadSessionPreview(normalizedSessionRef);
+        const [preview, loadedSession] = await Promise.all([
+          loadSessionPreview(normalizedSessionRef),
+          loadSession(normalizedSessionRef),
+        ]);
         if (
           selectedSessionRefRef.current !== normalizedSessionRef ||
           requestId !== sessionRequestIdRef.current
@@ -416,6 +652,7 @@ export default function App() {
 
         setSelectedSessionId(preview.session_id);
         applyPreview(preview);
+        setSelectedLoadedSession(loadedSession);
         setTailStatus(
           liveTailEnabled
             ? "Slim preview загружен. Live tail активен для выбранной сессии."
@@ -451,6 +688,7 @@ export default function App() {
       setSelectedSessionRef(null);
       setSessionBusy(true);
       setSessionError(null);
+      setSelectedLoadedSession(null);
       setLiveEvents([]);
       tailCursorRef.current = null;
       setTailCursor(null);
@@ -462,10 +700,16 @@ export default function App() {
           return;
         }
 
+        const loadedSession = await loadSession(preview.session_ref);
+        if (requestId !== sessionRequestIdRef.current) {
+          return;
+        }
+
         selectedSessionRefRef.current = preview.session_ref;
         setSelectedSessionId(preview.session_id);
         setSelectedSessionRef(preview.session_ref);
         applyPreview(preview);
+        setSelectedLoadedSession(loadedSession);
         setTailStatus(
           liveTailEnabled
             ? "Preview загружен по session_id. Live tail активен для найденного rollout."
@@ -945,13 +1189,8 @@ export default function App() {
 
                 <ScrollArea className="min-h-0 flex-1">
                   <div className="flex flex-col gap-2 pr-4">
-                    {selectedPreview ? (
-                      selectedPreview.recent_events.map((event) => (
-                        <PreviewEventCard
-                          event={event}
-                          key={`${event.seq}-${event.ts}-${event.event_type}`}
-                        />
-                      ))
+                    {selectedLoadedSession ? (
+                      <SessionEventList session={selectedLoadedSession} />
                     ) : (
                       <Alert>
                         <Target className="size-4" />
@@ -1000,30 +1239,92 @@ export default function App() {
                         <CardTitle className="text-sm">Session summary</CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <dl className="grid grid-cols-2 gap-3 text-sm">
-                          <div className="flex flex-col gap-1">
-                            <dt className="text-muted-foreground">Events</dt>
-                            <dd className="font-semibold">{selectedPreview?.event_count ?? 0}</dd>
-                          </div>
-                          <div className="flex flex-col gap-1">
-                            <dt className="text-muted-foreground">Live tail</dt>
-                            <dd className="font-semibold">
-                              {liveTailEnabled ? liveTailRows.length : "paused"}
-                            </dd>
-                          </div>
-                          <div className="flex flex-col gap-1">
-                            <dt className="text-muted-foreground">First ts</dt>
-                            <dd className="ui-selectable">
-                              {formatDateTime(selectedPreview?.first_ts ?? null)}
-                            </dd>
-                          </div>
-                          <div className="flex flex-col gap-1">
-                            <dt className="text-muted-foreground">Last ts</dt>
-                            <dd className="ui-selectable">
-                              {formatDateTime(selectedPreview?.last_ts ?? null)}
-                            </dd>
-                          </div>
-                        </dl>
+                        <div className="flex flex-col gap-4">
+                          <dl className="grid grid-cols-2 gap-3 text-sm">
+                            <SessionSummaryMetaItem
+                              label="Events"
+                              value={String(selectedPreview?.event_count ?? 0)}
+                            />
+                            <SessionSummaryMetaItem
+                              label="Live tail"
+                              value={liveTailEnabled ? String(liveTailRows.length) : "paused"}
+                            />
+                            <SessionSummaryMetaItem
+                              label="First ts"
+                              value={formatDateTime(selectedPreview?.first_ts ?? null)}
+                            />
+                            <SessionSummaryMetaItem
+                              label="Last ts"
+                              value={formatDateTime(selectedPreview?.last_ts ?? null)}
+                            />
+                          </dl>
+
+                          {selectedIndexedSummary ? (
+                            <>
+                              <Separator />
+                              {sessionSummaryFields.length > 0 ? (
+                                <dl className="grid gap-3 sm:grid-cols-2">
+                                  {sessionSummaryFields.map((field) => (
+                                    <SessionSummaryMetaItem
+                                      key={`${field.label}-${field.value}`}
+                                      label={field.label}
+                                      monospace={field.monospace}
+                                      value={field.value}
+                                    />
+                                  ))}
+                                </dl>
+                              ) : null}
+
+                              <div className="flex flex-col gap-3">
+                                {selectedIndexedSummary.cwd ? (
+                                  <SessionSummaryLongField
+                                    label="Cwd"
+                                    value={selectedIndexedSummary.cwd}
+                                  />
+                                ) : null}
+                                {selectedIndexedSummary.git_branch ? (
+                                  <SessionSummaryLongField
+                                    label="Branch"
+                                    monospace
+                                    value={selectedIndexedSummary.git_branch}
+                                  />
+                                ) : null}
+                                {selectedIndexedSummary.git_sha ? (
+                                  <SessionSummaryLongField
+                                    label="Commit"
+                                    monospace
+                                    value={selectedIndexedSummary.git_sha}
+                                  />
+                                ) : null}
+                                {sessionSource.parentThreadId ? (
+                                  <SessionSummaryLongField
+                                    label="Parent thread"
+                                    monospace
+                                    value={sessionSource.parentThreadId}
+                                  />
+                                ) : null}
+                                {selectedIndexedSummary.git_origin_url ? (
+                                  <SessionSummaryLongField
+                                    label="Git origin"
+                                    monospace
+                                    value={selectedIndexedSummary.git_origin_url}
+                                  />
+                                ) : null}
+                                {selectedIndexedSummary.agent_path ? (
+                                  <SessionSummaryLongField
+                                    label="Agent path"
+                                    monospace
+                                    value={selectedIndexedSummary.agent_path}
+                                  />
+                                ) : null}
+                              </div>
+                            </>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">
+                              Метаданные `threads` для выбранной сессии недоступны.
+                            </p>
+                          )}
+                        </div>
                       </CardContent>
                     </Card>
 

@@ -314,7 +314,10 @@ impl JsonOutputEventReader {
                                 .and_then(Value::as_i64)
                                 .map(|v| v as i32),
                             stderr: item.get("stderr").cloned(),
-                            output: item.get("aggregated_output").cloned(),
+                            output: item
+                                .get("aggregated_output")
+                                .cloned()
+                                .or_else(|| item.get("stdout").cloned()),
                             ..ToolResultPayload::default()
                         }),
                         "parsed".to_string(),

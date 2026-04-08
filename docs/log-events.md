@@ -15,12 +15,13 @@
 - `crates/codex-log/src/events/payloads.rs`
 - `crates/codex-log/src/session.rs`
 - `crates/codex-log/src/tree.rs`
+- `apps/codex-log-viewer-tauri-ui/src/components/session-event-list.tsx`
 - `src/runner.rs`
-- `src/bin/events_tree_html.rs`
 
-Совместимые re-export файлы в `src/events/*` и `src/bin/events_tree_shared.rs` сохранены только
-для плавной миграции существующего worker crate. Каноническая логика ingestion, session
-discovery, tail и tree/view-model теперь находится в `crates/codex-log`.
+Совместимые re-export файлы в `src/events/*` сохранены только для плавной миграции существующего
+worker crate. Каноническая логика ingestion, session discovery, tail и tree/view-model теперь
+находится в `crates/codex-log`, а UI-склейка парных operation-cards для `codex-log-viewer-tauri-ui`
+живёт отдельно во frontend-компоненте viewer.
 
 ## 1. Источники логов
 
@@ -217,7 +218,7 @@ discovery, tail и tree/view-model теперь находится в `crates/co
 | `agent_message` | `message.agent` | `item_id`, `text`, `text_links`, `thread_id` |
 | `reasoning` | `agent.reasoning` | `text`, `text_links`, `thread_id` |
 | `error` | `error` | `item_id`, `status`, `phase`, `message`, `error_type` |
-| `command_execution` | `shell.call` или `shell.result` | `tool_name=command_execution`, `tool_use_id`, `input.command`, `output`, `stderr`, `exit_code` |
+| `command_execution` | `shell.call` или `shell.result` | `tool_name=command_execution`, `tool_use_id`, `input.command`, `output`, `stderr`, `exit_code`; для root stdout reader `shell.result.output` берётся из `aggregated_output` с fallback на `stdout` |
 | `mcp_tool_call` | `mcp.call` или `mcp.result` | `tool_use_id`, `arguments`, `result`, `error`, `server`, `tool` |
 | `web_search` | `web.search` или `web.open` | `tool_name=web_search`, `query`, `action`; `open_page` уходит в `web.open` |
 | `todo_list` | `todo.update` | `items[]`, `completed_count`, `total_count`, `status`, `phase` |
@@ -432,11 +433,16 @@ Incremental tail для standalone rollout и live-import subagent sessions ра
 ## 8. Правила объединения после ingestion
 
 Дедупликация выше отвечает за содержимое `events.jsonl`. Ниже описано вторичное
-объединение уже нормализованных событий при построении дерева/HTML и для Tauri viewer.
+объединение уже нормализованных событий при построении дерева и при UI-рендере merged cards
+в `codex-log-viewer-tauri-ui`.
 
-Источник истины этого слоя теперь находится в `crates/codex-log/src/tree.rs`, а
-`src/bin/events_tree_html.rs` и `apps/codex-log-viewer` используют один и тот же library-level
-view-model.
+Источник истины этого слоя разделён на два уровня:
+
+- `crates/codex-log/src/tree.rs` строит базовое дерево событий и привязку child-thread к якорным
+  операциям;
+- `apps/codex-log-viewer-tauri-ui/src/components/session-event-list.tsx` поверх этого дерева
+  склеивает парные `started/completed` события в одну карточку и inline-раскрывает subagent
+  timeline в общую хронологическую ленту.
 
 ### 8.1. Склейка start/result одной операции
 
@@ -508,6 +514,7 @@ Barrier event:
 HTML renderer рендерит единые карточки для пар:
 
 - `shell.call` + `shell.result`
+- `patch.apply` started + completed
 - `collab.spawn_agent` started + completed
 - `user.input.request` started + completed
 - `collab.send_input` started + completed
@@ -525,12 +532,37 @@ HTML renderer рендерит единые карточки для пар:
 
 Из-за этого legacy-result может стать главным представлением, а обычный
 `response_item.function_call_output` без `duplicate_of` будет скрыт как redundant.
+Если у такого redundant `shell.result` уже есть дочерние follow-up события
+(`message.*`, `agent.reasoning`, `stderr.line`), сами дети поднимаются на уровень merged-card и
+не теряются.
 
 ### 8.5. Дополнительные merge-правила в HTML
 
+- `patch.apply`: header берётся из `started` события, а detail комбинируется из обеих частей. В итоговой карточке viewer по умолчанию показывает только список файлов; `phase/status` остаются только для нештатных случаев без списка изменений. Для diff `tauri-ui` в первую очередь использует `event_msg.patch_apply_end -> changes[path].unified_diff`; сырой `payload.input` start-события остаётся только fallback-источником, если per-file diff отсутствует. Colorized diff по умолчанию скрыт и раскрывается явным toggle. `patch.apply.duplicate` скрывается как redundant и не рендерится отдельной карточкой.
 - `spawn_agent`: данные call/result объединяются в одну meta-модель. Предпочтение у result для `model`, `reasoning_effort`, `receiver_*`, у call для `prompt` и `requested_agent_type`.
 - `user.input.request`: ответы из started/completed частей объединяются по `question.id`, одинаковые значения ответа дедуплицируются.
 - `collab` states: список состояний агентов после разворачивания из `agents_states` и `output` дополнительно дедуплицируется по полному равенству записи.
+
+### 8.6. Дополнительные projected fields для `patch.apply`
+
+Для `load_session` / event tree `EventEntry` теперь отдельно проецирует patch-specific поля,
+которые нужны `codex-log-viewer-tauri-ui` для detail-рендера `patch.apply` без парсинга сырого
+payload на стороне UI:
+
+- `patch_apply_status`: строка из `payload.status` для `patch.apply` / `patch.apply.duplicate`;
+- `patch_apply_input`: строка из `payload.input`, если patch start несёт сырой `*** Begin Patch`;
+- `patch_apply_changes`: нормализованный список изменений.
+
+Правила для `patch_apply_changes`:
+
+- если `payload.changes` является объектом вида `path -> {type|kind}`, он разворачивается в массив
+  записей `{ path, change_type, unified_diff, move_path }`;
+- если `payload.changes` уже массив объектов, берутся `path`, `type|kind`, `unified_diff`,
+  `move_path`;
+- `move_path` сохраняется только если это непустая строка; `null` не превращается в строку
+  `"null"`;
+- список сортируется по `path`;
+- для других `event_type` эти поля остаются пустыми.
 
 ## 9. Нюансы и ограничения
 

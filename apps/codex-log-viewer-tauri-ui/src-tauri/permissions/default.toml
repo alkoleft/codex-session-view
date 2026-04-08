@@ -4,6 +4,7 @@ permissions = [
   "allow-detect-codex-home",
   "allow-initialize-codex-home",
   "allow-list-indexed-sessions",
+  "allow-load-session",
   "allow-load-session-preview",
   "allow-load-session-preview-by-id",
   "allow-tail-session",

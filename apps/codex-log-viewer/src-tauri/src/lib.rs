@@ -20,6 +20,7 @@ pub fn slim_desktop_builder() -> tauri::Builder<tauri::Wry> {
         commands::list_indexed_sessions,
         commands::load_session_preview,
         commands::load_session_preview_by_id,
+        commands::load_session,
         commands::tail_session
     ])
 }
