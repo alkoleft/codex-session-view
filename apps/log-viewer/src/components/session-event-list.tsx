@@ -3,13 +3,9 @@ import {
   useContext,
   useEffect,
   useRef,
-  useState,
   type ReactNode,
 } from "react";
-import { Check, CircleAlert, CircleX } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import {
   agentSelectionThreadIdForEvent,
@@ -24,15 +20,21 @@ import {
   timelineItemsRenderSeq,
 } from "@/components/session-event-list-order";
 import {
+  GenericMergedEventCardView,
+  GenericSingleEventCardView,
+} from "@/components/session-event-list-generic-card";
+import { InfoTokensEventCardView } from "@/components/session-event-list-info-tokens-card";
+import {
   mergedPlanUpdateRenderData,
   planUpdateRenderData,
-  type PlanUpdateRenderData,
 } from "@/components/session-event-list-plan";
-import {
-  patchApplyStatus,
-  type PatchApplyStatusData,
-} from "@/components/session-event-list-patch";
+import { PlanUpdateEventCardView } from "@/components/session-event-list-plan-card";
+import { patchApplyStatus } from "@/components/session-event-list-patch";
+import { PatchApplyEventCardView } from "@/components/session-event-list-patch-card";
 import { preferredTerminalChildIndexFromSnapshot } from "@/components/session-event-list-selection";
+import { ShellEventCardView } from "@/components/session-event-list-shell-card";
+import { eventToneFromEventType } from "@/components/session-event-list-tone";
+import { UserInputRequestEventCardView } from "@/components/session-event-list-user-input-card";
 import type {
   EventEntry,
   EventNode,
@@ -40,12 +42,9 @@ import type {
   PatchApplyChangeEntry,
   ShellParsedCommandEntry,
   TimelineItem,
-  UserInputOptionEntry,
-  UserInputQuestionEntry,
   UserInputRequestEntry,
 } from "@/backend";
 
-const SURFACE_CARD_CLASS = "rounded-none border-0 bg-transparent shadow-none ring-0";
 const SHELL_CALL = "shell.call";
 const SHELL_RESULT = "shell.result";
 const COLLAB_SPAWN_AGENT = "collab.spawn_agent";
@@ -63,12 +62,6 @@ const TASK_STARTED = "task.started";
 const TASK_COMPLETED = "task.completed";
 const AGENT_META = "agent.meta";
 const RESPONSE_ITEM_FUNCTION_CALL_OUTPUT = "response_item.function_call_output";
-const TEXT_COLLAPSE_CHAR_LIMIT = 240;
-const TEXT_COLLAPSE_LINE_LIMIT = 4;
-const COMPACT_CARD_CONTENT_CLASS = "min-w-0 flex flex-col gap-1.5 p-3";
-const COMPACT_CARD_CONTENT_SPACED_CLASS = "min-w-0 flex flex-col gap-2 p-3";
-const COMPACT_EVENT_HEADER_CLASS =
-  "flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground";
 
 type CollabOperationStateEntry = {
   threadId: string | null;
@@ -401,7 +394,7 @@ function TimelineListItem({
   withDivider: boolean;
 }) {
   return (
-    <div className={cn(withDivider ? "border-t border-border/60 pt-1.5" : "")}>
+    <div className={cn(withDivider ? "border-t border-border/35 pt-1.5" : "")}>
       {children}
     </div>
   );
@@ -603,40 +596,40 @@ function taskModePalette(mode: string | null | undefined): TaskTimelinePalette {
     case "default":
       return {
         accent: "#2563eb",
-        surface: "rgba(37, 99, 235, 0.08)",
-        line: "rgba(37, 99, 235, 0.95)",
-        lineOpen: "rgba(37, 99, 235, 0.35)",
+        surface: "rgba(37, 99, 235, 0.05)",
+        line: "rgba(37, 99, 235, 0.48)",
+        lineOpen: "rgba(37, 99, 235, 0.18)",
       };
     case "plan":
     case "planning":
       return {
         accent: "#d97706",
-        surface: "rgba(217, 119, 6, 0.10)",
-        line: "rgba(217, 119, 6, 0.92)",
-        lineOpen: "rgba(217, 119, 6, 0.34)",
+        surface: "rgba(217, 119, 6, 0.06)",
+        line: "rgba(217, 119, 6, 0.5)",
+        lineOpen: "rgba(217, 119, 6, 0.18)",
       };
     case "review":
     case "reviewer":
       return {
         accent: "#be123c",
-        surface: "rgba(190, 18, 60, 0.10)",
-        line: "rgba(190, 18, 60, 0.92)",
-        lineOpen: "rgba(190, 18, 60, 0.34)",
+        surface: "rgba(190, 18, 60, 0.06)",
+        line: "rgba(190, 18, 60, 0.5)",
+        lineOpen: "rgba(190, 18, 60, 0.18)",
       };
     case "implementation":
     case "worker":
       return {
         accent: "#0f766e",
-        surface: "rgba(15, 118, 110, 0.10)",
-        line: "rgba(15, 118, 110, 0.92)",
-        lineOpen: "rgba(15, 118, 110, 0.34)",
+        surface: "rgba(15, 118, 110, 0.06)",
+        line: "rgba(15, 118, 110, 0.5)",
+        lineOpen: "rgba(15, 118, 110, 0.18)",
       };
     case "approval":
       return {
         accent: "#7c3aed",
-        surface: "rgba(124, 58, 237, 0.10)",
-        line: "rgba(124, 58, 237, 0.92)",
-        lineOpen: "rgba(124, 58, 237, 0.34)",
+        surface: "rgba(124, 58, 237, 0.06)",
+        line: "rgba(124, 58, 237, 0.5)",
+        lineOpen: "rgba(124, 58, 237, 0.18)",
       };
     default:
       return taskModeFallbackPalette(normalized);
@@ -647,39 +640,39 @@ function taskModeFallbackPalette(mode: string) {
   const palette: TaskTimelinePalette[] = [
     {
       accent: "#2563eb",
-      surface: "rgba(37, 99, 235, 0.08)",
-      line: "rgba(37, 99, 235, 0.95)",
-      lineOpen: "rgba(37, 99, 235, 0.35)",
+      surface: "rgba(37, 99, 235, 0.05)",
+      line: "rgba(37, 99, 235, 0.48)",
+      lineOpen: "rgba(37, 99, 235, 0.18)",
     },
     {
       accent: "#7c3aed",
-      surface: "rgba(124, 58, 237, 0.10)",
-      line: "rgba(124, 58, 237, 0.92)",
-      lineOpen: "rgba(124, 58, 237, 0.34)",
+      surface: "rgba(124, 58, 237, 0.06)",
+      line: "rgba(124, 58, 237, 0.5)",
+      lineOpen: "rgba(124, 58, 237, 0.18)",
     },
     {
       accent: "#0891b2",
-      surface: "rgba(8, 145, 178, 0.10)",
-      line: "rgba(8, 145, 178, 0.92)",
-      lineOpen: "rgba(8, 145, 178, 0.34)",
+      surface: "rgba(8, 145, 178, 0.06)",
+      line: "rgba(8, 145, 178, 0.5)",
+      lineOpen: "rgba(8, 145, 178, 0.18)",
     },
     {
       accent: "#d97706",
-      surface: "rgba(217, 119, 6, 0.10)",
-      line: "rgba(217, 119, 6, 0.92)",
-      lineOpen: "rgba(217, 119, 6, 0.34)",
+      surface: "rgba(217, 119, 6, 0.06)",
+      line: "rgba(217, 119, 6, 0.5)",
+      lineOpen: "rgba(217, 119, 6, 0.18)",
     },
     {
       accent: "#16a34a",
-      surface: "rgba(22, 163, 74, 0.10)",
-      line: "rgba(22, 163, 74, 0.92)",
-      lineOpen: "rgba(22, 163, 74, 0.34)",
+      surface: "rgba(22, 163, 74, 0.06)",
+      line: "rgba(22, 163, 74, 0.5)",
+      lineOpen: "rgba(22, 163, 74, 0.18)",
     },
     {
       accent: "#be123c",
-      surface: "rgba(190, 18, 60, 0.10)",
-      line: "rgba(190, 18, 60, 0.92)",
-      lineOpen: "rgba(190, 18, 60, 0.34)",
+      surface: "rgba(190, 18, 60, 0.06)",
+      line: "rgba(190, 18, 60, 0.5)",
+      lineOpen: "rgba(190, 18, 60, 0.18)",
     },
   ];
   const hash = Array.from(mode).reduce(
@@ -694,22 +687,66 @@ function EventCard({ event }: { event: EventEntry }) {
   const threadMetaById = useContext(TimelineThreadMetaContext);
 
   if (isStandaloneShellResult(event)) {
-    return <SingleShellEventCard event={event} />;
+    const subagentLabel = eventSubagentLabel(event, threadMetaById);
+    return (
+      <ShellEventCardView
+        command={event.shell_command}
+        detailData={shellDetailData(event, event)}
+        durationLabel={formatShellDurationNs(event.shell_duration_ns)}
+        eventLabel={event.event_type}
+        exitCode={event.shell_exit_code}
+        metaItems={singleShellMetaItems(event)}
+        output={event.aggregated_output}
+        outputSizeLabel={shellOutputSizeLabel(event.aggregated_output)}
+        seqLabel={`#${event.seq.toString().padStart(4, "0")}`}
+        subagentLabel={subagentLabel}
+        tone={eventToneFromEventType(event.event_type)}
+        timestampLabel={formatTime(event.ts)}
+      />
+    );
   }
 
   const infoTokens = infoTokensRenderData(event);
   if (infoTokens) {
-    return <InfoTokensEventCard data={infoTokens} event={event} />;
+    return (
+      <InfoTokensEventCardView
+        fallbackText={infoTokens.fallbackText}
+        pairs={infoTokens.pairs}
+        seqLabel={`#${event.seq}`}
+        subagentLabel={eventSubagentLabel(event, threadMetaById)}
+        timestampLabel={formatTime(event.ts)}
+      />
+    );
   }
 
   const patchApply = patchApplyRenderData(event);
   if (patchApply) {
-    return <SinglePatchApplyEventCard data={patchApply} event={event} />;
+    return (
+      <PatchApplyEventCardView
+        data={patchApply}
+        eventLabel={event.event_type}
+        seqLabel={`#${event.seq}`}
+        status={patchApplyStatus(patchApply.status, patchApply.phase)}
+        subagentLabel={eventSubagentLabel(event, threadMetaById)}
+        tone={eventToneFromEventType(event.event_type)}
+        timestampLabel={formatTime(event.ts)}
+      />
+    );
   }
 
   const planUpdate = planUpdateRenderData(event);
   if (planUpdate) {
-    return <PlanUpdateEventCard data={planUpdate} event={event} />;
+    return (
+      <PlanUpdateEventCardView
+        data={planUpdate}
+        eventLabel={event.event_type}
+        phaseLabel={singlePlanUpdatePhase(event)}
+        seqLabel={`#${event.seq}`}
+        subagentLabel={eventSubagentLabel(event, threadMetaById)}
+        tone={eventToneFromEventType(event.event_type)}
+        timestampLabel={formatTime(event.ts)}
+      />
+    );
   }
 
   if (
@@ -717,7 +754,17 @@ function EventCard({ event }: { event: EventEntry }) {
     && event.user_input_request
     && userInputRequestHasRenderableContent(event.user_input_request)
   ) {
-    return <UserInputRequestEventCard event={event} request={event.user_input_request} />;
+    return (
+      <UserInputRequestEventCardView
+        eventLabel={event.event_type}
+        metaItems={userInputRequestMetaItems(event.user_input_request)}
+        request={event.user_input_request}
+        seqLabel={`#${event.seq}`}
+        subagentLabel={eventSubagentLabel(event, threadMetaById)}
+        tone={eventToneFromEventType(event.event_type)}
+        timestampLabel={formatTime(event.ts)}
+      />
+    );
   }
 
   const summary = eventSummaryText(event);
@@ -735,122 +782,20 @@ function EventCard({ event }: { event: EventEntry }) {
   const terminalBadge = eventTerminalBadge(event);
 
   return (
-    <div className="relative">
-      {taskMarker ? <TaskLifecycleMarker marker={taskMarker} /> : null}
-      <Card
-        className={cn(
-          SURFACE_CARD_CLASS,
-          subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-        )}
-        size="sm"
-      >
-        <CardContent className={COMPACT_CARD_CONTENT_CLASS}>
-          <div className={COMPACT_EVENT_HEADER_CLASS}>
-            <span className="font-mono">#{event.seq}</span>
-            <time>{formatTime(event.ts)}</time>
-            <span className="font-mono">{eventLabel}</span>
-            {taskModeBadge ? <TaskModeBadge badge={taskModeBadge} /> : null}
-            {terminalBadge ? <TerminalEventBadge badge={terminalBadge} /> : null}
-            {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-          </div>
-          {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
-          {runtimeContext ? <RuntimeContextBlock data={runtimeContext} /> : null}
-          {summary ? <CardText text={summary} tone="default" /> : null}
-          {taskMessage ? <TaskCompletedMessageBlock text={taskMessage} /> : null}
-          {!taskMessage && detail ? <CardText text={detail} tone="muted" /> : null}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function SinglePatchApplyEventCard({
-  event,
-  data,
-}: {
-  event: EventEntry;
-  data: PatchApplyRenderData;
-}) {
-  const threadMetaById = useContext(TimelineThreadMetaContext);
-  const subagentLabel = eventSubagentLabel(event, threadMetaById);
-  const status = patchApplyStatus(data.status, data.phase);
-
-  return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
-    >
-      <CardContent className={COMPACT_CARD_CONTENT_CLASS}>
-        <PatchApplyEventHeader
-          eventLabel={event.event_type}
-          seqLabel={`#${event.seq}`}
-          status={status}
-          subagentLabel={subagentLabel}
-          timestampLabel={formatTime(event.ts)}
-        />
-        <PatchApplyBlock data={data} />
-      </CardContent>
-    </Card>
-  );
-}
-
-function TaskCompletedMessageBlock({ text }: { text: string }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-        Last Agent Message
-      </div>
-      <CardText text={text} tone="default" />
-    </div>
-  );
-}
-
-function TaskModeBadge({
-  badge,
-}: {
-  badge: { label: string; palette: TaskTimelinePalette };
-}) {
-  return (
-    <span
-      className="inline-flex items-center rounded-sm px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em]"
-      style={{
-        color: badge.palette.accent,
-        backgroundColor: badge.palette.surface,
-      }}
-    >
-      {badge.label}
-    </span>
-  );
-}
-
-function TerminalEventBadge({
-  badge,
-}: {
-  badge: { className: string; label: string };
-}) {
-  return (
-    <span className={badge.className}>
-      {badge.label}
-    </span>
-  );
-}
-
-function TaskLifecycleMarker({
-  marker,
-}: {
-  marker: { accent: string; completed: boolean };
-}) {
-  return (
-    <span
-      aria-hidden="true"
-      className="absolute -left-4 top-4 z-10 size-2.5 rounded-full border-2"
-      style={{
-        borderColor: marker.accent,
-        backgroundColor: marker.completed ? "var(--background)" : marker.accent,
-      }}
+    <GenericSingleEventCardView
+      detail={detail}
+      eventLabel={eventLabel}
+      metaItems={metaItems}
+      runtimeContext={runtimeContext}
+      seqLabel={`#${event.seq}`}
+      subagentLabel={subagentLabel}
+      summary={summary}
+      taskMarker={taskMarker}
+      taskMessage={taskMessage}
+      taskModeBadge={taskModeBadge}
+      terminalBadge={terminalBadge}
+      tone={eventToneFromEventType(event.event_type)}
+      timestampLabel={formatTime(event.ts)}
     />
   );
 }
@@ -863,24 +808,106 @@ function MergedEventCard({
   const threadMetaById = useContext(TimelineThreadMetaContext);
 
   if (card.kind === "shell") {
-    return <MergedShellEventCard card={card} />;
+    return (
+      <ShellEventCardView
+        command={card.call.shell_command ?? card.result.shell_command}
+        detailData={shellDetailData(card.call, card.result)}
+        durationLabel={formatShellDurationNs(
+          card.result.shell_duration_ns ?? card.call.shell_duration_ns,
+        )}
+        eventLabel={`${card.call.event_type}, ${card.result.event_type}`}
+        exitCode={card.result.shell_exit_code}
+        metaItems={mergedShellMetaItems(card.call, card.result)}
+        output={card.result.aggregated_output}
+        outputSizeLabel={shellOutputSizeLabel(card.result.aggregated_output)}
+        seqLabel={`#${card.call.seq.toString().padStart(4, "0")}, #${card.result.seq
+          .toString()
+          .padStart(4, "0")}`}
+        subagentLabel={
+          eventSubagentLabel(card.call, threadMetaById)
+          ?? eventSubagentLabel(card.result, threadMetaById)
+        }
+        tone={eventToneFromEventType(card.call.event_type)}
+        timestampLabel={
+          card.call.ts === card.result.ts
+            ? formatTime(card.call.ts)
+            : `${formatTime(card.call.ts)} -> ${formatTime(card.result.ts)}`
+        }
+      />
+    );
   }
 
   if (card.kind === "patch-apply") {
-    return <MergedPatchApplyEventCard card={card} />;
+    const subagentLabel =
+      eventSubagentLabel(card.call, threadMetaById)
+      ?? eventSubagentLabel(card.result, threadMetaById);
+    const patchApply = mergedPatchApplyRenderData(card.call, card.result);
+    return (
+      <PatchApplyEventCardView
+        data={patchApply}
+        eventLabel={card.call.event_type}
+        seqLabel={`#${card.call.seq}`}
+        status={patchApplyStatus(patchApply.status, patchApply.phase)}
+        subagentLabel={subagentLabel}
+        tone={eventToneFromEventType(card.call.event_type)}
+        timestampLabel={formatTime(card.call.ts)}
+      />
+    );
   }
 
   if (card.kind === "plan-update") {
     const data = mergedPlanUpdateRenderData(card.call, card.result);
     if (data) {
-      return <MergedPlanUpdateEventCard card={card} data={data} />;
+      return (
+        <PlanUpdateEventCardView
+          data={data}
+          eventLabel={
+            card.call.event_type === card.result.event_type
+              ? card.call.event_type
+              : `${card.call.event_type}/${card.result.event_type}`
+          }
+          phaseLabel={mergedPlanUpdatePhase(card.call, card.result)}
+          seqLabel={`#${card.call.seq}, #${card.result.seq}`}
+          subagentLabel={
+            eventSubagentLabel(card.call, threadMetaById)
+            ?? eventSubagentLabel(card.result, threadMetaById)
+          }
+          tone={eventToneFromEventType(card.call.event_type)}
+          timestampLabel={
+            card.call.ts === card.result.ts
+              ? formatTime(card.call.ts)
+              : `${formatTime(card.call.ts)} -> ${formatTime(card.result.ts)}`
+          }
+        />
+      );
     }
   }
 
   if (card.kind === "user-input") {
     const request = mergedUserInputRequestEntry(card.call, card.result);
     if (request && userInputRequestHasRenderableContent(request)) {
-      return <MergedUserInputRequestEventCard card={card} request={request} />;
+      return (
+        <UserInputRequestEventCardView
+          eventLabel={
+            card.call.event_type === card.result.event_type
+              ? card.call.event_type
+              : `${card.call.event_type}/${card.result.event_type}`
+          }
+          metaItems={userInputRequestMetaItems(request)}
+          request={request}
+          seqLabel={`#${card.call.seq}, #${card.result.seq}`}
+          subagentLabel={
+            eventSubagentLabel(card.call, threadMetaById)
+            ?? eventSubagentLabel(card.result, threadMetaById)
+          }
+          tone={eventToneFromEventType(card.call.event_type)}
+          timestampLabel={
+            card.call.ts === card.result.ts
+              ? formatTime(card.call.ts)
+              : `${formatTime(card.call.ts)} -> ${formatTime(card.result.ts)}`
+          }
+        />
+      );
     }
   }
 
@@ -897,1056 +924,16 @@ function MergedEventCard({
       : `${formatTime(card.call.ts)} -> ${formatTime(card.result.ts)}`;
 
   return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
-    >
-      <CardContent className={COMPACT_CARD_CONTENT_CLASS}>
-        <div className={COMPACT_EVENT_HEADER_CLASS}>
-          <span className="font-mono">
-            #{card.call.seq}, #{card.result.seq}
-          </span>
-          <time>{timeLabel}</time>
-          <span className="font-mono">{eventLabel}</span>
-          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-        </div>
-        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
-        {summary ? <CardText text={summary} tone="default" /> : null}
-        {detail ? <CardText text={detail} tone="muted" /> : null}
-      </CardContent>
-    </Card>
-  );
-}
-
-function MergedPatchApplyEventCard({
-  card,
-}: {
-  card: PatchApplyMergedCard;
-}) {
-  const threadMetaById = useContext(TimelineThreadMetaContext);
-  const subagentLabel =
-    eventSubagentLabel(card.call, threadMetaById)
-    ?? eventSubagentLabel(card.result, threadMetaById);
-  const patchApply = mergedPatchApplyRenderData(card.call, card.result);
-  const status = patchApplyStatus(patchApply.status, patchApply.phase);
-
-  return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
-    >
-      <CardContent className={COMPACT_CARD_CONTENT_CLASS}>
-        <PatchApplyEventHeader
-          eventLabel={card.call.event_type}
-          seqLabel={`#${card.call.seq}`}
-          status={status}
-          subagentLabel={subagentLabel}
-          timestampLabel={formatTime(card.call.ts)}
-        />
-        <PatchApplyBlock data={patchApply} />
-      </CardContent>
-    </Card>
-  );
-}
-
-function SingleShellEventCard({ event }: { event: EventEntry }) {
-  const threadMetaById = useContext(TimelineThreadMetaContext);
-  const subagentLabel = eventSubagentLabel(event, threadMetaById);
-  const metaItems = singleShellMetaItems(event);
-  const outputSizeLabel = shellOutputSizeLabel(event.aggregated_output);
-  const durationLabel = formatShellDurationNs(event.shell_duration_ns);
-  const detailData = shellDetailData(event, event);
-
-  return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
-    >
-      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
-        <ShellEventHeader
-          durationLabel={durationLabel}
-          eventLabel={event.event_type}
-          exitCode={event.shell_exit_code}
-          outputSizeLabel={outputSizeLabel}
-          seqLabel={`#${event.seq.toString().padStart(4, "0")}`}
-          subagentLabel={subagentLabel}
-          timestampLabel={formatTime(event.ts)}
-        />
-        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
-        <ShellBlock
-          command={event.shell_command}
-          detailData={detailData}
-          output={event.aggregated_output}
-        />
-      </CardContent>
-    </Card>
-  );
-}
-
-function MergedShellEventCard({
-  card,
-}: {
-  card: ShellMergedCard;
-}) {
-  const threadMetaById = useContext(TimelineThreadMetaContext);
-  const subagentLabel =
-    eventSubagentLabel(card.call, threadMetaById)
-    ?? eventSubagentLabel(card.result, threadMetaById);
-  const metaItems = mergedShellMetaItems(card.call, card.result);
-  const outputSizeLabel = shellOutputSizeLabel(card.result.aggregated_output);
-  const durationLabel = formatShellDurationNs(
-    card.result.shell_duration_ns ?? card.call.shell_duration_ns,
-  );
-  const detailData = shellDetailData(card.call, card.result);
-  const timestampLabel =
-    card.call.ts === card.result.ts
-      ? formatTime(card.call.ts)
-      : `${formatTime(card.call.ts)} -> ${formatTime(card.result.ts)}`;
-
-  return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
-    >
-      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
-        <ShellEventHeader
-          durationLabel={durationLabel}
-          eventLabel={`${card.call.event_type}, ${card.result.event_type}`}
-          exitCode={card.result.shell_exit_code}
-          outputSizeLabel={outputSizeLabel}
-          seqLabel={`#${card.call.seq.toString().padStart(4, "0")}, #${card.result.seq
-            .toString()
-            .padStart(4, "0")}`}
-          subagentLabel={subagentLabel}
-          timestampLabel={timestampLabel}
-        />
-        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
-        <ShellBlock
-          command={card.call.shell_command ?? card.result.shell_command}
-          detailData={detailData}
-          output={card.result.aggregated_output}
-        />
-      </CardContent>
-    </Card>
-  );
-}
-
-function ShellEventHeader({
-  durationLabel,
-  seqLabel,
-  timestampLabel,
-  eventLabel,
-  subagentLabel,
-  exitCode,
-  outputSizeLabel,
-}: {
-  durationLabel: string | null;
-  seqLabel: string;
-  timestampLabel: string;
-  eventLabel: string;
-  subagentLabel: string | null;
-  exitCode: number | null;
-  outputSizeLabel: string | null;
-}) {
-  const status = shellStatus(exitCode);
-  const statusText = shellStatusDetailText(exitCode);
-
-  return (
-    <div className="grid min-w-0 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-2.5 text-[11px] text-muted-foreground">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span className="font-mono">{seqLabel}</span>
-        <time>{timestampLabel}</time>
-        <span className="font-mono">{eventLabel}</span>
-        {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-      </div>
-      <div className="flex shrink-0 items-center justify-self-end gap-2">
-        {statusText ? (
-          <span
-            className={cn(
-              "whitespace-nowrap font-medium",
-              status.variant === "failure"
-                ? "text-rose-700 dark:text-rose-300"
-                : "text-amber-700 dark:text-amber-300",
-            )}
-          >
-            {statusText}
-          </span>
-        ) : null}
-        {durationLabel ? <span className="whitespace-nowrap">{durationLabel}</span> : null}
-        {outputSizeLabel ? <span className="whitespace-nowrap">{outputSizeLabel}</span> : null}
-        <span
-          className={cn(
-            "inline-flex items-center",
-            status.variant === "success"
-              ? "text-emerald-700 dark:text-emerald-300"
-              : status.variant === "failure"
-                ? "text-rose-700 dark:text-rose-300"
-                : "text-amber-700 dark:text-amber-300",
-          )}
-          aria-label={status.ariaLabel}
-          title={status.ariaLabel}
-        >
-          <status.Icon aria-hidden="true" className="size-3.5 shrink-0" />
-          <span className="sr-only">{status.ariaLabel}</span>
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function EventMetaRow({
-  items,
-}: {
-  items: Array<{ label: string; value: string }>;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-      {items.map((item) => (
-        <span className="inline-flex items-center gap-1" key={`${item.label}-${item.value}`}>
-          <span>{item.label}</span>
-          <span className="ui-selectable font-semibold text-foreground">{item.value}</span>
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function PatchApplyEventHeader({
-  seqLabel,
-  timestampLabel,
-  eventLabel,
-  subagentLabel,
-  status,
-}: {
-  seqLabel: string;
-  timestampLabel: string;
-  eventLabel: string;
-  subagentLabel: string | null;
-  status: PatchApplyStatusData;
-}) {
-  const Icon =
-    status.variant === "success"
-      ? Check
-      : status.variant === "failure"
-        ? CircleX
-        : CircleAlert;
-
-  return (
-    <div className="grid min-w-0 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-2.5 text-[11px] text-muted-foreground">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span className="font-mono">{seqLabel}</span>
-        <time>{timestampLabel}</time>
-        <span className="font-mono">{eventLabel}</span>
-        {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-      </div>
-      <div className="flex shrink-0 items-center justify-self-end gap-2">
-        {status.detailText ? (
-          <span
-            className={cn(
-              "whitespace-nowrap font-medium",
-              status.variant === "success"
-                ? "text-emerald-700 dark:text-emerald-300"
-                : status.variant === "failure"
-                  ? "text-rose-700 dark:text-rose-300"
-                  : "text-amber-700 dark:text-amber-300",
-            )}
-          >
-            {status.detailText}
-          </span>
-        ) : null}
-        <span
-          className={cn(
-            "inline-flex items-center",
-            status.variant === "success"
-              ? "text-emerald-700 dark:text-emerald-300"
-              : status.variant === "failure"
-                ? "text-rose-700 dark:text-rose-300"
-                : "text-amber-700 dark:text-amber-300",
-          )}
-          aria-label={status.ariaLabel}
-          title={status.ariaLabel}
-        >
-          <Icon aria-hidden="true" className="size-3.5 shrink-0" />
-          <span className="sr-only">{status.ariaLabel}</span>
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function InfoTokensEventCard({
-  event,
-  data,
-}: {
-  event: EventEntry;
-  data: {
-    pairs: Array<{ label: string; value: string }>;
-    fallbackText: string | null;
-  };
-}) {
-  const threadMetaById = useContext(TimelineThreadMetaContext);
-  const subagentLabel = eventSubagentLabel(event, threadMetaById);
-
-  return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
-    >
-      <CardContent className="min-w-0 p-3">
-        <div className="grid min-w-0 w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-3">
-          <div className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[11px] text-muted-foreground">
-            <span className="font-mono">#{event.seq}</span>
-            <time>{formatTime(event.ts)}</time>
-            {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-          </div>
-          <InfoTokensBlock fallbackText={data.fallbackText} pairs={data.pairs} />
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function InfoTokensBlock({
-  pairs,
-  fallbackText,
-}: {
-  pairs: Array<{ label: string; value: string }>;
-  fallbackText: string | null;
-}) {
-  if (pairs.length > 0) {
-    return (
-      <div className="min-w-0 overflow-x-auto">
-        <div className="flex min-w-max flex-nowrap items-center justify-end gap-3 text-right">
-          {pairs.map((pair) => (
-            <div
-              className="inline-flex shrink-0 items-baseline gap-1.5 whitespace-nowrap"
-              key={`${pair.label}-${pair.value}`}
-            >
-              <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                {pair.label}
-              </span>
-              <span className="ui-selectable font-mono text-xs text-foreground">
-                {pair.value}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (fallbackText) {
-    return (
-      <div className="min-w-0 overflow-x-auto">
-        <div className="ui-selectable min-w-max whitespace-nowrap text-right text-xs text-muted-foreground">
-          {fallbackText}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div />
-  );
-}
-
-function PlanUpdateEventCard({
-  event,
-  data,
-}: {
-  event: EventEntry;
-  data: PlanUpdateRenderData;
-}) {
-  const threadMetaById = useContext(TimelineThreadMetaContext);
-  const subagentLabel = eventSubagentLabel(event, threadMetaById);
-  const metaItems = singlePlanUpdateMetaItems(event, data);
-
-  return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
-    >
-      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
-        <div className={COMPACT_EVENT_HEADER_CLASS}>
-          <span className="font-mono">#{event.seq}</span>
-          <time>{formatTime(event.ts)}</time>
-          <span className="font-mono">{event.event_type}</span>
-          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-        </div>
-        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
-        <PlanUpdateBlock data={data} />
-      </CardContent>
-    </Card>
-  );
-}
-
-function MergedPlanUpdateEventCard({
-  card,
-  data,
-}: {
-  card: PlanUpdateMergedCard;
-  data: PlanUpdateRenderData;
-}) {
-  const threadMetaById = useContext(TimelineThreadMetaContext);
-  const subagentLabel =
-    eventSubagentLabel(card.call, threadMetaById)
-    ?? eventSubagentLabel(card.result, threadMetaById);
-  const metaItems = mergedPlanUpdateMetaItems(card.call, card.result, data);
-  const eventLabel =
-    card.call.event_type === card.result.event_type
-      ? card.call.event_type
-      : `${card.call.event_type}/${card.result.event_type}`;
-  const timeLabel =
-    card.call.ts === card.result.ts
-      ? formatTime(card.call.ts)
-      : `${formatTime(card.call.ts)} -> ${formatTime(card.result.ts)}`;
-
-  return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
-    >
-      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
-        <div className={COMPACT_EVENT_HEADER_CLASS}>
-          <span className="font-mono">
-            #{card.call.seq}, #{card.result.seq}
-          </span>
-          <time>{timeLabel}</time>
-          <span className="font-mono">{eventLabel}</span>
-          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-        </div>
-        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
-        <PlanUpdateBlock data={data} />
-      </CardContent>
-    </Card>
-  );
-}
-
-function PlanUpdateBlock({ data }: { data: PlanUpdateRenderData }) {
-  return (
-    <div className="flex flex-col gap-3">
-      {data.explanation ? (
-        <div className="flex flex-col gap-1">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            explanation
-          </div>
-          <CardText text={data.explanation} tone="default" />
-        </div>
-      ) : null}
-      {data.steps.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            steps
-          </div>
-          <div className="flex flex-col gap-2">
-            {data.steps.map((step, index) => (
-              <div
-                className="grid gap-2 rounded-xl border border-border/60 bg-muted/10 px-3 py-2 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-start sm:gap-3"
-                key={`${index + 1}-${step.step}-${step.status ?? ""}`}
-              >
-                <div className="font-mono text-[11px] text-muted-foreground">
-                  {(index + 1).toString().padStart(2, "0")}
-                </div>
-                <div className="ui-selectable whitespace-pre-wrap break-words text-sm text-foreground">
-                  {step.step}
-                </div>
-                {step.status ? <PlanStepStatusBadge status={step.status} /> : null}
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function PlanStepStatusBadge({ status }: { status: string }) {
-  return (
-    <span className={planStepStatusClassName(status)}>
-      {status.replaceAll("_", " ")}
-    </span>
-  );
-}
-
-function planStepStatusClassName(status: string) {
-  switch (status.trim()) {
-    case "completed":
-      return "inline-flex items-center rounded-full border border-emerald-500/35 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700 dark:text-emerald-300";
-    case "in_progress":
-      return "inline-flex items-center rounded-full border border-sky-500/35 bg-sky-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-sky-700 dark:text-sky-300";
-    case "pending":
-      return "inline-flex items-center rounded-full border border-amber-500/35 bg-amber-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-700 dark:text-amber-300";
-    default:
-      return "inline-flex items-center rounded-full border border-border/60 bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground";
-  }
-}
-
-function UserInputRequestEventCard({
-  event,
-  request,
-}: {
-  event: EventEntry;
-  request: UserInputRequestEntry;
-}) {
-  const threadMetaById = useContext(TimelineThreadMetaContext);
-  const subagentLabel = eventSubagentLabel(event, threadMetaById);
-  const metaItems = userInputRequestMetaItems(request);
-
-  return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
-    >
-      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
-        <div className={COMPACT_EVENT_HEADER_CLASS}>
-          <span className="font-mono">#{event.seq}</span>
-          <time>{formatTime(event.ts)}</time>
-          <span className="font-mono">{event.event_type}</span>
-          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-        </div>
-        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
-        <UserInputRequestBlock request={request} />
-      </CardContent>
-    </Card>
-  );
-}
-
-function MergedUserInputRequestEventCard({
-  card,
-  request,
-}: {
-  card: UserInputMergedCard;
-  request: UserInputRequestEntry;
-}) {
-  const threadMetaById = useContext(TimelineThreadMetaContext);
-  const subagentLabel =
-    eventSubagentLabel(card.call, threadMetaById)
-    ?? eventSubagentLabel(card.result, threadMetaById);
-  const metaItems = userInputRequestMetaItems(request);
-  const eventLabel =
-    card.call.event_type === card.result.event_type
-      ? card.call.event_type
-      : `${card.call.event_type}/${card.result.event_type}`;
-  const timeLabel =
-    card.call.ts === card.result.ts
-      ? formatTime(card.call.ts)
-      : `${formatTime(card.call.ts)} -> ${formatTime(card.result.ts)}`;
-
-  return (
-    <Card
-      className={cn(
-        SURFACE_CARD_CLASS,
-        subagentLabel ? "border-l-4 border-l-[color:var(--accent-strong)]" : "",
-      )}
-      size="sm"
-    >
-      <CardContent className={COMPACT_CARD_CONTENT_SPACED_CLASS}>
-        <div className={COMPACT_EVENT_HEADER_CLASS}>
-          <span className="font-mono">
-            #{card.call.seq}, #{card.result.seq}
-          </span>
-          <time>{timeLabel}</time>
-          <span className="font-mono">{eventLabel}</span>
-          {subagentLabel ? <Badge variant="outline">{subagentLabel}</Badge> : null}
-        </div>
-        {metaItems.length > 0 ? <EventMetaRow items={metaItems} /> : null}
-        <UserInputRequestBlock request={request} />
-      </CardContent>
-    </Card>
-  );
-}
-
-function UserInputRequestBlock({ request }: { request: UserInputRequestEntry }) {
-  const extraAnswers = request.extra_answers.filter(
-    (answer) => answer.id.trim() && userInputAnswerValues(answer.answers).length > 0,
-  );
-
-  return (
-    <div className="flex flex-col gap-3">
-      {request.questions.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            questions
-          </div>
-          <div className="flex flex-col gap-3">
-            {request.questions.map((question, index) => (
-              <UserInputQuestionBlock
-                key={question.id ?? `${question.header ?? "question"}-${index}`}
-                question={question}
-              />
-            ))}
-          </div>
-        </div>
-      ) : null}
-      {extraAnswers.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            answers
-          </div>
-          <div className="grid gap-2">
-            {extraAnswers.map((answer) => (
-              <div
-                className="grid gap-1 rounded-xl border border-border/60 bg-muted/10 px-3 py-2 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)] sm:items-start sm:gap-3"
-                key={`${answer.id}-${answer.answers.join("|")}`}
-              >
-                <code className="ui-selectable whitespace-pre-wrap break-words text-[11px] text-muted-foreground">
-                  {answer.id}
-                </code>
-                <UserInputAnswerChips answers={answer.answers} selected={false} />
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function UserInputQuestionBlock({ question }: { question: UserInputQuestionEntry }) {
-  const unmatchedAnswers = userInputAnswerValues(question.answers).filter(
-    (answer) =>
-      !question.options.some((option) => option.label.trim() === answer.trim()),
-  );
-
-  return (
-    <div className="flex flex-col gap-3 rounded-2xl border border-border/60 bg-muted/10 p-3">
-      <div className="flex flex-wrap items-start gap-3">
-        <div className="min-w-0 flex-1">
-          {question.question?.trim() ? <CardText text={question.question.trim()} tone="default" /> : null}
-        </div>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
-          {question.header?.trim() ? (
-            <span className="inline-flex items-center rounded-full border border-border/60 bg-background/60 px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-              {question.header.trim()}
-            </span>
-          ) : null}
-          {question.id?.trim() ? (
-            <span className="inline-flex items-center rounded-full border border-border/60 bg-background/60 px-2 py-0.5 text-[10px] text-muted-foreground">
-              <code className="ui-selectable">{question.id.trim()}</code>
-            </span>
-          ) : null}
-        </div>
-      </div>
-      {question.options.length > 0 ? (
-        <div className="flex flex-col gap-2">
-          {question.options.map((option, index) => {
-            const isSelected = question.answers.some(
-              (answer) => answer.trim() === option.label.trim(),
-            );
-            return (
-              <UserInputOptionBlock
-                isSelected={isSelected}
-                key={`${option.label}-${index}`}
-                option={option}
-              />
-            );
-          })}
-        </div>
-      ) : null}
-      {unmatchedAnswers.length > 0 ? (
-        <div className="flex flex-col gap-1">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            answers
-          </div>
-          <UserInputAnswerChips answers={unmatchedAnswers} selected />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function UserInputOptionBlock({
-  option,
-  isSelected,
-}: {
-  option: UserInputOptionEntry;
-  isSelected: boolean;
-}) {
-  return (
-    <div
-      className={cn(
-        "flex flex-col gap-2 rounded-xl border px-3 py-2",
-        isSelected
-          ? "border-emerald-500/40 bg-emerald-500/10"
-          : "border-border/60 bg-background/40",
-      )}
-    >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="ui-selectable whitespace-pre-wrap break-words text-sm font-medium text-foreground">
-          {option.label}
-        </div>
-        {isSelected ? (
-          <span className="inline-flex items-center rounded-full border border-emerald-500/35 bg-emerald-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700 dark:text-emerald-300">
-            selected
-          </span>
-        ) : null}
-      </div>
-      {option.description?.trim() ? <CardText text={option.description.trim()} tone="muted" /> : null}
-    </div>
-  );
-}
-
-function UserInputAnswerChips({
-  answers,
-  selected,
-}: {
-  answers: string[];
-  selected: boolean;
-}) {
-  const values = userInputAnswerValues(answers);
-  if (values.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className="flex flex-wrap gap-1.5">
-      {values.map((answer, index) => (
-        <span
-          className={cn(
-            "ui-selectable inline-flex items-center rounded-full border px-2 py-0.5 text-xs",
-            selected
-              ? "border-emerald-500/35 bg-emerald-500/12 text-emerald-700 dark:text-emerald-300"
-              : "border-border/60 bg-background/60 text-muted-foreground",
-          )}
-          key={`${index}-${answer}`}
-        >
-          {answer}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function ShellBlock({
-  command,
-  detailData,
-  output,
-}: {
-  command: string | null;
-  detailData: {
-    parsedHeaders: Array<{ kind: string; typeLabel: string; present: string | null }>;
-    items: Array<{ label: string; value: string }>;
-  };
-  output: string | null;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const hasOutput = Boolean(output?.trim());
-  const hasDetails = detailData.items.length > 0;
-  const hasExpandable = hasOutput || hasDetails;
-  const hasParsedHeaders = detailData.parsedHeaders.length > 0;
-  const showCommandInline = !hasExpandable || !hasParsedHeaders;
-  const showCommandInExpandedBlock = Boolean(command?.trim()) && hasExpandable && hasParsedHeaders;
-  const toggleLabel = shellExpandToggleLabel(expanded, hasDetails, hasOutput);
-
-  return (
-    <div className="min-w-0 w-full flex flex-col gap-2">
-      <div className="grid min-w-0 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
-        <div className="min-w-0 flex flex-1 flex-col gap-1">
-          {detailData.parsedHeaders.length > 0 ? (
-            <div className="flex min-w-0 flex-col gap-1">
-              {detailData.parsedHeaders.map((header, index) => (
-                <code
-                  className="ui-selectable block max-w-full whitespace-pre-wrap break-words text-sm font-medium text-foreground"
-                  key={`${header.kind}-${header.typeLabel}-${header.present ?? ""}-${index}`}
-                >
-                  <span className={shellParsedCommandPalette(header.kind)}>
-                    {header.typeLabel}
-                  </span>
-                  {header.present ? ` ${header.present}` : ""}
-                </code>
-              ))}
-            </div>
-          ) : null}
-          {showCommandInline && command ? (
-            <code className="ui-selectable block max-w-full whitespace-pre-wrap break-words text-sm font-medium text-foreground">
-              {`$ ${command}`}
-            </code>
-          ) : null}
-          {showCommandInline && !command ? (
-            <span className="text-sm text-muted-foreground">command unavailable</span>
-          ) : null}
-        </div>
-        {toggleLabel ? (
-          <button
-            className="inline-flex shrink-0 items-center justify-self-end text-xs font-medium text-[color:var(--accent-strong)] transition-opacity hover:opacity-80"
-            onClick={() => setExpanded((current) => !current)}
-            type="button"
-          >
-            {toggleLabel}
-          </button>
-        ) : null}
-      </div>
-      {expanded && hasExpandable ? (
-        <div className="grid gap-2 border-l border-border/60 pl-3">
-          {showCommandInExpandedBlock ? (
-            <code className="ui-selectable block whitespace-pre-wrap break-words text-sm font-medium text-foreground">
-              {`$ ${command}`}
-            </code>
-          ) : null}
-          {detailData.items.map((item) => (
-            <div
-              className="grid gap-1 sm:grid-cols-[minmax(0,132px)_minmax(0,1fr)] sm:items-start sm:gap-3"
-              key={`${item.label}-${item.value}`}
-            >
-              <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                {item.label}
-              </div>
-              <div className="ui-selectable whitespace-pre-wrap break-words text-xs text-foreground">
-                {item.value}
-              </div>
-            </div>
-          ))}
-          {hasOutput ? (
-            <code className="ui-selectable block whitespace-pre-wrap break-words text-xs text-foreground">
-              {output}
-            </code>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function shellExpandToggleLabel(
-  expanded: boolean,
-  hasDetails: boolean,
-  hasOutput: boolean,
-) {
-  if (!hasDetails && !hasOutput) {
-    return null;
-  }
-
-  if (hasDetails && hasOutput) {
-    return expanded ? "Скрыть детали и вывод" : "Показать детали и вывод";
-  }
-  if (hasDetails) {
-    return expanded ? "Скрыть детали" : "Показать детали";
-  }
-  return expanded ? "Скрыть вывод" : "Показать вывод";
-}
-
-function shellParsedCommandPalette(kind: string) {
-  switch (kind.toLowerCase()) {
-    case "read":
-      return "text-sky-700 dark:text-sky-300";
-    case "search":
-      return "text-amber-700 dark:text-amber-300";
-    case "list_files":
-      return "text-emerald-700 dark:text-emerald-300";
-    case "write":
-      return "text-rose-700 dark:text-rose-300";
-    default:
-      return "text-cyan-700 dark:text-cyan-300";
-  }
-}
-
-function CardText({
-  text,
-  tone,
-}: {
-  text: string;
-  tone: "default" | "muted";
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const collapsible = shouldCollapseText(text);
-  const displayedText = collapsible && !expanded ? truncatePreviewText(text) : text;
-
-  return (
-    <div className="flex flex-col items-start gap-1">
-      <p
-        className={cn(
-          "ui-selectable whitespace-pre-wrap break-words",
-          tone === "default" ? "text-sm leading-5" : "text-xs leading-4 text-muted-foreground",
-        )}
-      >
-        {displayedText}
-      </p>
-      {collapsible ? (
-        <button
-          className="inline-flex items-center text-[11px] font-semibold uppercase tracking-[0.08em] text-[color:var(--accent-strong)] underline-offset-4 transition-opacity hover:underline hover:opacity-80"
-          onClick={() => setExpanded((current) => !current)}
-          type="button"
-        >
-          {expanded ? "Скрыть" : "Показать полностью"}
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function PatchApplyBlock({ data }: { data: PatchApplyRenderData }) {
-  return (
-    <div className="flex flex-col gap-2">
-      {data.changes.length > 0 ? (
-        <div className="grid gap-1.5">
-          {data.changes.map((change) => (
-            <div className="flex flex-wrap items-start gap-x-2 gap-y-1 text-xs" key={`${change.path}-${change.change_type ?? ""}`}>
-              {change.change_type ? (
-                <span className="shrink-0 text-muted-foreground">
-                  {patchChangeTypeLabel(change.change_type)}
-                </span>
-              ) : null}
-              <code className="ui-selectable whitespace-pre-wrap break-words text-foreground">
-                {patchChangeDisplayPath(change)}
-              </code>
-            </div>
-          ))}
-        </div>
-      ) : null}
-      {data.diffSections.length > 0 || data.fallbackDiffText ? (
-        <PatchDiffBlock fallbackText={data.fallbackDiffText} sections={data.diffSections} />
-      ) : null}
-      {data.output && data.changes.length === 0 ? (
-        <div className="flex flex-col gap-1">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            output
-          </div>
-          <CardText text={data.output} tone="muted" />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function PatchDiffBlock({
-  sections,
-  fallbackText,
-}: {
-  sections: PatchApplyDiffSection[];
-  fallbackText: string | null;
-}) {
-  const [visible, setVisible] = useState(false);
-  const hasDiff = sections.length > 0 || Boolean(fallbackText?.trim());
-
-  if (!hasDiff) {
-    return null;
-  }
-
-  return (
-    <div className="flex flex-col items-start gap-1">
-      <button
-        className="inline-flex items-center text-[11px] font-semibold uppercase tracking-[0.08em] text-[color:var(--accent-strong)] underline-offset-4 transition-opacity hover:underline hover:opacity-80"
-        onClick={() => setVisible((current) => !current)}
-        type="button"
-      >
-        {visible ? "Скрыть diff" : "Показать diff"}
-      </button>
-      {visible ? (
-        <div className="grid w-full gap-3">
-          {sections.length > 0 ? (
-            sections.map((section) => (
-              <div className="grid gap-1" key={section.key}>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                  {section.label}
-                </div>
-                <PatchDiffLines text={section.diffText} />
-              </div>
-            ))
-          ) : fallbackText ? (
-            <PatchDiffLines text={fallbackText} />
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function PatchDiffLines({ text }: { text: string }) {
-  const lines = text.split("\n");
-
-  return (
-    <div className="w-full overflow-hidden">
-      <div className="grid gap-px">
-        {lines.map((line, index) => (
-          <code
-            className={cn(
-              "ui-selectable block whitespace-pre-wrap break-words px-2 py-0.5 text-xs leading-5",
-              patchDiffLineClassName(line),
-            )}
-            key={`${index}-${line}`}
-          >
-            {line || " "}
-          </code>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function RuntimeContextBlock({
-  data,
-}: {
-  data: {
-    summaryItems: Array<{ label: string; value: string }>;
-    detailItems: Array<{ label: string; value: string; isLongText?: boolean }>;
-  };
-}) {
-  return (
-    <details className="group/runtime">
-      <summary className="flex cursor-pointer list-none items-start justify-between gap-3 text-xs [&::-webkit-details-marker]:hidden">
-        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-          {data.summaryItems.length > 0 ? (
-            data.summaryItems.map((item) => (
-              <span className="inline-flex items-center gap-1" key={`${item.label}-${item.value}`}>
-                <span>{item.label}</span>
-                <span className="ui-selectable font-semibold text-foreground">{item.value}</span>
-              </span>
-            ))
-          ) : (
-            <span className="text-xs text-muted-foreground">runtime context</span>
-          )}
-        </div>
-        <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-[color:var(--accent-strong)]">
-          <span className="group-open/runtime:hidden">details</span>
-          <span className="hidden group-open/runtime:inline">hide</span>
-        </span>
-      </summary>
-      {data.detailItems.length > 0 ? (
-        <div className="mt-2 grid gap-2 border-l border-border/60 pl-3">
-          {data.detailItems.map((item) => (
-            <div
-              className="grid gap-1 sm:grid-cols-[minmax(0,180px)_minmax(0,1fr)] sm:items-start sm:gap-3"
-              key={`${item.label}-${item.value}`}
-            >
-              <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                {item.label}
-              </div>
-              {item.isLongText ? (
-                <CardText text={item.value} tone="muted" />
-              ) : (
-                <div className="ui-selectable whitespace-pre-wrap break-words text-xs text-foreground">
-                  {item.value}
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      ) : null}
-    </details>
+    <GenericMergedEventCardView
+      detail={detail}
+      eventLabel={eventLabel}
+      metaItems={metaItems}
+      seqLabel={`#${card.call.seq}, #${card.result.seq}`}
+      subagentLabel={subagentLabel}
+      summary={summary}
+      tone={eventToneFromEventType(card.call.event_type)}
+      timestampLabel={timeLabel}
+    />
   );
 }
 
@@ -2392,32 +1379,9 @@ function mergedDetailText(card: Exclude<MergedCard, { kind: "single" }>) {
   return firstState ? firstState : null;
 }
 
-function singlePlanUpdateMetaItems(event: EventEntry, data: PlanUpdateRenderData) {
-  const items: Array<{ label: string; value: string }> = [];
+function singlePlanUpdatePhase(event: EventEntry) {
   const phase = event.phase?.trim();
-  if (phase) {
-    items.push({ label: "phase", value: phase });
-  }
-  if (data.steps.length > 0) {
-    items.push({ label: "steps", value: String(data.steps.length) });
-  }
-  return items;
-}
-
-function mergedPlanUpdateMetaItems(
-  call: EventEntry,
-  result: EventEntry,
-  data: PlanUpdateRenderData,
-) {
-  const items: Array<{ label: string; value: string }> = [];
-  const phase = mergedPlanUpdatePhase(call, result);
-  if (phase) {
-    items.push({ label: "phase", value: phase });
-  }
-  if (data.steps.length > 0) {
-    items.push({ label: "steps", value: String(data.steps.length) });
-  }
-  return items;
+  return phase ? phase : null;
 }
 
 function mergedPlanUpdatePhase(call: EventEntry, result: EventEntry) {
@@ -3040,10 +2004,6 @@ function userInputRequestHasRenderableContent(request: UserInputRequestEntry) {
   return request.questions.length > 0 || request.extra_answers.length > 0;
 }
 
-function userInputAnswerValues(answers: string[]) {
-  return answers.filter((answer) => answer.trim());
-}
-
 function collabOperationStates(event: EventEntry) {
   const output = event.output_value;
   if (output == null) {
@@ -3224,7 +2184,7 @@ function shouldHideSingleEvent(event: EventEntry) {
   return event.event_type === PATCH_APPLY_DUPLICATE;
 }
 
-function patchApplyRenderData(event: EventEntry) {
+function patchApplyRenderData(event: EventEntry): PatchApplyRenderData | null {
   if (![PATCH_APPLY, PATCH_APPLY_DUPLICATE].includes(event.event_type)) {
     return null;
   }
@@ -3253,7 +2213,7 @@ function patchApplyRenderData(event: EventEntry) {
   };
 }
 
-function mergedPatchApplyRenderData(call: EventEntry, result: EventEntry) {
+function mergedPatchApplyRenderData(call: EventEntry, result: EventEntry): PatchApplyRenderData {
   const patchText = call.patch_apply_input?.trim() ? call.patch_apply_input.trim() : null;
   const output = result.aggregated_output?.trim() ? result.aggregated_output.trim() : null;
   const phase = call.phase?.trim() ? call.phase.trim() : null;
@@ -3354,39 +2314,6 @@ function patchChangeSectionLabel(change: PatchApplyChangeEntry) {
   return `${typeLabel} ${patchChangeDisplayPath(change)}`;
 }
 
-function patchDiffLineClassName(line: string) {
-  if (line.startsWith("@@")) {
-    return "bg-sky-500/10 text-sky-200";
-  }
-
-  if (line.startsWith("+") && !line.startsWith("+++")) {
-    return "bg-emerald-500/12 text-emerald-200";
-  }
-
-  if (line.startsWith("-") && !line.startsWith("---")) {
-    return "bg-rose-500/12 text-rose-200";
-  }
-
-  if (
-    line.startsWith("*** Begin Patch")
-    || line.startsWith("*** End Patch")
-    || line.startsWith("*** End of File")
-  ) {
-    return "text-muted-foreground";
-  }
-
-  if (
-    line.startsWith("*** Update File:")
-    || line.startsWith("*** Add File:")
-    || line.startsWith("*** Delete File:")
-    || line.startsWith("*** Move to:")
-  ) {
-    return "bg-amber-500/10 text-amber-200";
-  }
-
-  return "text-muted-foreground";
-}
-
 function mergedShellMetaItems(call: EventEntry, result: EventEntry) {
   const items: Array<{ label: string; value: string }> = [];
 
@@ -3412,33 +2339,6 @@ function singleShellMetaItems(event: EventEntry) {
   }
 
   return items;
-}
-
-function shellStatus(exitCode: number | null) {
-  if (exitCode === 0) {
-    return {
-      variant: "success" as const,
-      Icon: Check,
-      label: null,
-      ariaLabel: "Успешное завершение",
-    };
-  }
-
-  if (exitCode != null) {
-    return {
-      variant: "failure" as const,
-      Icon: CircleX,
-      label: `код ${exitCode}`,
-      ariaLabel: `Завершение с кодом ${exitCode}`,
-    };
-  }
-
-  return {
-    variant: "unknown" as const,
-    Icon: CircleAlert,
-    label: "без кода",
-    ariaLabel: "Код завершения неизвестен",
-  };
 }
 
 function shellDetailData(call: EventEntry, result: EventEntry) {
@@ -3489,14 +2389,6 @@ function shellDetailData(call: EventEntry, result: EventEntry) {
     parsedHeaders: shellParsedCommandHeaders(call, result),
     items,
   };
-}
-
-function shellStatusDetailText(exitCode: number | null) {
-  if (exitCode != null) {
-    return exitCode === 0 ? null : `код ${exitCode}`;
-  }
-
-  return "без кода";
 }
 
 function shellOutputSizeBytes(output: string | null) {
@@ -3742,22 +2634,6 @@ function isRuntimeContextInstructionsLabel(label: string) {
 
 function isRuntimeContextLongTextLabel(label: string) {
   return label === "collaboration_mode" || isRuntimeContextInstructionsLabel(label);
-}
-
-function shouldCollapseText(text: string) {
-  return (
-    text.length > TEXT_COLLAPSE_CHAR_LIMIT
-    || text.split("\n").length > TEXT_COLLAPSE_LINE_LIMIT
-  );
-}
-
-function truncatePreviewText(text: string) {
-  if (!shouldCollapseText(text)) {
-    return text;
-  }
-
-  const truncated = text.slice(0, TEXT_COLLAPSE_CHAR_LIMIT).trimEnd();
-  return `${truncated}...`;
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {
