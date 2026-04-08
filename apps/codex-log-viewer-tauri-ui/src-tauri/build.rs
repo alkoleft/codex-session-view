@@ -2,6 +2,7 @@ fn main() {
     println!("cargo:rerun-if-changed=tauri.conf.json");
     println!("cargo:rerun-if-changed=capabilities");
     println!("cargo:rerun-if-changed=permissions");
+    println!("cargo:rerun-if-changed=icons");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_DESKTOP");
 
     if std::env::var_os("CARGO_FEATURE_DESKTOP").is_none() {
