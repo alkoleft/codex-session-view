@@ -187,6 +187,7 @@ export type EventEntry = {
   shell_process_id: string | null;
   shell_source: string | null;
   shell_duration_ns: number | null;
+  shell_original_token_count: number | null;
   shell_formatted_output: string | null;
   shell_parsed_commands: ShellParsedCommandEntry[];
   summary_pairs: Array<[string, string]>;

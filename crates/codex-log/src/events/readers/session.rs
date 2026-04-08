@@ -271,25 +271,26 @@ impl JsonOutputEventReader {
                                     ..ToolResultPayload::default()
                                 })
                             } else {
-                                Value::Object(Map::from_iter([
-                                    ("actor_type".to_string(), Value::from("subagent")),
-                                    ("thread_id".to_string(), Value::from(thread_id)),
-                                    (
-                                        "parent_thread_id".to_string(),
-                                        Value::from(parent_thread_id),
-                                    ),
-                                    ("tool_name".to_string(), Value::from(name.clone())),
-                                    ("tool_use_id".to_string(), Value::from(call_id)),
-                                    (
-                                        "output".to_string(),
-                                        item.get("output").cloned().unwrap_or(Value::Null),
-                                    ),
-                                    (
-                                        "session_path".to_string(),
-                                        Value::from(imported_path.display().to_string()),
-                                    ),
-                                ]))
+                                payload_to_value(&ToolResultPayload {
+                                    actor_type: Some("subagent".to_string()),
+                                    thread_id: Some(thread_id.to_string()),
+                                    parent_thread_id: Some(parent_thread_id.to_string()),
+                                    session_path: Some(imported_path.display().to_string()),
+                                    tool_name: name.clone(),
+                                    tool_use_id: Some(call_id.clone()),
+                                    status: Some("completed".to_string()),
+                                    phase: Some("completed".to_string()),
+                                    output: Some(parsed_output.clone()),
+                                    ..ToolResultPayload::default()
+                                })
                             };
+                            if is_shell_tool(&name) {
+                                enrich_response_item_shell_result_payload(
+                                    &mut payload,
+                                    item.get("output"),
+                                    &parsed_output,
+                                );
+                            }
                             if is_spawn_agent {
                                 enrich_spawn_agent_completed_payload(&mut payload, &parsed_output);
                             }
@@ -1349,6 +1350,92 @@ fn subagent_raw_payload(
         payload.insert("reason".to_string(), Value::from(reason));
     }
     Value::Object(payload)
+}
+
+fn enrich_response_item_shell_result_payload(
+    payload: &mut Value,
+    raw_output: Option<&Value>,
+    parsed_output: &Value,
+) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+
+    object
+        .entry("status".to_string())
+        .or_insert_with(|| Value::from("completed"));
+    object
+        .entry("phase".to_string())
+        .or_insert_with(|| Value::from("completed"));
+
+    if let Some(exit_code) = response_item_shell_exit_code(raw_output, parsed_output) {
+        object.insert("exit_code".to_string(), Value::from(exit_code));
+    }
+
+    if let Some(original_token_count) =
+        response_item_shell_original_token_count(raw_output, parsed_output)
+    {
+        object.insert(
+            "original_token_count".to_string(),
+            Value::from(original_token_count),
+        );
+    }
+
+    if let Some(formatted_output) = response_item_shell_formatted_output(raw_output) {
+        object.insert("formatted_output".to_string(), Value::from(formatted_output));
+    }
+}
+
+fn response_item_shell_exit_code(raw_output: Option<&Value>, parsed_output: &Value) -> Option<i32> {
+    parsed_output
+        .as_object()
+        .and_then(|object| object.get("exit_code"))
+        .and_then(Value::as_i64)
+        .and_then(|value| i32::try_from(value).ok())
+        .or_else(|| {
+            raw_output
+                .and_then(Value::as_str)
+                .and_then(shell_exit_code_from_formatted_output)
+        })
+}
+
+fn response_item_shell_original_token_count(
+    raw_output: Option<&Value>,
+    parsed_output: &Value,
+) -> Option<u64> {
+    parsed_output
+        .as_object()
+        .and_then(|object| object.get("original_token_count"))
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            raw_output
+                .and_then(Value::as_str)
+                .and_then(shell_original_token_count_from_formatted_output)
+        })
+}
+
+fn response_item_shell_formatted_output(raw_output: Option<&Value>) -> Option<String> {
+    raw_output
+        .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn shell_exit_code_from_formatted_output(formatted_output: &str) -> Option<i32> {
+    formatted_output.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Process exited with code ")
+            .and_then(|code| code.parse::<i32>().ok())
+    })
+}
+
+fn shell_original_token_count_from_formatted_output(formatted_output: &str) -> Option<u64> {
+    formatted_output.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("Original token count: ")
+            .map(|count| count.replace(',', ""))
+            .and_then(|count| count.parse::<u64>().ok())
+    })
 }
 
 fn legacy_event_msg_tool_name(

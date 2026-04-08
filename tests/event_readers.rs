@@ -1593,6 +1593,63 @@ fn subagent_legacy_event_msg_exec_command_end_is_normalized() {
 }
 
 #[test]
+fn subagent_function_call_output_exec_command_recovers_shell_metadata_from_formatted_output() {
+    let mut reader = make_reader();
+    let mut call_names = HashMap::new();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let imported = Path::new("/tmp/subagent.jsonl");
+
+    let started_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        r#"{"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"exec-1","arguments":"{\"cmd\":\"pwd\"}"}}"#,
+    )
+    .expect("json should parse");
+    reader
+        .parse_subagent_session_payload(
+            24,
+            &started_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("function_call should produce event");
+
+    let output = "Command: /bin/bash -lc 'pwd'\nChunk ID: 123abc\nWall time: 0.0001 seconds\nProcess exited with code 42\nOriginal token count: 4,955\nOutput:\n/repo\n";
+    let completed_payload: serde_json::Map<String, serde_json::Value> = serde_json::from_str(
+        &format!(
+            r#"{{"type":"response_item","payload":{{"type":"function_call_output","call_id":"exec-1","output":{}}}}}"#,
+            serde_json::to_string(output).expect("output should serialize")
+        ),
+    )
+    .expect("json should parse");
+    let event = reader
+        .parse_subagent_session_payload(
+            25,
+            &completed_payload,
+            imported,
+            "parent-1",
+            "thread-1",
+            &mut call_names,
+            &mut tool_counts,
+            &mut subagent_counts,
+        )
+        .expect("function_call_output should produce event");
+
+    assert_eq!(event.event_type, "shell.result");
+    assert_eq!(event.payload["tool_name"].as_str(), Some("exec_command"));
+    assert_eq!(event.payload["tool_use_id"].as_str(), Some("exec-1"));
+    assert_eq!(event.payload["phase"].as_str(), Some("completed"));
+    assert_eq!(event.payload["status"].as_str(), Some("completed"));
+    assert_eq!(event.payload["output"].as_str(), Some(output));
+    assert_eq!(event.payload["formatted_output"].as_str(), Some(output));
+    assert_eq!(event.payload["exit_code"].as_i64(), Some(42));
+    assert_eq!(event.payload["original_token_count"].as_u64(), Some(4955));
+}
+
+#[test]
 fn subagent_legacy_event_msg_collab_end_events_are_normalized() {
     let mut reader = make_reader();
     let mut call_names = HashMap::new();

@@ -48,6 +48,7 @@ function makeEvent(overrides: Partial<EventEntry> = {}): EventEntry {
     shell_process_id: null,
     shell_source: null,
     shell_duration_ns: null,
+    shell_original_token_count: null,
     shell_formatted_output: null,
     shell_parsed_commands: [],
     summary_pairs: [],

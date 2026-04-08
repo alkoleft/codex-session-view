@@ -283,7 +283,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | `payload.type` | Канонический `event_type` | Нормализованный payload |
 | --- | --- | --- |
 | `function_call` | `mcp.call`, `shell.call`, `tool.call`, `plan.update`, `user.input.request`, `stdin.write`, `collab.*` | `call_id` -> `tool_use_id`, `arguments` -> `input`, `session_path`, subagent metadata. Для `exec_command` в `input` могут приходить `cmd`, `workdir`, `yield_time_ms`, `max_output_tokens`, `login`, `tty`, `shell`. |
-| `function_call_output` | `mcp.result`, `shell.result`, `tool.result`, `plan.update`, `user.input.request`, `stdin.write`, `collab.*` | `output`, `status=completed`, `phase=completed`; если `output` строка с JSON, сначала пробуется parse JSON |
+| `function_call_output` | `mcp.result`, `shell.result`, `tool.result`, `plan.update`, `user.input.request`, `stdin.write`, `collab.*` | `output`, `status=completed`, `phase=completed`; если `output` строка с JSON, сначала пробуется parse JSON. Для subagent `exec_command` formatted output дополнительно разбирается на предмет строк `Process exited with code N` и `Original token count: N`, чтобы восстановить `exit_code` и `original_token_count`; исходный wrapper-текст сохраняется в `formatted_output`. |
 | `custom_tool_call` | `patch.apply` или `tool.call` | для `apply_patch` старт тоже хранится как `ToolResultPayload` с `phase=started` |
 | `custom_tool_call_output` | `patch.apply`, `patch.apply.duplicate` или `tool.result` | для `apply_patch` возможен duplicate-режим, см. раздел 7 |
 | `web_search_call` | `web.search` или `web.open` | `query`, `action`, `phase`, `status`, `session_path` |
@@ -787,6 +787,7 @@ payload на стороне UI:
 - `shell_process_id`: `process_id` из legacy/result payload;
 - `shell_source`: `source` из legacy/result payload;
 - `shell_duration_ns`: нормализованная длительность из `duration.{secs,nanos}`;
+- `shell_original_token_count`: `original_token_count` из `shell.result`, если известен;
 - `shell_formatted_output`: `formatted_output` из legacy/result payload;
 - `shell_parsed_commands[]`: нормализованный список записей из `parsed_cmd` с полями
   `kind`, `command`, `query`, `name`, `path`.
@@ -799,6 +800,10 @@ payload на стороне UI:
   `input`;
 - result-specific поля (`cwd`, `process_id`, `source`, `duration`, `formatted_output`,
   `parsed_cmd`) проецируются только для `shell.result`;
+- для subagent `response_item.function_call_output` с `tool_name=exec_command` `exit_code` и
+  `original_token_count` могут восстанавливаться из formatted output строк `Process exited with
+  code N` и `Original token count: N`, а сам raw wrapper-текст дополнительно сохраняется в
+  `formatted_output`, даже если legacy `exec_command_end` отсутствует;
 - `shell_duration_ns` хранит полную длительность в наносекундах;
 - пустые или отсутствующие значения не превращаются в строки вроде `"null"` и остаются `null`
   / пустым массивом.

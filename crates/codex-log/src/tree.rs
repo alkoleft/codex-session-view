@@ -167,6 +167,8 @@ pub struct EventEntry {
     #[serde(default)]
     pub shell_duration_ns: Option<u64>,
     #[serde(default)]
+    pub shell_original_token_count: Option<u64>,
+    #[serde(default)]
     pub shell_formatted_output: Option<String>,
     #[serde(default)]
     pub shell_parsed_commands: Vec<ShellParsedCommandEntry>,
@@ -1385,6 +1387,7 @@ fn format_event_entry(
         shell_process_id: extract_shell_process_id(&event.event_type, payload),
         shell_source: extract_shell_source(&event.event_type, payload),
         shell_duration_ns: extract_shell_duration_ns(&event.event_type, payload),
+        shell_original_token_count: extract_shell_original_token_count(&event.event_type, payload),
         shell_formatted_output: extract_shell_formatted_output(&event.event_type, payload),
         shell_parsed_commands: extract_shell_parsed_commands(&event.event_type, payload),
         summary_pairs: extract_summary_pairs(&event.event_type, payload),
@@ -2376,6 +2379,19 @@ fn extract_shell_duration_ns(
     let secs = object.get("secs").and_then(extract_value_u64).unwrap_or(0);
     let nanos = object.get("nanos").and_then(extract_value_u64).unwrap_or(0);
     secs.checked_mul(1_000_000_000)?.checked_add(nanos)
+}
+
+fn extract_shell_original_token_count(
+    event_type: &str,
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<u64> {
+    if event_type != SHELL_RESULT || !is_command_shell_event(event_type, payload) {
+        return None;
+    }
+
+    payload
+        .and_then(|obj| obj.get("original_token_count"))
+        .and_then(extract_value_u64)
 }
 
 fn extract_shell_formatted_output(
@@ -3564,6 +3580,7 @@ mod tests {
                     "process_id":"4242",
                     "source":"unified_exec_startup",
                     "duration":{"secs":1,"nanos":250000000},
+                    "original_token_count":4096,
                     "formatted_output":"Command: ...",
                     "parsed_cmd":[
                         {
@@ -3607,6 +3624,7 @@ mod tests {
             Some("unified_exec_startup")
         );
         assert_eq!(shell_result.event.shell_duration_ns, Some(1_250_000_000));
+        assert_eq!(shell_result.event.shell_original_token_count, Some(4096));
         assert_eq!(
             shell_result.event.shell_formatted_output.as_deref(),
             Some("Command: ...")

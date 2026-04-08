@@ -2620,6 +2620,9 @@ function shellDetailData(call: EventEntry, result: EventEntry) {
   const maxOutputTokens = formatShellMaxOutputTokens(
     call.shell_max_output_tokens ?? result.shell_max_output_tokens,
   );
+  const originalTokenCount = formatShellOriginalTokenCount(
+    result.shell_original_token_count ?? call.shell_original_token_count,
+  );
   const shellBinary =
     normalizedShellText(call.shell_binary) ?? normalizedShellText(result.shell_binary);
   const login = (call.shell_login ?? result.shell_login) === true;
@@ -2637,6 +2640,9 @@ function shellDetailData(call: EventEntry, result: EventEntry) {
   }
   if (maxOutputTokens) {
     items.push({ label: "max output", value: maxOutputTokens });
+  }
+  if (originalTokenCount) {
+    items.push({ label: "original tokens", value: originalTokenCount });
   }
   if (shellBinary && !["bash", "/bin/bash", "sh", "/bin/sh"].includes(shellBinary)) {
     items.push({ label: "shell", value: shellBinary });
@@ -2697,6 +2703,14 @@ function formatShellYieldTimeMs(value: number | null | undefined) {
 }
 
 function formatShellMaxOutputTokens(value: number | null | undefined) {
+  if (value == null || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+
+  return `${formatCompactNumber(Math.trunc(value))} tok`;
+}
+
+function formatShellOriginalTokenCount(value: number | null | undefined) {
   if (value == null || !Number.isFinite(value) || value < 0) {
     return null;
   }
