@@ -25,7 +25,6 @@ import {
   loadSessionPreviewById,
   loadSessionPreview,
   tailSession,
-  type EventRecord,
   type IndexedSessionSummary,
   type LoadedSession,
   type ResolvedCodexHome,
@@ -78,23 +77,6 @@ const CLEAR_SESSION_EVENT = "viewer:clear-session";
 const SESSIONS_PAGE_SIZE = 50;
 const LIVE_TAIL_POLL_MS = 2500;
 const SUMMARY_TEXT_PREVIEW_LIMIT = 220;
-
-function formatTime(value: string | null) {
-  if (!value) {
-    return "n/a";
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(date);
-}
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -251,17 +233,6 @@ function resolveSessionPath(sessionsDir: string | null, sessionRef: string | nul
   const normalizedDir = sessionsDir.replace(/[\\/]+$/, "");
   const normalizedRef = sessionRef.replace(/^[\\/]+/, "").replace(/[\\/]+/g, separator);
   return `${normalizedDir}${separator}${normalizedRef}`;
-}
-
-function summarizeTailEvent(event: EventRecord) {
-  const text = typeof event.payload.text === "string" ? event.payload.text : null;
-  return {
-    seq: event.seq,
-    ts: event.ts,
-    eventType: event.event_type,
-    text,
-    fallback: event.raw_type,
-  };
 }
 
 function readSessionRef(payload: OpenSessionEventPayload) {
@@ -448,7 +419,6 @@ export default function App() {
   const [tailCursor, setTailCursor] = useState<TailCursor | null>(null);
   const [liveTailEnabled, setLiveTailEnabled] = useState(false);
   const [tailStatus, setTailStatus] = useState("Ожидание инициализации viewer backend.");
-  const [liveEvents, setLiveEvents] = useState<EventRecord[]>([]);
   const [timelineFocusEventId, setTimelineFocusEventId] = useState<string | null>(null);
   const [timelineFocusRevision, setTimelineFocusRevision] = useState(0);
   const tailCursorRef = useRef<TailCursor | null>(null);
@@ -456,6 +426,8 @@ export default function App() {
   const sessionCatalogRequestIdRef = useRef(0);
   const sessionRequestIdRef = useRef(0);
   const pendingSessionRefRef = useRef<string | null>(null);
+  const initialCatalogRequestedRef = useRef(false);
+  const initialAutoloadPendingRef = useRef(false);
   const displayedSessionId = selectedPreview?.session_id ?? selectedSessionId ?? null;
   const displayedSessionRef = selectedPreview?.session_ref ?? selectedSessionRef ?? null;
   const displayedSessionPath = resolveSessionPath(
@@ -552,6 +524,8 @@ export default function App() {
   }, []);
 
   const clearSelectedSession = useCallback((reason?: string) => {
+    sessionRequestIdRef.current += 1;
+    pendingSessionRefRef.current = null;
     selectedSessionRefRef.current = null;
     tailCursorRef.current = null;
     setSelectedSessionId(null);
@@ -564,7 +538,6 @@ export default function App() {
     setTimelineFocusRevision(0);
     setSessionError(null);
     setSessionBusy(false);
-    setLiveEvents([]);
     setTailStatus(
       reason ??
         "Жду выбора сессии из dialog picker, отдельного окна или команды. Main viewer больше не рендерит sidebar session catalog.",
@@ -574,6 +547,10 @@ export default function App() {
   const toggleLiveTail = useCallback(() => {
     const next = !liveTailEnabled;
     setLiveTailEnabled(next);
+
+    if (sessionBusy) {
+      return;
+    }
 
     if (next) {
       setTailStatus(
@@ -585,7 +562,7 @@ export default function App() {
     }
 
     setTailStatus("Live tail выключен. Автоматическое обновление остановлено.");
-  }, [liveTailEnabled, selectedSessionRef]);
+  }, [liveTailEnabled, selectedSessionRef, sessionBusy]);
 
   const focusTimelineEvent = useCallback((eventId: string | null) => {
     if (!eventId) {
@@ -645,7 +622,11 @@ export default function App() {
         });
       } catch (error) {
         if (requestId === sessionCatalogRequestIdRef.current) {
-          setCatalogError(extractErrorMessage(error));
+          const message = extractErrorMessage(error);
+          setCatalogError(message);
+          if (!append) {
+            setTailStatus(message);
+          }
         }
       } finally {
         if (requestId === sessionCatalogRequestIdRef.current) {
@@ -670,21 +651,18 @@ export default function App() {
       setSelectedSessionId(null);
       setSelectedAgentThreadId(null);
       setSelectedSessionRef(normalizedSessionRef);
+      setSelectedPreview(null);
       setSessionBusy(true);
       setSessionError(null);
       setSelectedLoadedSession(null);
-      setLiveEvents([]);
       setTimelineFocusEventId(null);
       setTimelineFocusRevision(0);
       tailCursorRef.current = null;
       setTailCursor(null);
-      setTailStatus("Загружаю preview выбранной сессии.");
+      setTailStatus("Загружаю основную ленту выбранной сессии.");
 
       try {
-        const [preview, loadedSession] = await Promise.all([
-          loadSessionPreview(normalizedSessionRef),
-          loadSession(normalizedSessionRef),
-        ]);
+        const loadedSession = await loadSession(normalizedSessionRef);
         if (
           selectedSessionRefRef.current !== normalizedSessionRef ||
           requestId !== sessionRequestIdRef.current
@@ -692,20 +670,29 @@ export default function App() {
           return;
         }
 
-        setSelectedSessionId(preview.session_id);
-        applyPreview(preview);
+        selectedSessionRefRef.current = loadedSession.session_ref;
+        tailCursorRef.current = loadedSession.tail_cursor;
+        setSelectedSessionId(loadedSession.session_id);
+        setSelectedSessionRef(loadedSession.session_ref);
         setSelectedLoadedSession(loadedSession);
-        setTailStatus(
-          liveTailEnabled
-            ? "Slim preview загружен. Live tail активен для выбранной сессии."
-            : "Slim preview загружен. Live tail выключен; включите его кнопкой при необходимости.",
-        );
-      } catch (error) {
+        setTailCursor(loadedSession.tail_cursor);
+        setTailStatus("Основная лента загружена. Догружаю summary выбранной сессии.");
+
+        const preview = await loadSessionPreview(loadedSession.session_ref);
         if (
-          selectedSessionRefRef.current === normalizedSessionRef &&
-          requestId === sessionRequestIdRef.current
+          selectedSessionRefRef.current !== loadedSession.session_ref ||
+          requestId !== sessionRequestIdRef.current
         ) {
-          setSessionError(extractErrorMessage(error));
+          return;
+        }
+
+        applyPreview(preview);
+        setTailStatus("Сессия загружена.");
+      } catch (error) {
+        if (requestId === sessionRequestIdRef.current) {
+          const message = extractErrorMessage(error);
+          setSessionError(message);
+          setTailStatus(message);
         }
       } finally {
         if (requestId === sessionRequestIdRef.current) {
@@ -713,7 +700,7 @@ export default function App() {
         }
       }
     },
-    [applyPreview, liveTailEnabled],
+    [applyPreview],
   );
 
   const openSessionById = useCallback(
@@ -729,15 +716,15 @@ export default function App() {
       setSelectedSessionId(normalizedSessionId);
       setSelectedAgentThreadId(null);
       setSelectedSessionRef(null);
+      setSelectedPreview(null);
       setSessionBusy(true);
       setSessionError(null);
       setSelectedLoadedSession(null);
-      setLiveEvents([]);
       setTimelineFocusEventId(null);
       setTimelineFocusRevision(0);
       tailCursorRef.current = null;
       setTailCursor(null);
-      setTailStatus("Открываю rollout для выбранной записи каталога.");
+      setTailStatus("Резолвлю выбранную запись каталога и загружаю основную ленту.");
 
       try {
         const preview = await loadSessionPreviewById(normalizedSessionId);
@@ -745,24 +732,28 @@ export default function App() {
           return;
         }
 
+        selectedSessionRefRef.current = preview.session_ref;
+        setSelectedSessionId(preview.session_id);
+        setSelectedSessionRef(preview.session_ref);
+        setTailStatus("Session ref найден. Загружаю основную ленту rollout.");
+
         const loadedSession = await loadSession(preview.session_ref);
         if (requestId !== sessionRequestIdRef.current) {
           return;
         }
 
-        selectedSessionRefRef.current = preview.session_ref;
-        setSelectedSessionId(preview.session_id);
-        setSelectedSessionRef(preview.session_ref);
-        applyPreview(preview);
+        tailCursorRef.current = loadedSession.tail_cursor;
+        setTailCursor(loadedSession.tail_cursor);
         setSelectedLoadedSession(loadedSession);
-        setTailStatus(
-          liveTailEnabled
-            ? "Preview загружен по session_id. Live tail активен для найденного rollout."
-            : "Preview загружен по session_id. Live tail выключен; включите его кнопкой при необходимости.",
-        );
+        setTailStatus("Основная лента загружена. Догружаю summary rollout.");
+
+        applyPreview(preview);
+        setTailStatus("Сессия загружена.");
       } catch (error) {
         if (requestId === sessionRequestIdRef.current) {
-          setSessionError(extractErrorMessage(error));
+          const message = extractErrorMessage(error);
+          setSessionError(message);
+          setTailStatus(message);
         }
       } finally {
         if (requestId === sessionRequestIdRef.current) {
@@ -770,7 +761,7 @@ export default function App() {
         }
       }
     },
-    [applyPreview, liveTailEnabled],
+    [applyPreview],
   );
 
   const openSessionFromDialog = useCallback(
@@ -847,6 +838,40 @@ export default function App() {
   }, [bootState, openSession]);
 
   useEffect(() => {
+    if (bootState !== "ready" || initialCatalogRequestedRef.current) {
+      return;
+    }
+
+    initialCatalogRequestedRef.current = true;
+    initialAutoloadPendingRef.current = !pendingSessionRefRef.current;
+    if (initialAutoloadPendingRef.current) {
+      setTailStatus("Backend инициализирован. Ищу активную сессию в indexed catalog.");
+    }
+    void refreshSessionCatalog({ query: "" });
+  }, [bootState, refreshSessionCatalog]);
+
+  useEffect(() => {
+    if (!initialAutoloadPendingRef.current || catalogBusy) {
+      return;
+    }
+
+    initialAutoloadPendingRef.current = false;
+    if (pendingSessionRefRef.current || sessionRequestIdRef.current > 0) {
+      return;
+    }
+
+    const activeSession = catalogSessions[0];
+    if (activeSession) {
+      void openSessionById(activeSession.session_id);
+      return;
+    }
+
+    if (!catalogError) {
+      setTailStatus("Backend инициализирован, но активная сессия в indexed catalog не найдена.");
+    }
+  }, [catalogBusy, catalogError, catalogSessions, openSessionById]);
+
+  useEffect(() => {
     if (!isSessionDialogOpen || bootState !== "ready") {
       return;
     }
@@ -918,27 +943,36 @@ export default function App() {
         setTailCursor(result.next_cursor);
 
         if (result.reset) {
-          setTailStatus("Сессия была переписана или ротирована; перечитываю preview.");
-          await openSession(sessionRef);
+          setLiveTailEnabled(false);
+          setTailStatus(
+            "Сессия была переписана или ротирована. Live tail остановлен; обновите основную ленту вручную.",
+          );
           return;
         }
 
         if (result.events.length > 0) {
-          const newestEvent = result.events[result.events.length - 1] ?? null;
-          const nextLiveEvents = [...result.events].reverse();
+          const selectionRequestId = sessionRequestIdRef.current;
+          setTailStatus(`Получено новых событий: ${result.events.length}. Обновляю основную ленту.`);
+
+          const [loadedSession, preview] = await Promise.all([
+            loadSession(sessionRef),
+            loadSessionPreview(sessionRef),
+          ]);
+          if (
+            cancelled ||
+            selectedSessionRefRef.current !== sessionRef ||
+            selectionRequestId !== sessionRequestIdRef.current
+          ) {
+            return;
+          }
+
+          tailCursorRef.current = preview.tail_cursor;
+          setTailCursor(preview.tail_cursor);
           startTransition(() => {
-            setLiveEvents((prev) => [...nextLiveEvents, ...prev].slice(0, 80));
-            setSelectedPreview((current) =>
-              current
-                ? {
-                    ...current,
-                    event_count: current.event_count + result.events.length,
-                    last_ts: newestEvent?.ts ?? current.last_ts,
-                  }
-                : current,
-            );
+            setSelectedLoadedSession(loadedSession);
+            setSelectedPreview(preview);
           });
-          setTailStatus(`Получено новых событий: ${result.events.length}.`);
+          setTailStatus(`Основная лента обновлена. Новых событий: ${result.events.length}.`);
         } else {
           setTailStatus("Новых событий пока нет, tail остаётся активным.");
         }
@@ -959,9 +993,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [liveTailEnabled, openSession, selectedSessionRef, tailCursor]);
-
-  const liveTailRows = liveEvents.map(summarizeTailEvent);
+  }, [liveTailEnabled, selectedSessionRef, tailCursor]);
 
   return (
     <>
@@ -1197,7 +1229,7 @@ export default function App() {
                       type="button"
                     >
                       <RefreshCcw data-icon="inline-start" />
-                      {sessionBusy ? "Loading…" : "Refresh Preview"}
+                      {sessionBusy ? "Loading…" : "Refresh Session"}
                     </Button>
                   ) : null}
                 </CardAction>
@@ -1225,7 +1257,7 @@ export default function App() {
                 {sessionError ? (
                   <Alert variant="destructive">
                     <AlertTriangle className="size-4" />
-                    <AlertTitle>Session preview failed</AlertTitle>
+                    <AlertTitle>Session load failed</AlertTitle>
                     <AlertDescription className="ui-selectable">{sessionError}</AlertDescription>
                   </Alert>
                 ) : null}
@@ -1244,6 +1276,18 @@ export default function App() {
                         selectedAgentThreadId={activeAgentThreadId}
                         session={selectedLoadedSession}
                       />
+                    ) : selectedPreview ? (
+                      <Alert>
+                        <RefreshCcw className={cn("size-4", sessionBusy && "animate-spin")} />
+                        <AlertTitle>
+                          {sessionBusy ? "Догружаю полную сессию" : "Полная сессия недоступна"}
+                        </AlertTitle>
+                        <AlertDescription>
+                          {sessionBusy
+                            ? "Preview и summary уже обновлены. Timeline появится после чтения полного дерева событий."
+                            : "Preview загружен, но полное дерево событий не удалось прочитать. Повторите загрузку сессии."}
+                        </AlertDescription>
+                      </Alert>
                     ) : (
                       <Alert>
                         <Target className="size-4" />
@@ -1302,8 +1346,8 @@ export default function App() {
                               value={String(selectedPreview?.event_count ?? 0)}
                             />
                             <SessionSummaryMetaItem
-                              label="Live tail"
-                              value={liveTailEnabled ? String(liveTailRows.length) : "paused"}
+                              label="Tail"
+                              value={liveTailEnabled ? "on" : "off"}
                             />
                             <SessionSummaryMetaItem
                               label="First ts"
@@ -1391,39 +1435,6 @@ export default function App() {
                       onSelectAgent={activateAgent}
                     />
 
-                    <Card className={SURFACE_CARD_CLASS} size="sm">
-                      <CardHeader className="gap-2">
-                        <CardTitle className="text-sm">Live tail</CardTitle>
-                      </CardHeader>
-                      <CardContent className="flex flex-col gap-2">
-                        {liveTailRows.map((event) => (
-                          <div
-                            className="rounded-md border border-border px-3 py-2"
-                            key={`${event.seq}-${event.ts}`}
-                          >
-                            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                              <span>{formatTime(event.ts)}</span>
-                              <span className="font-mono">{event.eventType}</span>
-                            </div>
-                            <p className="ui-selectable mt-2 text-sm leading-6">
-                              {event.text ?? event.fallback}
-                            </p>
-                          </div>
-                        ))}
-
-                        {!liveTailRows.length ? (
-                          <Alert>
-                            <RadioTower className="size-4" />
-                            <AlertTitle>{liveTailEnabled ? "Tail idle" : "Tail paused"}</AlertTitle>
-                            <AlertDescription>
-                              {liveTailEnabled
-                                ? "Новые tail-события появятся здесь после выбора сессии."
-                                : "Автоматическое обновление выключено. Включите live tail кнопкой выше."}
-                            </AlertDescription>
-                          </Alert>
-                        ) : null}
-                      </CardContent>
-                    </Card>
                   </div>
                 </ScrollArea>
               </CardContent>
