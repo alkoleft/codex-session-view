@@ -350,6 +350,169 @@ worker crate. Каноническая логика ingestion, session discovery
 | `message.commentary` | константа существует, но текущая нормализация обычно использует `message.assistant` + `phase=commentary` |
 | `message.plan` | это не сырой `events.jsonl`, а производное tree/view-событие после merge `plan.update` + message |
 
+### 6.3. Реестр известных канонических `event_type`
+
+Этот реестр фиксирует prerequisite-результат задачи
+`2026-04-08-event-type-category-classification`.
+Базовая единица здесь именно канонический `event_type`, а не operation family.
+
+#### 6.3.1. Что показали два rollout-лога от 2026-04-08
+
+- rollout reviewer-subagent
+  `/home/alko/.codex/sessions/2026/04/08/rollout-2026-04-08T15-08-19-019d6cfe-531c-7bc2-aa6f-546351ea71ac.jsonl`
+  содержит только `response_item.*`, `event_msg.*`, `turn_context` и `session_meta`;
+  из lifecycle-path там наблюдаются только `exec_command -> shell.call/shell.result`;
+- rollout regular-agent
+  `/home/alko/.codex/sessions/2026/04/08/rollout-2026-04-08T03-31-35-019d6a80-6ed7-7fe2-96e0-84c14c7c2f16.jsonl`
+  дополнительно показывает `write_stdin`, `update_plan`, `request_user_input`,
+  `spawn_agent`, `wait_agent`, `apply_patch`, `web_search_call`, а также legacy
+  `event_msg.exec_command_end`, `event_msg.patch_apply_end`, `event_msg.web_search_end`,
+  `event_msg.collab_agent_spawn_end`, `event_msg.collab_waiting_end`,
+  `event_msg.item_completed(item.type=Plan)`, `event_msg.context_compacted`,
+  `event_msg.turn_aborted`;
+- ни один из этих rollout-файлов не содержит root `item.*`, потому что это session-логи;
+  поэтому покрытие `item.*` ниже фиксируется по `stdout` reader и разделу 4 этого документа,
+  а не по наблюдённым строкам;
+- в reviewer rollout реально наблюдался `response_item.message` с `role=developer`,
+  то есть динамический namespace `message.<role>` на практике шире, чем явный реестр констант.
+  В таблицу ниже он не включён намеренно: эта фиксация ограничена объединением
+  `docs/log-events.md (6.1/6.2)` и `crates/codex-log/src/events/types.rs`.
+
+#### 6.3.2. `event_type -> source_presence`
+
+| `event_type` | docs 6.1 | docs 6.2 | types.rs | note |
+| --- | --- | --- | --- | --- |
+| `thread.started` | `yes` | `no` | `yes` |  |
+| `agent.started` | `yes` | `no` | `yes` |  |
+| `agent.completed` | `yes` | `no` | `yes` |  |
+| `agent.failed` | `yes` | `no` | `yes` |  |
+| `message.agent` | `yes` | `no` | `yes` |  |
+| `agent.reasoning` | `yes` | `no` | `yes` |  |
+| `agent.session` | `yes` | `no` | `yes` |  |
+| `agent.session.foreign` | `yes` | `no` | `yes` |  |
+| `agent.meta` | `no` | `yes` | `yes` | downstream-only тип из docs 6.2 и `types.rs`; текущие readers почти не эмитят |
+| `agent.aborted` | `yes` | `no` | `yes` |  |
+| `message.commentary` | `no` | `yes` | `yes` | downstream-only тип из docs 6.2 и `types.rs`; текущая нормализация обычно выражает commentary через `message.assistant` + `phase=commentary` |
+| `message.user` | `yes` | `no` | `yes` |  |
+| `message.plan` | `no` | `yes` | `yes` | downstream-only производный merge `plan.update` + `response_item.message`; не сырой ingestion event |
+| `message.assistant` | `yes` | `no` | `no` | docs-only явный член динамического namespace `message.<role>`; в `types.rs` отдельной константы нет |
+| `task.started` | `yes` | `no` | `yes` |  |
+| `task.completed` | `yes` | `no` | `yes` |  |
+| `runtime.context` | `yes` | `no` | `yes` |  |
+| `context.compacted` | `yes` | `no` | `yes` |  |
+| `context.compacted.duplicate` | `yes` | `no` | `yes` |  |
+| `info.tokens` | `yes` | `no` | `yes` |  |
+| `tool.call` | `yes` | `no` | `yes` |  |
+| `tool.result` | `yes` | `no` | `yes` |  |
+| `shell.call` | `yes` | `no` | `yes` |  |
+| `shell.result` | `yes` | `no` | `yes` |  |
+| `mcp.call` | `yes` | `no` | `yes` |  |
+| `mcp.result` | `yes` | `no` | `yes` |  |
+| `stdin.write` | `yes` | `no` | `yes` |  |
+| `web.search` | `yes` | `no` | `yes` |  |
+| `web.open` | `yes` | `no` | `yes` |  |
+| `plan.update` | `yes` | `no` | `yes` |  |
+| `user.input.request` | `yes` | `no` | `yes` |  |
+| `patch.apply` | `yes` | `no` | `yes` |  |
+| `patch.apply.duplicate` | `yes` | `no` | `yes` |  |
+| `collab.spawn_agent` | `yes` | `no` | `yes` |  |
+| `collab.send_input` | `yes` | `no` | `yes` |  |
+| `collab.wait` | `yes` | `no` | `yes` |  |
+| `collab.close_agent` | `yes` | `no` | `yes` |  |
+| `collab.resume_agent` | `yes` | `no` | `yes` |  |
+| `file.change` | `yes` | `no` | `yes` |  |
+| `todo.update` | `yes` | `no` | `yes` |  |
+| `error` | `yes` | `no` | `yes` |  |
+| `raw.unparsed` | `yes` | `no` | `yes` |  |
+| `stderr.line` | `yes` | `no` | `yes` |  |
+
+#### 6.3.3. `event_type -> category`
+
+| `event_type` | `category` | note |
+| --- | --- | --- |
+| `thread.started` | `atomic` |  |
+| `agent.started` | `atomic` |  |
+| `agent.completed` | `atomic` |  |
+| `agent.failed` | `atomic` |  |
+| `message.agent` | `atomic` |  |
+| `agent.reasoning` | `atomic` |  |
+| `agent.session` | `atomic` |  |
+| `agent.session.foreign` | `atomic` |  |
+| `agent.meta` | `atomic` | compatibility/derived meta event, не operation lifecycle |
+| `agent.aborted` | `atomic` |  |
+| `message.commentary` | `atomic` |  |
+| `message.user` | `atomic` |  |
+| `message.plan` | `atomic` | derived downstream merge, не отдельный ingestion lifecycle |
+| `message.assistant` | `atomic` | atomic факт внутри динамического namespace `message.<role>` |
+| `task.started` | `atomic` |  |
+| `task.completed` | `atomic` |  |
+| `runtime.context` | `atomic` |  |
+| `context.compacted` | `atomic` |  |
+| `context.compacted.duplicate` | `atomic` |  |
+| `info.tokens` | `atomic` |  |
+| `tool.call` | `lifecycle` | generic lifecycle bucket для не-specialized tool/collab/custom-tool путей |
+| `tool.result` | `lifecycle` | generic lifecycle result bucket для не-specialized tool/collab/custom-tool путей |
+| `shell.call` | `lifecycle` | старт операции shell/exec |
+| `shell.result` | `lifecycle` | завершение или update операции shell/exec |
+| `mcp.call` | `lifecycle` | старт MCP call |
+| `mcp.result` | `lifecycle` | завершение или update MCP call |
+| `stdin.write` | `lifecycle` | singleton lifecycle: один `event_type`, различение через `payload.phase` |
+| `web.search` | `lifecycle` | phased lifecycle search-path; `open_page` вынесен в `web.open` |
+| `web.open` | `lifecycle` | phased lifecycle open-page path внутри web search surface |
+| `plan.update` | `lifecycle` | singleton lifecycle; legacy completion также приходит через `event_msg.item_completed` |
+| `user.input.request` | `lifecycle` | singleton lifecycle; различение через `payload.phase` |
+| `patch.apply` | `lifecycle` | phased lifecycle с legacy completion `event_msg.patch_apply_end` |
+| `patch.apply.duplicate` | `atomic` | duplicate-marker после `event_msg.patch_apply_end`; не owner lifecycle state |
+| `collab.spawn_agent` | `lifecycle` | singleton lifecycle; legacy completion есть |
+| `collab.send_input` | `lifecycle` | singleton lifecycle; legacy completion есть в коде, но не наблюдалась в двух логах |
+| `collab.wait` | `lifecycle` | singleton lifecycle; legacy completion наблюдалась |
+| `collab.close_agent` | `lifecycle` | singleton lifecycle; legacy completion есть в коде, но не наблюдалась в двух логах |
+| `collab.resume_agent` | `lifecycle` | singleton lifecycle без legacy `event_msg.*` completion |
+| `file.change` | `lifecycle` | root-only phased lifecycle по `item.started/updated/completed` |
+| `todo.update` | `lifecycle` | root-only phased lifecycle по `item.started/updated/completed` |
+| `error` | `atomic` |  |
+| `raw.unparsed` | `atomic` |  |
+| `stderr.line` | `atomic` |  |
+
+В этой фиксации `undecided` не осталось: все типы из объединённого реестра получили
+категорию `atomic` или `lifecycle`.
+
+### 6.4. Lifecycle boundary mapping
+
+Boundary-профиль ниже зафиксирован только для `lifecycle`-типов. Для каждой строки
+ячейки показывают `start:` и `end:` внутри трёх raw-семейств:
+
+- `item.*` для root stdout reader;
+- `response_item.*` для subagent session item-layer;
+- `event_msg.*` для legacy subagent session path.
+
+Пустая ячейка означает, что в текущем ingestion такого raw-пути нет. Для пар
+`tool.call/tool.result`, `shell.call/shell.result` и `mcp.call/mcp.result` boundary-семейство
+в таблице повторяется осознанно: единица классификации остаётся канонический `event_type`,
+а не operation family.
+
+| `event_type` | boundary role | `item.*` | `response_item.*` | `event_msg.*` | note |
+| --- | --- | --- | --- | --- | --- |
+| `tool.call` | `split call/result` | start: `item.started(tool_use:name=<generic>)`, `item.started(collab_tool_call:tool=<fallback>)`<br>end: `item.updated(tool_result:name=<generic>)`, `item.completed(tool_result:name=<generic>)`, `item.updated(collab_tool_call:tool=<fallback>)`, `item.completed(collab_tool_call:tool=<fallback>)` | start: `response_item.function_call(name=<generic>)`, `response_item.custom_tool_call(name!=apply_patch)`<br>end: `response_item.function_call_output(name=<generic>)`, `response_item.custom_tool_call_output(name!=apply_patch)` | — | generic fallback bucket; в двух rollout-логах не наблюдался |
+| `tool.result` | `split call/result` | start: `item.started(tool_use:name=<generic>)`, `item.started(collab_tool_call:tool=<fallback>)`<br>end: `item.updated(tool_result:name=<generic>)`, `item.completed(tool_result:name=<generic>)`, `item.updated(collab_tool_call:tool=<fallback>)`, `item.completed(collab_tool_call:tool=<fallback>)` | start: `response_item.function_call(name=<generic>)`, `response_item.custom_tool_call(name!=apply_patch)`<br>end: `response_item.function_call_output(name=<generic>)`, `response_item.custom_tool_call_output(name!=apply_patch)` | — | same family as `tool.call`; canonical result/update half |
+| `shell.call` | `split call/result` | start: `item.started(command_execution)`<br>end: `item.updated(command_execution)`, `item.completed(command_execution)` | start: `response_item.function_call(exec_command)`<br>end: `response_item.function_call_output(exec_command)` | end: `event_msg.exec_command_end` | `response_item.*` observed в reviewer и regular-agent rollout; legacy end observed в regular-agent rollout |
+| `shell.result` | `split call/result` | start: `item.started(command_execution)`<br>end: `item.updated(command_execution)`, `item.completed(command_execution)` | start: `response_item.function_call(exec_command)`<br>end: `response_item.function_call_output(exec_command)` | end: `event_msg.exec_command_end` | same family as `shell.call`; canonical result/update half |
+| `mcp.call` | `split call/result` | start: `item.started(mcp_tool_call)`<br>end: `item.updated(mcp_tool_call)`, `item.completed(mcp_tool_call)` | start: `response_item.function_call(list_mcp_resources|list_mcp_resource_templates|read_mcp_resource)`<br>end: `response_item.function_call_output(list_mcp_resources|list_mcp_resource_templates|read_mcp_resource)` | — | code/docs-only in provided logs |
+| `mcp.result` | `split call/result` | start: `item.started(mcp_tool_call)`<br>end: `item.updated(mcp_tool_call)`, `item.completed(mcp_tool_call)` | start: `response_item.function_call(list_mcp_resources|list_mcp_resource_templates|read_mcp_resource)`<br>end: `response_item.function_call_output(list_mcp_resources|list_mcp_resource_templates|read_mcp_resource)` | — | same family as `mcp.call`; canonical result/update half |
+| `stdin.write` | `phased singleton` | start: `item.started(tool_use:name=write_stdin)`<br>end: `item.updated(tool_result:name=write_stdin)`, `item.completed(tool_result:name=write_stdin)` | start: `response_item.function_call(write_stdin)`<br>end: `response_item.function_call_output(write_stdin)` | — | observed в regular-agent rollout по `response_item.*` |
+| `web.search` | `phased same-type` | start: `item.started(web_search:action!=open_page)`<br>end: `item.updated(web_search:action!=open_page)`, `item.completed(web_search:action!=open_page)` | start: `response_item.web_search_call(action!=open_page, phase=started)`<br>end: `response_item.web_search_call(action!=open_page, phase=updated|completed)` | end: `event_msg.web_search_end(action!=open_page)` | observed в regular-agent rollout; `open_page` path в двух логах не встретился |
+| `web.open` | `phased same-type` | start: `item.started(web_search:action=open_page)`<br>end: `item.updated(web_search:action=open_page)`, `item.completed(web_search:action=open_page)` | start: `response_item.web_search_call(action=open_page, phase=started)`<br>end: `response_item.web_search_call(action=open_page, phase=updated|completed)` | end: `event_msg.web_search_end(action=open_page)` | code/docs-only in provided logs |
+| `plan.update` | `phased singleton` | start: `item.started(tool_use:name=update_plan)`<br>end: `item.updated(tool_result:name=update_plan)`, `item.completed(tool_result:name=update_plan)` | start: `response_item.function_call(update_plan)`<br>end: `response_item.function_call_output(update_plan)` | end: `event_msg.item_completed(item.type=Plan)` | `response_item.*` и legacy end observed в regular-agent rollout |
+| `user.input.request` | `phased singleton` | start: `item.started(tool_use:name=request_user_input)`<br>end: `item.updated(tool_result:name=request_user_input)`, `item.completed(tool_result:name=request_user_input)` | start: `response_item.function_call(request_user_input)`<br>end: `response_item.function_call_output(request_user_input)` | — | observed один раз в regular-agent rollout по `response_item.*` |
+| `patch.apply` | `phased same-type` | — | start: `response_item.custom_tool_call(apply_patch)`<br>end: `response_item.custom_tool_call_output(apply_patch)` | end: `event_msg.patch_apply_end` | both completion paths observed в regular-agent rollout; если `patch_apply_end` пришёл первым, поздний `custom_tool_call_output` уходит в atomic `patch.apply.duplicate` |
+| `collab.spawn_agent` | `phased singleton` | start: `item.started(tool_use:name=spawn_agent)`, `item.started(collab_tool_call:tool=spawn_agent)`<br>end: `item.updated(tool_result:name=spawn_agent)`, `item.completed(tool_result:name=spawn_agent)`, `item.updated(collab_tool_call:tool=spawn_agent)`, `item.completed(collab_tool_call:tool=spawn_agent)` | start: `response_item.function_call(spawn_agent)`<br>end: `response_item.function_call_output(spawn_agent)` | end: `event_msg.collab_agent_spawn_end` | `response_item.*` и legacy end observed в regular-agent rollout |
+| `collab.send_input` | `phased singleton` | start: `item.started(tool_use:name=send_input)`, `item.started(collab_tool_call:tool=send_input)`<br>end: `item.updated(tool_result:name=send_input)`, `item.completed(tool_result:name=send_input)`, `item.updated(collab_tool_call:tool=send_input)`, `item.completed(collab_tool_call:tool=send_input)` | start: `response_item.function_call(send_input)`<br>end: `response_item.function_call_output(send_input)` | end: `event_msg.collab_agent_interaction_end` | code/docs-only in provided logs |
+| `collab.wait` | `phased singleton` | start: `item.started(tool_use:name=wait|wait_agent)`, `item.started(collab_tool_call:tool=wait|wait_agent)`<br>end: `item.updated(tool_result:name=wait|wait_agent)`, `item.completed(tool_result:name=wait|wait_agent)`, `item.updated(collab_tool_call:tool=wait|wait_agent)`, `item.completed(collab_tool_call:tool=wait|wait_agent)` | start: `response_item.function_call(wait|wait_agent)`<br>end: `response_item.function_call_output(wait|wait_agent)` | end: `event_msg.collab_waiting_end` | `response_item.*` и legacy end observed в regular-agent rollout |
+| `collab.close_agent` | `phased singleton` | start: `item.started(tool_use:name=close_agent)`, `item.started(collab_tool_call:tool=close_agent)`<br>end: `item.updated(tool_result:name=close_agent)`, `item.completed(tool_result:name=close_agent)`, `item.updated(collab_tool_call:tool=close_agent)`, `item.completed(collab_tool_call:tool=close_agent)` | start: `response_item.function_call(close_agent)`<br>end: `response_item.function_call_output(close_agent)` | end: `event_msg.collab_close_end` | code/docs-only in provided logs |
+| `collab.resume_agent` | `phased singleton` | start: `item.started(tool_use:name=resume_agent)`, `item.started(collab_tool_call:tool=resume_agent)`<br>end: `item.updated(tool_result:name=resume_agent)`, `item.completed(tool_result:name=resume_agent)`, `item.updated(collab_tool_call:tool=resume_agent)`, `item.completed(collab_tool_call:tool=resume_agent)` | start: `response_item.function_call(resume_agent)`<br>end: `response_item.function_call_output(resume_agent)` | — | code/docs-only in provided logs; legacy `event_msg.*` completion в current reader нет |
+| `file.change` | `phased same-type` | start: `item.started(file_change)`<br>end: `item.updated(file_change)`, `item.completed(file_change)` | — | — | root-only lifecycle; session rollout logs его не показывают |
+| `todo.update` | `phased same-type` | start: `item.started(todo_list)`<br>end: `item.updated(todo_list)`, `item.completed(todo_list)` | — | — | root-only lifecycle; session rollout logs его не показывают |
+
 ## 7. Правила дедупликации при ingestion
 
 ### 7.1. Жёсткое подавление дублей сообщений
