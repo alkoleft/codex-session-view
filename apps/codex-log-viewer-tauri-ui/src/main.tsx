@@ -6,6 +6,8 @@ import { DebugPanel } from "./components/debug-panel";
 import { ExternalLinkGuard } from "./components/external-link-guard";
 import "./index.css";
 
+document.documentElement.classList.add("dark");
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ExternalLinkGuard />

@@ -9,12 +9,9 @@ import {
 import { listen } from "@tauri-apps/api/event";
 import {
   AlertTriangle,
-  ExternalLink,
   FolderSearch2,
-  Layers3,
   RadioTower,
   RefreshCcw,
-  Sparkles,
   Target,
   Unplug,
 } from "lucide-react";
@@ -36,7 +33,6 @@ import {
   type TailCursor,
 } from "./backend";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -68,9 +64,8 @@ type OpenSessionEventPayload = {
   session_ref?: string;
 } | string;
 
-const PANEL_CARD_CLASS =
-  "min-h-0 gap-0 border-border/60 bg-card/90 shadow-[var(--shadow)] backdrop-blur-md";
-const SURFACE_CARD_CLASS = "border-border/60 bg-background/80";
+const PANEL_CARD_CLASS = "min-h-0 gap-0 border-border bg-card shadow-none";
+const SURFACE_CARD_CLASS = "border-border bg-background shadow-none";
 const OPEN_SESSION_EVENT = "viewer:open-session";
 const CLEAR_SESSION_EVENT = "viewer:clear-session";
 const SESSIONS_PAGE_SIZE = 50;
@@ -119,6 +114,29 @@ function formatTokenCount(value: number | null) {
   return new Intl.NumberFormat("ru-RU").format(value);
 }
 
+function isAbsolutePath(value: string) {
+  return /^(?:\/|\\\\|[A-Za-z]:[\\/])/.test(value);
+}
+
+function resolveSessionPath(sessionsDir: string | null, sessionRef: string | null) {
+  if (!sessionRef) {
+    return null;
+  }
+
+  if (isAbsolutePath(sessionRef)) {
+    return sessionRef;
+  }
+
+  if (!sessionsDir) {
+    return null;
+  }
+
+  const separator = sessionsDir.includes("\\") ? "\\" : "/";
+  const normalizedDir = sessionsDir.replace(/[\\/]+$/, "");
+  const normalizedRef = sessionRef.replace(/^[\\/]+/, "").replace(/[\\/]+/g, separator);
+  return `${normalizedDir}${separator}${normalizedRef}`;
+}
+
 function summarizeTailEvent(event: EventRecord) {
   const text = typeof event.payload.text === "string" ? event.payload.text : null;
   return {
@@ -128,32 +146,6 @@ function summarizeTailEvent(event: EventRecord) {
     text,
     fallback: event.raw_type,
   };
-}
-
-function categoryTone(category: string) {
-  switch (category.toLowerCase()) {
-    case "system":
-      return "tone-system";
-    case "tool":
-      return "tone-tool";
-    case "error":
-      return "tone-error";
-    default:
-      return "tone-message";
-  }
-}
-
-function bootStateLabel(state: BootState) {
-  switch (state) {
-    case "booting":
-      return "booting";
-    case "needs_home":
-      return "needs_home";
-    case "ready":
-      return "ready";
-    case "error":
-      return "error";
-  }
 }
 
 function readSessionRef(payload: OpenSessionEventPayload) {
@@ -172,44 +164,15 @@ function readSessionRef(payload: OpenSessionEventPayload) {
   return "";
 }
 
-function MetricCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
-  return (
-    <Card className={cn(SURFACE_CARD_CLASS, "h-full")} size="sm">
-      <CardHeader className="gap-2">
-        <CardDescription className="text-[11px] font-semibold uppercase tracking-[0.16em]">
-          {label}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <p className="ui-selectable text-base font-semibold leading-snug">{value}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
 function PreviewEventCard({ event }: { event: SessionPreviewEvent }) {
   return (
     <Card className={SURFACE_CARD_CLASS} size="sm">
-      <CardHeader className="gap-3">
-        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <Badge className="font-mono" variant="outline">
-              #{event.seq}
-            </Badge>
-            <time>{formatTime(event.ts)}</time>
-          </div>
-          <Badge className={cn("rounded-full", categoryTone(event.category))} variant="secondary">
-            {event.event_type}
-          </Badge>
+      <CardContent className="flex flex-col gap-2 p-4">
+        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+          <span className="font-mono">#{event.seq}</span>
+          <time>{formatTime(event.ts)}</time>
+          <span className="font-mono">{event.event_type}</span>
         </div>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
         <p className="ui-selectable text-sm leading-6">{event.summary}</p>
         {event.text ? (
           <p className="ui-selectable text-xs leading-5 text-muted-foreground">{event.text}</p>
@@ -254,7 +217,7 @@ function SessionCatalogCard({
       <Card
         className={cn(
           SURFACE_CARD_CLASS,
-          "transition-colors hover:bg-muted/60",
+          "transition-colors hover:bg-muted/40",
           selected && "ring-2 ring-ring/50",
         )}
         size="sm"
@@ -271,14 +234,6 @@ function SessionCatalogCard({
               >
                 {session.thread_name ?? "thread_name not set"}
               </CardTitle>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {selected ? (
-                <Badge className="rounded-full" variant="secondary">
-                  selected
-                </Badge>
-              ) : null}
             </div>
           </div>
         </CardHeader>
@@ -309,7 +264,6 @@ function SessionCatalogCard({
 export default function App() {
   const [bootState, setBootState] = useState<BootState>("booting");
   const [bootError, setBootError] = useState<string | null>(null);
-  const [detectedHome, setDetectedHome] = useState<string | null>(null);
   const [resolvedHome, setResolvedHome] = useState<ResolvedCodexHome | null>(null);
   const [isSessionDialogOpen, setIsSessionDialogOpen] = useState(false);
   const [sessionQuery, setSessionQuery] = useState("");
@@ -334,6 +288,12 @@ export default function App() {
   const sessionCatalogRequestIdRef = useRef(0);
   const sessionRequestIdRef = useRef(0);
   const pendingSessionRefRef = useRef<string | null>(null);
+  const displayedSessionId = selectedPreview?.session_id ?? selectedSessionId ?? null;
+  const displayedSessionRef = selectedPreview?.session_ref ?? selectedSessionRef ?? null;
+  const displayedSessionPath = resolveSessionPath(
+    resolvedHome?.sessions_dir ?? null,
+    displayedSessionRef,
+  );
 
   const applyPreview = useCallback((preview: SessionPreview) => {
     tailCursorRef.current = preview.tail_cursor;
@@ -554,7 +514,6 @@ export default function App() {
           return;
         }
 
-        setDetectedHome(detected.detected_home);
         if (!detected.detected_home) {
           setBootState("needs_home");
           setTailStatus("CODEX_HOME не найден; viewer не может открыть выбранную сессию.");
@@ -619,7 +578,7 @@ export default function App() {
         const sessionRef = readSessionRef(event.payload);
 
         if (!sessionRef) {
-          setSessionError(`Событие ${OPEN_SESSION_EVENT} пришло без sessionRef.`);
+          setSessionError("Внешняя команда открытия пришла без sessionRef.");
           return;
         }
 
@@ -633,9 +592,7 @@ export default function App() {
       });
 
       unlistenClear = await listen(CLEAR_SESSION_EVENT, () => {
-        clearSelectedSession(
-          "Выбранная сессия очищена внешней командой. Жду нового viewer:open-session.",
-        );
+        clearSelectedSession("Выбранная сессия очищена внешней командой.");
       });
     }
 
@@ -731,11 +688,8 @@ export default function App() {
                   Конкретный rollout-файл резолвится по `session_id` только в момент открытия
                   preview.
                 </DialogDescription>
+                <p className="text-xs text-muted-foreground">{catalogSessions.length} loaded</p>
               </div>
-
-              <Badge className="rounded-full" variant="outline">
-                {catalogSessions.length} loaded
-              </Badge>
             </div>
           </DialogHeader>
 
@@ -883,44 +837,23 @@ export default function App() {
       <main data-ui-scroll-container className="h-full px-4 py-4 sm:px-6 sm:py-6">
         <div className="flex min-h-full w-full flex-col gap-5">
           <Card className={PANEL_CARD_CLASS}>
-            <CardHeader className="gap-4 border-b border-border/50">
-              <div className="flex flex-wrap gap-2">
-                <Badge className="tone-tool rounded-full" variant="outline">
-                  <Sparkles className="size-3.5" />
-                  tauri-ui shell
-                </Badge>
-                <Badge className="rounded-full" variant="secondary">
-                  dialog picker
-                </Badge>
-                <Badge className="rounded-full" variant="outline">
-                  external events
-                </Badge>
-              </div>
-
-              <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-                <div className="flex flex-1 flex-col gap-3">
-                  <CardDescription className="text-[11px] font-semibold uppercase tracking-[0.24em]">
-                    Codex Sessions
-                  </CardDescription>
-                  <CardTitle className="text-4xl font-semibold tracking-[-0.06em] sm:text-6xl">
-                    Log Viewer Tauri UI
-                  </CardTitle>
-                  <CardDescription className="ui-selectable max-w-none text-sm leading-7 sm:text-[15px]">
-                    Main viewer по-прежнему использует всё доступное пространство под preview и
-                    inspector. Встроенный dialog строится по SQLite catalog `threads` с fallback
-                    на `session_index.jsonl`, а rollout-файл подбирается по `session_id` уже в
-                    момент открытия preview. Поддержка внешнего события `viewer:open-session`
-                    остаётся активной.
-                  </CardDescription>
+            <CardHeader className="gap-3 py-4">
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <CardTitle className="text-lg leading-none">Codex Log Viewer</CardTitle>
+                    <span className="inline-flex items-center rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground">
+                      Tail: {liveTailEnabled ? "on" : "off"}
+                    </span>
+                  </div>
                 </div>
 
-                <div className="flex flex-wrap gap-3">
+                <div className="flex flex-wrap gap-2">
                   <Button
                     onClick={() => {
                       setIsSessionDialogOpen(true);
                     }}
                     type="button"
-                    variant="secondary"
                   >
                     <FolderSearch2 data-icon="inline-start" />
                     Choose Session
@@ -928,9 +861,7 @@ export default function App() {
                   {selectedSessionId || selectedSessionRef ? (
                     <Button
                       onClick={() => {
-                        clearSelectedSession(
-                          "Выбор очищен локально. Сессию можно открыть из диалога или через viewer:open-session.",
-                        );
+                        clearSelectedSession("Выбор очищен локально. Сессию можно открыть из диалога.");
                       }}
                       type="button"
                       variant="outline"
@@ -939,54 +870,21 @@ export default function App() {
                       Clear Selection
                     </Button>
                   ) : null}
-                  <Button asChild type="button" variant="outline">
-                    <a
-                      href="https://github.com/agmmnn/tauri-ui"
-                      rel="noreferrer"
-                      target="_blank"
-                    >
-                      <ExternalLink data-icon="inline-start" />
-                      Upstream tauri-ui
-                    </a>
-                  </Button>
                 </div>
               </div>
             </CardHeader>
-
-            <CardContent className="pt-4">
-              <div className="grid gap-3 lg:grid-cols-4">
-                <MetricCard label="Backend" value={bootStateLabel(bootState)} />
-                <MetricCard label="Detected home" value={detectedHome ?? "not found"} />
-                <MetricCard
-                  label="Selected session"
-                  value={selectedPreview?.session_id ?? selectedSessionId ?? "waiting"}
-                />
-                <MetricCard
-                  label="Tail mode"
-                  value={
-                    liveTailEnabled
-                      ? "preview + live tail + picker"
-                      : "preview + manual tail + picker"
-                  }
-                />
-              </div>
-            </CardContent>
           </Card>
 
           <section className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(360px,0.9fr)]">
             <Card className={cn(PANEL_CARD_CLASS, "h-full")}>
-              <CardHeader className="border-b border-border/50">
-                <CardDescription className="text-[11px] font-semibold uppercase tracking-[0.18em]">
-                  Preview
-                </CardDescription>
-                <CardTitle className="text-2xl tracking-[-0.03em]">
-                  {selectedPreview?.session_id ?? selectedSessionId ?? selectedSessionRef ?? "No session selected"}
-                </CardTitle>
+              <CardHeader className="gap-3">
+                <div className="flex items-center gap-2">
+                  <Target className="size-4 text-[color:var(--accent-strong)]" />
+                  <CardTitle className="text-base">Session</CardTitle>
+                </div>
                 <CardDescription className="ui-selectable break-all">
-                  {selectedPreview?.session_ref ??
-                    (selectedSessionId ? `session_id: ${selectedSessionId}` : null) ??
-                    selectedSessionRef ??
-                    `Откройте сессию через диалог или отправьте ${OPEN_SESSION_EVENT}.`}
+                  <span className="block">Id: {displayedSessionId ?? "not set"}</span>
+                  <span className="block">Path: {displayedSessionPath ?? "not resolved"}</span>
                 </CardDescription>
                 <CardAction className="flex gap-2">
                   <Button
@@ -1046,7 +944,7 @@ export default function App() {
                 <Separator />
 
                 <ScrollArea className="min-h-0 flex-1">
-                  <div className="flex flex-col gap-3 pr-4">
+                  <div className="flex flex-col gap-2 pr-4">
                     {selectedPreview ? (
                       selectedPreview.recent_events.map((event) => (
                         <PreviewEventCard
@@ -1058,14 +956,8 @@ export default function App() {
                       <Alert>
                         <Target className="size-4" />
                         <AlertTitle>Viewer ждёт выбора</AlertTitle>
-                        <AlertDescription className="flex flex-col gap-2">
-                          <p>
-                            Откройте встроенный dialog каталога или отправьте событие
-                            `viewer:open-session` из отдельного окна.
-                          </p>
-                          <p className="ui-selectable font-mono text-xs">
-                            payload: {"{ sessionRef: \"YYYY/MM/DD/rollout.jsonl\" }"}
-                          </p>
+                        <AlertDescription>
+                          Откройте встроенный диалог каталога, чтобы выбрать сессию.
                         </AlertDescription>
                       </Alert>
                     )}
@@ -1075,18 +967,9 @@ export default function App() {
             </Card>
 
             <Card className={cn(PANEL_CARD_CLASS, "h-full")}>
-              <CardHeader className="border-b border-border/50">
-                <CardDescription className="text-[11px] font-semibold uppercase tracking-[0.18em]">
-                  Inspector
-                </CardDescription>
-                <CardTitle className="text-2xl tracking-[-0.03em]">Live State</CardTitle>
-                <CardAction>
-                  {resolvedHome ? (
-                    <Badge className="tone-system rounded-full" variant="outline">
-                      initialized
-                    </Badge>
-                  ) : null}
-                </CardAction>
+              <CardHeader className="gap-3">
+                <CardTitle className="text-base">Inspector</CardTitle>
+                <CardDescription>Live state и служебная информация выбранной сессии.</CardDescription>
               </CardHeader>
 
               <CardContent className="min-h-0 flex-1 pt-4">
@@ -1094,64 +977,13 @@ export default function App() {
                   <div className="flex flex-col gap-3 pr-4">
                     <Card className={SURFACE_CARD_CLASS} size="sm">
                       <CardHeader className="gap-2">
-                        <div className="flex items-center gap-2">
-                          <Target className="size-4 text-[color:var(--accent-strong)]" />
-                          <CardTitle className="text-sm">Selection source</CardTitle>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="flex flex-col gap-2">
-                        <p className="text-sm leading-6">
-                          Main viewer получает выбранную сессию из встроенного dialog picker по
-                          `session_id` или
-                          извне по событию:
-                        </p>
-                        <p className="ui-selectable break-all text-sm leading-6">
-                          {selectedPreview?.session_id ?? selectedSessionId ?? "session_id not set"}
-                        </p>
-                        <p className="ui-selectable font-mono text-xs leading-5">
-                          {OPEN_SESSION_EVENT}
-                        </p>
-                        <p className="ui-selectable break-all text-sm leading-6">
-                          {selectedSessionRef ?? "sessionRef not set"}
-                        </p>
-                      </CardContent>
-                    </Card>
-
-                    <Card className={SURFACE_CARD_CLASS} size="sm">
-                      <CardHeader className="gap-2">
-                        <div className="flex items-center gap-2">
-                          <FolderSearch2 className="size-4 text-[color:var(--accent-strong)]" />
-                          <CardTitle className="text-sm">Resolved home</CardTitle>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="flex flex-col gap-2">
-                        <p className="ui-selectable break-all text-sm leading-6">
-                          {resolvedHome?.root ?? "not initialized"}
-                        </p>
-                        <p className="ui-selectable break-all text-xs leading-5 text-muted-foreground">
-                          {resolvedHome?.session_index_path ?? "session index unavailable"}
-                        </p>
-                      </CardContent>
-                    </Card>
-
-                    <Card className={SURFACE_CARD_CLASS} size="sm">
-                      <CardHeader className="gap-2">
-                        <div className="flex items-center gap-2">
-                          <RadioTower className="size-4 text-[color:var(--emerald)]" />
+                        <div className="flex items-center justify-between gap-2">
                           <CardTitle className="text-sm">Tail status</CardTitle>
-                        </div>
-                        <CardAction className="flex items-center gap-2">
-                          <Badge
-                            className="rounded-full"
-                            variant={liveTailEnabled ? "secondary" : "outline"}
-                          >
-                            {liveTailEnabled ? "on" : "off"}
-                          </Badge>
                           <Button onClick={toggleLiveTail} size="sm" type="button" variant="outline">
                             <RadioTower data-icon="inline-start" />
                             {liveTailEnabled ? "Off" : "On"}
                           </Button>
-                        </CardAction>
+                        </div>
                       </CardHeader>
                       <CardContent className="flex flex-col gap-2">
                         <p className="text-sm leading-6">{tailStatus}</p>
@@ -1165,10 +997,7 @@ export default function App() {
 
                     <Card className={SURFACE_CARD_CLASS} size="sm">
                       <CardHeader className="gap-2">
-                        <div className="flex items-center gap-2">
-                          <Layers3 className="size-4 text-[color:var(--plum)]" />
-                          <CardTitle className="text-sm">Session summary</CardTitle>
-                        </div>
+                        <CardTitle className="text-sm">Session summary</CardTitle>
                       </CardHeader>
                       <CardContent>
                         <dl className="grid grid-cols-2 gap-3 text-sm">
@@ -1200,37 +1029,27 @@ export default function App() {
 
                     <Card className={SURFACE_CARD_CLASS} size="sm">
                       <CardHeader className="gap-2">
-                        <div className="flex items-center gap-2">
-                          <Sparkles className="size-4 text-[color:var(--accent-strong)]" />
-                          <CardTitle className="text-sm">Live tail</CardTitle>
-                        </div>
+                        <CardTitle className="text-sm">Live tail</CardTitle>
                       </CardHeader>
-                      <CardContent className="flex flex-col gap-3">
+                      <CardContent className="flex flex-col gap-2">
                         {liveTailRows.map((event) => (
-                          <Card
-                            className="border-border/60 bg-background/60"
+                          <div
+                            className="rounded-md border border-border px-3 py-2"
                             key={`${event.seq}-${event.ts}`}
-                            size="sm"
                           >
-                            <CardHeader className="gap-2">
-                              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                                <span>{formatTime(event.ts)}</span>
-                                <Badge className="font-mono text-[11px]" variant="outline">
-                                  {event.eventType}
-                                </Badge>
-                              </div>
-                            </CardHeader>
-                            <CardContent>
-                              <p className="ui-selectable text-sm leading-6">
-                                {event.text ?? event.fallback}
-                              </p>
-                            </CardContent>
-                          </Card>
+                            <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+                              <span>{formatTime(event.ts)}</span>
+                              <span className="font-mono">{event.eventType}</span>
+                            </div>
+                            <p className="ui-selectable mt-2 text-sm leading-6">
+                              {event.text ?? event.fallback}
+                            </p>
+                          </div>
                         ))}
 
                         {!liveTailRows.length ? (
                           <Alert>
-                            <Sparkles className="size-4" />
+                            <RadioTower className="size-4" />
                             <AlertTitle>{liveTailEnabled ? "Tail idle" : "Tail paused"}</AlertTitle>
                             <AlertDescription>
                               {liveTailEnabled
