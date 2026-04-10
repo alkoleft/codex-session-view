@@ -65,6 +65,24 @@ worker crate. Каноническая логика ingestion, session discovery
 - `updated_at` берётся из `threads.updated_at` и конвертируется из Unix seconds в RFC3339;
 - конкретный `session_ref` для preview не хранится в списке и резолвится отдельно по
   `session_id` через `threads.rollout_path`;
+- явный exact lookup по `session_id` на первой странице дополнительно пытается синтезировать
+  один file-backed `IndexedSessionSummary`, если в базовой SQLite/indexed-выдаче такого
+  `session_id` нет, а rollout-файл нашёлся через `resolve_session_ref_by_id(session_id)`;
+- обычный free-text `query` не запускает рекурсивный обход `CODEX_HOME/sessions` и остаётся
+  целиком на SQLite/session_index path;
+- такой synth-item вставляется первым, не ломает порядок основной SQLite/indexed-выдачи,
+  уменьшает число обычных элементов страницы до `limit - 1`, а `next_cursor` продолжает считать
+  только реально потреблённые элементы базовой выдачи;
+- `cursor` для indexed catalog является opaque-token в формате `indexed:v1:<offset>:<flag>`;
+  backend по-прежнему принимает legacy numeric offset на входе, но в ответах возвращает только
+  opaque `next_cursor`;
+- пустой cursor и `"0"` означают initial page, а если synth-item уже потреблён при базовом
+  `offset == 0` (например, при `limit = 1`), следующий запрос обязан идти с opaque cursor-token,
+  чтобы fallback не инжектился повторно;
+- file-backed exact fallback покрывает только rollout-файлы, проходящие standalone open-contract
+  `rollout-<timestamp>-<session-id>.jsonl` + `session_meta.payload.id == session-id`;
+- `meta-only` id, существующие только в первой строке файла без basename-контракта, остаются вне
+  текущего scope и не участвуют в exact fallback;
 - если SQLite недоступен или несовместим по схеме, каталог fail-soft откатывается к
   `session_index.jsonl`, а причина попадает в diagnostics;
 - если rollout-файл для выбранного `session_id` не найден ни по `threads.rollout_path`, ни

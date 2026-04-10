@@ -10,10 +10,10 @@ use crate::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_META, AGENT_SESSION, AGENT_SESSION_FOREIGN,
     COLLAB_CLOSE_AGENT, COLLAB_RESUME_AGENT, COLLAB_SEND_INPUT, COLLAB_SPAWN_AGENT, COLLAB_WAIT,
     CONTEXT_COMPACTED, CONTEXT_COMPACTED_DUPLICATE, ERROR, FILE_CHANGE, INFO_TOKENS, MCP_CALL,
-    MCP_RESULT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE,
-    RAW_UNPARSED, RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE,
-    TASK_COMPLETED, TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT,
-    USER_INPUT_REQUEST, WEB_OPEN, WEB_SEARCH,
+    MCP_RESULT, MESSAGE_COMMENTARY, MESSAGE_USER, PATCH_APPLY, PATCH_APPLY_DUPLICATE, RAW_UNPARSED,
+    RUNTIME_CONTEXT, SHELL_CALL, SHELL_RESULT, STDERR_LINE, STDIN_WRITE, TASK_COMPLETED,
+    TASK_STARTED, THREAD_STARTED, TODO_UPDATE, TOOL_CALL, TOOL_RESULT, USER_INPUT_REQUEST,
+    WEB_OPEN, WEB_SEARCH,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1362,9 +1362,7 @@ fn is_update_plan_todo_payload(payload: Option<&Map<String, Value>>) -> bool {
         .and_then(Value::as_str)
         .map(|tool_name| tool_name == "update_plan")
         .unwrap_or(false)
-        || payload
-            .and_then(|obj| obj.get("tool_use_id"))
-            .is_some()
+        || payload.and_then(|obj| obj.get("tool_use_id")).is_some()
         || payload
             .and_then(|obj| obj.get("input"))
             .and_then(Value::as_object)

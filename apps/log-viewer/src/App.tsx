@@ -77,6 +77,16 @@ const CLEAR_SESSION_EVENT = "viewer:clear-session";
 const SESSIONS_PAGE_SIZE = 50;
 const LIVE_TAIL_POLL_MS = 2500;
 const SUMMARY_TEXT_PREVIEW_LIMIT = 220;
+const SESSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function extractExactSessionId(query: string | undefined) {
+  const trimmed = query?.trim();
+  if (!trimmed || !SESSION_ID_PATTERN.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
+}
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -661,6 +671,7 @@ export default function App() {
       try {
         const page = await listIndexedSessions({
           cursor,
+          exactSessionId: extractExactSessionId(query),
           limit: SESSIONS_PAGE_SIZE,
           query,
         });

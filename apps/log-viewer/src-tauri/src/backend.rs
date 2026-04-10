@@ -5,8 +5,9 @@ use codex_log::error::{AppError, AppResult};
 use codex_log::events::projector::{categorize_event, summarize_event_full, EventSummaryCategory};
 use codex_log::events::record::EventRecord;
 use codex_log::session::{
-    IndexedSessionCatalogPage, IndexedSessionSummary, LoadedSession, ResolvedCodexHome, SessionCatalog,
-    SessionCatalogPage, SessionLoader, SessionReadContext, SessionReader, TailCursor, TailResult,
+    IndexedSessionCatalogPage, IndexedSessionSummary, LoadedSession, ResolvedCodexHome,
+    SessionCatalog, SessionCatalogPage, SessionLoader, SessionReadContext, SessionReader,
+    TailCursor, TailResult,
 };
 use codex_log::tree::validate_standalone_rollout_root;
 use serde::{Deserialize, Serialize};
@@ -88,9 +89,10 @@ impl ViewerBackend {
         limit: Option<usize>,
         cursor: Option<&str>,
         query: Option<&str>,
+        exact_session_id: Option<&str>,
     ) -> AppResult<IndexedSessionCatalogPage> {
         let catalog = SessionCatalog::new(self.require_home()?);
-        catalog.list_indexed_sessions(limit, cursor, query)
+        catalog.list_indexed_sessions(limit, cursor, query, exact_session_id)
     }
 
     pub fn load_session(
@@ -344,7 +346,7 @@ mod tests {
             .expect("home should initialize");
 
         let indexed_page = backend
-            .list_indexed_sessions(Some(10), None, None)
+            .list_indexed_sessions(Some(10), None, None, None)
             .expect("indexed sessions should list");
         assert_eq!(indexed_page.items.len(), 1);
         assert_eq!(indexed_page.items[0].session_id, "session-a");

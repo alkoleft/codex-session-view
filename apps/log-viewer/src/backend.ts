@@ -72,6 +72,7 @@ export type IndexedSessionCatalogPage = {
 
 export type ListSessionsArgs = {
   query?: string;
+  exactSessionId?: string | null;
   cursor?: string | null;
   limit?: number;
 };
@@ -342,9 +343,14 @@ export function listSessions(args: ListSessionsArgs = {}) {
 export function listIndexedSessions(args: ListSessionsArgs = {}) {
   const query =
     args.query && args.query.trim().length > 0 ? args.query.trim() : null;
+  const exactSessionId =
+    args.exactSessionId && args.exactSessionId.trim().length > 0
+      ? args.exactSessionId.trim()
+      : null;
   return invokeBackend<IndexedSessionCatalogPage>("list_indexed_sessions", {
     limit: args.limit ?? 40,
     query,
+    exactSessionId,
     cursor: args.cursor ?? null,
   });
 }

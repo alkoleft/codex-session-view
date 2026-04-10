@@ -1382,7 +1382,10 @@ fn enrich_response_item_shell_result_payload(
     }
 
     if let Some(formatted_output) = response_item_shell_formatted_output(raw_output) {
-        object.insert("formatted_output".to_string(), Value::from(formatted_output));
+        object.insert(
+            "formatted_output".to_string(),
+            Value::from(formatted_output),
+        );
     }
 }
 

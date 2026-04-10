@@ -25,6 +25,7 @@ const MAX_PAGE_LIMIT: usize = 500;
 const RECENT_DEDUP_WINDOW: usize = 128;
 const STATE_DB_PREFIX: &str = "state_";
 const STATE_DB_SUFFIX: &str = ".sqlite";
+const INDEXED_SESSION_CURSOR_PREFIX: &str = "indexed:v1:";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedCodexHome {
@@ -184,6 +185,68 @@ pub struct IndexedSessionCatalogPage {
     pub diagnostics: Vec<SessionDiagnostic>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IndexedSessionCatalogCursor {
+    offset: usize,
+    exact_fallback_consumed: bool,
+}
+
+impl IndexedSessionCatalogCursor {
+    fn parse(cursor: Option<&str>) -> AppResult<Self> {
+        let Some(value) = cursor.map(str::trim).filter(|value| !value.is_empty()) else {
+            return Ok(Self {
+                offset: 0,
+                exact_fallback_consumed: false,
+            });
+        };
+
+        if let Some(raw) = value.strip_prefix(INDEXED_SESSION_CURSOR_PREFIX) {
+            let Some((offset_raw, consumed_raw)) = raw.split_once(':') else {
+                return Err(invalid_indexed_session_cursor());
+            };
+            let offset = offset_raw
+                .parse::<usize>()
+                .map_err(|_| invalid_indexed_session_cursor())?;
+            let exact_fallback_consumed = match consumed_raw {
+                "0" => false,
+                "1" => true,
+                _ => return Err(invalid_indexed_session_cursor()),
+            };
+            return Ok(Self {
+                offset,
+                exact_fallback_consumed,
+            });
+        }
+
+        let offset = value
+            .parse::<usize>()
+            .map_err(|_| invalid_indexed_session_cursor())?;
+        Ok(Self {
+            offset,
+            exact_fallback_consumed: false,
+        })
+    }
+
+    fn allows_exact_fallback(&self) -> bool {
+        self.offset == 0 && !self.exact_fallback_consumed
+    }
+
+    fn encode(&self) -> String {
+        format!(
+            "{INDEXED_SESSION_CURSOR_PREFIX}{}:{}",
+            self.offset,
+            usize::from(self.exact_fallback_consumed)
+        )
+    }
+}
+
+fn invalid_indexed_session_cursor() -> AppError {
+    AppError::Validation {
+        field: "cursor",
+        reason: "must be a numeric offset or opaque indexed session cursor token".to_string(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionCatalog {
     home: ResolvedCodexHome,
@@ -311,36 +374,36 @@ impl SessionCatalog {
         limit: Option<usize>,
         cursor: Option<&str>,
         query: Option<&str>,
+        exact_session_id: Option<&str>,
     ) -> AppResult<IndexedSessionCatalogPage> {
         let limit = limit.unwrap_or(DEFAULT_PAGE_LIMIT).clamp(1, MAX_PAGE_LIMIT);
-        let offset = cursor
+        let cursor = IndexedSessionCatalogCursor::parse(cursor)?;
+        let offset = cursor.offset;
+
+        let exact_session_id = exact_session_id
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(|value| {
-                value.parse::<usize>().map_err(|_| AppError::Validation {
-                    field: "cursor",
-                    reason: "must be a numeric offset".to_string(),
-                })
-            })
-            .transpose()?
-            .unwrap_or(0);
-
+            .map(str::to_string);
         let query = query
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_lowercase);
 
         let mut diagnostics = Vec::new();
+        let mut index_overlay = None;
         let mut sessions =
             if let Some(state_sessions) = self.load_state_indexed_sessions(&mut diagnostics)? {
                 state_sessions
             } else {
-                self.load_index_overlay(&mut diagnostics)?
-                    .into_iter()
+                let overlay = self.load_index_overlay(&mut diagnostics)?;
+                let sessions = overlay
+                    .iter()
                     .map(|(session_id, entry)| {
                         indexed_session_summary_from_index_entry(&session_id, &entry)
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                index_overlay = Some(overlay);
+                sessions
             };
 
         sessions.retain(|summary| matches_index_query(summary, query.as_deref()));
@@ -352,12 +415,58 @@ impl SessionCatalog {
                 .then_with(|| left.session_id.cmp(&right.session_id))
         });
 
-        let next_cursor = if offset + limit < sessions.len() {
-            Some((offset + limit).to_string())
+        let exact_fallback = if cursor.allows_exact_fallback() {
+            exact_session_id
+                .as_deref()
+                .filter(|session_id| {
+                    !sessions
+                        .iter()
+                        .any(|summary| summary.session_id == *session_id)
+                })
+                .map(|session_id| {
+                    self.find_file_backed_indexed_session(
+                        session_id,
+                        &mut diagnostics,
+                        &mut index_overlay,
+                    )
+                })
+                .transpose()?
+                .flatten()
+                .and_then(|summary| {
+                    matches_index_query(&summary, query.as_deref()).then_some(summary)
+                })
         } else {
             None
         };
-        let items = sessions.into_iter().skip(offset).take(limit).collect();
+
+        let regular_limit = limit.saturating_sub(usize::from(exact_fallback.is_some()));
+        let session_count = sessions.len();
+        let regular_items = sessions
+            .into_iter()
+            .skip(offset)
+            .take(regular_limit)
+            .collect::<Vec<_>>();
+        let consumed_regular = regular_items.len();
+        let exact_fallback_injected = exact_fallback.is_some();
+        let next_offset = offset + consumed_regular;
+        let next_cursor = if next_offset < session_count {
+            Some(
+                IndexedSessionCatalogCursor {
+                    offset: next_offset,
+                    exact_fallback_consumed: cursor.exact_fallback_consumed
+                        || exact_fallback_injected,
+                }
+                .encode(),
+            )
+        } else {
+            None
+        };
+        let mut items =
+            Vec::with_capacity(regular_items.len() + usize::from(exact_fallback.is_some()));
+        if let Some(fallback) = exact_fallback {
+            items.push(fallback);
+        }
+        items.extend(regular_items);
 
         Ok(IndexedSessionCatalogPage {
             items,
@@ -366,7 +475,10 @@ impl SessionCatalog {
         })
     }
 
-    pub fn find_indexed_session(&self, session_id: &str) -> AppResult<Option<IndexedSessionSummary>> {
+    pub fn find_indexed_session(
+        &self,
+        session_id: &str,
+    ) -> AppResult<Option<IndexedSessionSummary>> {
         let session_id = session_id.trim();
         if session_id.is_empty() {
             return Ok(None);
@@ -378,9 +490,14 @@ impl SessionCatalog {
 
         let mut diagnostics = Vec::new();
         let overlay = self.load_index_overlay(&mut diagnostics)?;
-        Ok(overlay
-            .get(session_id)
-            .map(|entry| indexed_session_summary_from_index_entry(session_id, entry)))
+        if let Some(entry) = overlay.get(session_id) {
+            return Ok(Some(indexed_session_summary_from_index_entry(
+                session_id, entry,
+            )));
+        }
+
+        let mut overlay = Some(overlay);
+        self.find_file_backed_indexed_session(session_id, &mut diagnostics, &mut overlay)
     }
 
     pub fn find_session(&self, session_id: &str) -> AppResult<Option<SessionSummary>> {
@@ -579,7 +696,10 @@ impl SessionCatalog {
         Ok(Some(sessions))
     }
 
-    fn find_state_indexed_session(&self, session_id: &str) -> AppResult<Option<IndexedSessionSummary>> {
+    fn find_state_indexed_session(
+        &self,
+        session_id: &str,
+    ) -> AppResult<Option<IndexedSessionSummary>> {
         let Some(state_db_path) = find_latest_state_db_path(&self.home.root)? else {
             return Ok(None);
         };
@@ -622,6 +742,44 @@ impl SessionCatalog {
 
         Ok(rollout_path
             .and_then(|value| rollout_path_to_session_ref(&self.home.sessions_dir, value.trim())))
+    }
+
+    fn find_file_backed_indexed_session(
+        &self,
+        session_id: &str,
+        diagnostics: &mut Vec<SessionDiagnostic>,
+        index_overlay: &mut Option<HashMap<String, SessionIndexEntry>>,
+    ) -> AppResult<Option<IndexedSessionSummary>> {
+        let Some(session_ref) = self.resolve_session_ref_by_id(session_id)? else {
+            return Ok(None);
+        };
+        let path = self.home.resolve_session_ref(&session_ref)?;
+        let validated_session_id = match validate_standalone_rollout_root(&path) {
+            Ok(value) => value,
+            Err(_) => return Ok(None),
+        };
+        if validated_session_id != session_id {
+            return Ok(None);
+        }
+
+        if index_overlay.is_none() {
+            *index_overlay = Some(self.load_index_overlay(diagnostics)?);
+        }
+
+        let preview = read_session_meta_preview(&path)?;
+        let modified_at = fs::metadata(&path)?
+            .modified()
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let overlay_entry = index_overlay
+            .as_ref()
+            .and_then(|overlay| overlay.get(session_id));
+
+        Ok(Some(indexed_session_summary_from_file(
+            session_id,
+            modified_at,
+            preview.cwd,
+            overlay_entry,
+        )))
     }
 }
 
@@ -1093,8 +1251,50 @@ fn indexed_session_summary_from_index_entry(
         session_id: session_id.to_string(),
         updated_at: entry.updated_at.clone(),
         thread_name: entry.thread_name.clone(),
-        thread_name_source: entry.thread_name.as_ref().map(|_| "session_index".to_string()),
+        thread_name_source: entry
+            .thread_name
+            .as_ref()
+            .map(|_| "session_index".to_string()),
         cwd: None,
+        agent_name: None,
+        tokens_used: None,
+        created_at: None,
+        source: None,
+        model_provider: None,
+        sandbox_policy_kind: None,
+        approval_mode: None,
+        has_user_event: None,
+        archived: None,
+        archived_at: None,
+        git_sha: None,
+        git_branch: None,
+        git_origin_url: None,
+        cli_version: None,
+        agent_role: None,
+        memory_mode: None,
+        model: None,
+        reasoning_effort: None,
+        agent_path: None,
+    }
+}
+
+fn indexed_session_summary_from_file(
+    session_id: &str,
+    modified_at: SystemTime,
+    cwd: Option<String>,
+    overlay_entry: Option<&SessionIndexEntry>,
+) -> IndexedSessionSummary {
+    IndexedSessionSummary {
+        session_id: session_id.to_string(),
+        updated_at: system_time_to_rfc3339(modified_at),
+        thread_name: overlay_entry.and_then(|entry| entry.thread_name.clone()),
+        thread_name_source: overlay_entry.and_then(|entry| {
+            entry
+                .thread_name
+                .as_ref()
+                .map(|_| "session_index".to_string())
+        }),
+        cwd,
         agent_name: None,
         tokens_used: None,
         created_at: None,
@@ -1612,7 +1812,7 @@ mod tests {
 
     use super::{
         IndexedSessionCatalogPage, ResolvedCodexHome, SessionCatalog, SessionLoader,
-        SessionReadContext, SessionReader,
+        SessionReadContext, SessionReader, INDEXED_SESSION_CURSOR_PREFIX,
     };
     use rusqlite::Connection;
 
@@ -1806,7 +2006,7 @@ mod tests {
         let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
         let catalog = SessionCatalog::new(home);
         let page: IndexedSessionCatalogPage = catalog
-            .list_indexed_sessions(Some(10), None, None)
+            .list_indexed_sessions(Some(10), None, None, None)
             .expect("indexed catalog should load");
 
         assert_eq!(page.items.len(), 2);
@@ -1866,7 +2066,7 @@ mod tests {
         let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
         let catalog = SessionCatalog::new(home);
         let page: IndexedSessionCatalogPage = catalog
-            .list_indexed_sessions(Some(10), None, None)
+            .list_indexed_sessions(Some(10), None, None, None)
             .expect("indexed catalog should load");
 
         assert_eq!(page.items.len(), 2);
@@ -1893,6 +2093,316 @@ mod tests {
             .items
             .iter()
             .any(|item| item.session_id == "session-index-only"));
+    }
+
+    #[test]
+    fn indexed_catalog_free_text_query_does_not_inject_file_backed_match() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let sessions = home.join("sessions").join("2026").join("04").join("07");
+        fs::create_dir_all(&sessions).expect("sessions dir should exist");
+
+        let exact = sessions.join("rollout-2026-04-07T10-00-00-session-a.jsonl");
+        let other_a = sessions.join("rollout-2026-04-07T10-00-00-other-a.jsonl");
+        let other_b = sessions.join("rollout-2026-04-07T10-00-00-other-b.jsonl");
+        write_rollout_file(&exact, "session-a", &[]);
+        write_rollout_file(&other_a, "other-a", &[]);
+        write_rollout_file(&other_b, "other-b", &[]);
+        write_state_threads_db(
+            &home,
+            &[
+                StateThreadRow {
+                    session_id: "other-a",
+                    rollout_path: &other_a,
+                    updated_at: 1_775_560_607,
+                    cwd: "/repo/alpha",
+                    title: "contains session-a",
+                    first_user_message: "",
+                    agent_nickname: None,
+                    tokens_used: 41,
+                },
+                StateThreadRow {
+                    session_id: "other-b",
+                    rollout_path: &other_b,
+                    updated_at: 1_775_560_701,
+                    cwd: "/repo/beta",
+                    title: "contains session-a too",
+                    first_user_message: "",
+                    agent_nickname: None,
+                    tokens_used: 42,
+                },
+            ],
+        );
+
+        let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
+        let catalog = SessionCatalog::new(home);
+        let page = catalog
+            .list_indexed_sessions(Some(10), None, Some("session-a"), None)
+            .expect("indexed catalog should load");
+
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.items[0].session_id, "other-b");
+        assert_eq!(page.items[1].session_id, "other-a");
+        assert_eq!(page.next_cursor, None);
+    }
+
+    #[test]
+    fn indexed_catalog_injects_exact_file_backed_match_on_first_page_only() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let sessions = home.join("sessions").join("2026").join("04").join("07");
+        fs::create_dir_all(&sessions).expect("sessions dir should exist");
+
+        let exact = sessions.join("rollout-2026-04-07T10-00-00-session-a.jsonl");
+        let other_a = sessions.join("rollout-2026-04-07T10-00-00-other-a.jsonl");
+        let other_b = sessions.join("rollout-2026-04-07T10-00-00-other-b.jsonl");
+        write_rollout_file(&exact, "session-a", &[]);
+        write_rollout_file(&other_a, "other-a", &[]);
+        write_rollout_file(&other_b, "other-b", &[]);
+        write_state_threads_db(
+            &home,
+            &[
+                StateThreadRow {
+                    session_id: "other-a",
+                    rollout_path: &other_a,
+                    updated_at: 1_775_560_607,
+                    cwd: "/repo/alpha",
+                    title: "contains session-a",
+                    first_user_message: "",
+                    agent_nickname: None,
+                    tokens_used: 41,
+                },
+                StateThreadRow {
+                    session_id: "other-b",
+                    rollout_path: &other_b,
+                    updated_at: 1_775_560_701,
+                    cwd: "/repo/beta",
+                    title: "contains session-a too",
+                    first_user_message: "",
+                    agent_nickname: None,
+                    tokens_used: 42,
+                },
+            ],
+        );
+
+        let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
+        let catalog = SessionCatalog::new(home);
+        let first_page = catalog
+            .list_indexed_sessions(Some(2), None, Some("session-a"), Some("session-a"))
+            .expect("indexed catalog should load");
+
+        assert_eq!(first_page.items.len(), 2);
+        assert_eq!(first_page.items[0].session_id, "session-a");
+        assert_eq!(first_page.items[0].cwd.as_deref(), Some("/repo"));
+        assert_eq!(first_page.items[0].tokens_used, None);
+        assert_eq!(first_page.items[1].session_id, "other-b");
+        let expected_second_cursor = format!("{INDEXED_SESSION_CURSOR_PREFIX}1:1");
+        assert_eq!(
+            first_page.next_cursor.as_deref(),
+            Some(expected_second_cursor.as_str())
+        );
+
+        let second_cursor = first_page
+            .next_cursor
+            .clone()
+            .expect("first page should expose opaque continuation");
+        assert_eq!(second_cursor, expected_second_cursor);
+        let second_page = catalog
+            .list_indexed_sessions(
+                Some(2),
+                Some(&second_cursor),
+                Some("session-a"),
+                Some("session-a"),
+            )
+            .expect("second page should load");
+
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(second_page.items[0].session_id, "other-a");
+        assert_eq!(second_page.next_cursor, None);
+    }
+
+    #[test]
+    fn indexed_catalog_exact_fallback_limit_one_encodes_page_state_in_cursor() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let sessions = home.join("sessions").join("2026").join("04").join("07");
+        fs::create_dir_all(&sessions).expect("sessions dir should exist");
+
+        let exact = sessions.join("rollout-2026-04-07T10-00-00-session-a.jsonl");
+        let other_a = sessions.join("rollout-2026-04-07T10-00-00-other-a.jsonl");
+        let other_b = sessions.join("rollout-2026-04-07T10-00-00-other-b.jsonl");
+        write_rollout_file(&exact, "session-a", &[]);
+        write_rollout_file(&other_a, "other-a", &[]);
+        write_rollout_file(&other_b, "other-b", &[]);
+        write_state_threads_db(
+            &home,
+            &[
+                StateThreadRow {
+                    session_id: "other-a",
+                    rollout_path: &other_a,
+                    updated_at: 1_775_560_607,
+                    cwd: "/repo/alpha",
+                    title: "contains session-a",
+                    first_user_message: "",
+                    agent_nickname: None,
+                    tokens_used: 41,
+                },
+                StateThreadRow {
+                    session_id: "other-b",
+                    rollout_path: &other_b,
+                    updated_at: 1_775_560_701,
+                    cwd: "/repo/beta",
+                    title: "contains session-a too",
+                    first_user_message: "",
+                    agent_nickname: None,
+                    tokens_used: 42,
+                },
+            ],
+        );
+
+        let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
+        let catalog = SessionCatalog::new(home);
+        let first_page = catalog
+            .list_indexed_sessions(Some(1), None, Some("session-a"), Some("session-a"))
+            .expect("indexed catalog should load");
+        let first_page_from_zero = catalog
+            .list_indexed_sessions(Some(1), Some("0"), Some("session-a"), Some("session-a"))
+            .expect("numeric zero cursor should load");
+        let first_page_from_empty = catalog
+            .list_indexed_sessions(Some(1), Some(""), Some("session-a"), Some("session-a"))
+            .expect("empty cursor should load");
+
+        assert_eq!(first_page.items.len(), 1);
+        assert_eq!(first_page.items[0].session_id, "session-a");
+        assert_eq!(first_page.items[0].cwd.as_deref(), Some("/repo"));
+        assert_eq!(first_page, first_page_from_zero);
+        assert_eq!(first_page, first_page_from_empty);
+
+        let second_cursor = first_page
+            .next_cursor
+            .clone()
+            .expect("fallback-only first page must expose next cursor");
+        assert_eq!(second_cursor, format!("{INDEXED_SESSION_CURSOR_PREFIX}0:1"));
+
+        let second_page = catalog
+            .list_indexed_sessions(
+                Some(1),
+                Some(&second_cursor),
+                Some("session-a"),
+                Some("session-a"),
+            )
+            .expect("opaque cursor continuation should load");
+
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(second_page.items[0].session_id, "other-b");
+        let third_cursor = format!("{INDEXED_SESSION_CURSOR_PREFIX}1:1");
+        assert_eq!(
+            second_page.next_cursor.as_deref(),
+            Some(third_cursor.as_str())
+        );
+
+        let third_page = catalog
+            .list_indexed_sessions(
+                Some(1),
+                second_page.next_cursor.as_deref(),
+                Some("session-a"),
+                Some("session-a"),
+            )
+            .expect("legacy numeric continuation should load");
+
+        assert_eq!(third_page.items.len(), 1);
+        assert_eq!(third_page.items[0].session_id, "other-a");
+        assert_eq!(third_page.next_cursor, None);
+
+        let third_page_from_legacy_numeric = catalog
+            .list_indexed_sessions(Some(1), Some("1"), Some("session-a"), Some("session-a"))
+            .expect("legacy numeric continuation should still load");
+
+        assert_eq!(third_page_from_legacy_numeric, third_page);
+    }
+
+    #[test]
+    fn indexed_catalog_does_not_duplicate_exact_match_when_primary_contains_it() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let sessions = home.join("sessions").join("2026").join("04").join("07");
+        fs::create_dir_all(&sessions).expect("sessions dir should exist");
+
+        let session_a = sessions.join("rollout-2026-04-07T10-00-00-session-a.jsonl");
+        write_rollout_file(&session_a, "session-a", &[]);
+        write_state_threads_db(
+            &home,
+            &[StateThreadRow {
+                session_id: "session-a",
+                rollout_path: &session_a,
+                updated_at: 1_775_560_607,
+                cwd: "/repo/alpha",
+                title: "SQLite Alpha",
+                first_user_message: "",
+                agent_nickname: None,
+                tokens_used: 42,
+            }],
+        );
+
+        let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
+        let catalog = SessionCatalog::new(home);
+        let page = catalog
+            .list_indexed_sessions(Some(10), None, Some("session-a"), Some("session-a"))
+            .expect("indexed catalog should load");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].session_id, "session-a");
+        assert_eq!(page.items[0].tokens_used, Some(42));
+        assert_eq!(page.items[0].cwd.as_deref(), Some("/repo/alpha"));
+    }
+
+    #[test]
+    fn indexed_catalog_exact_fallback_ignores_meta_only_non_rollout_files() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let sessions = home.join("sessions").join("2026").join("04").join("07");
+        fs::create_dir_all(&sessions).expect("sessions dir should exist");
+
+        write_rollout_file(&sessions.join("meta-only.jsonl"), "session-a", &[]);
+
+        let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
+        let catalog = SessionCatalog::new(home);
+        let page = catalog
+            .list_indexed_sessions(Some(10), None, Some("session-a"), Some("session-a"))
+            .expect("indexed catalog should load");
+
+        assert!(page.items.is_empty());
+        assert_eq!(
+            catalog
+                .find_indexed_session("session-a")
+                .expect("lookup should succeed"),
+            None
+        );
+    }
+
+    #[test]
+    fn find_indexed_session_synthesizes_file_backed_summary() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let sessions = home.join("sessions").join("2026").join("04").join("07");
+        fs::create_dir_all(&sessions).expect("sessions dir should exist");
+
+        write_rollout_file(
+            &sessions.join("rollout-2026-04-07T10-00-00-session-a.jsonl"),
+            "session-a",
+            &[],
+        );
+
+        let home = ResolvedCodexHome::initialize(Some(home)).expect("codex home should resolve");
+        let catalog = SessionCatalog::new(home);
+        let summary = catalog
+            .find_indexed_session("session-a")
+            .expect("lookup should succeed")
+            .expect("summary should exist");
+
+        assert_eq!(summary.session_id, "session-a");
+        assert_eq!(summary.cwd.as_deref(), Some("/repo"));
+        assert_eq!(summary.tokens_used, None);
     }
 
     #[test]

@@ -40,9 +40,15 @@ pub fn list_indexed_sessions(
     limit: Option<usize>,
     cursor: Option<String>,
     query: Option<String>,
+    exact_session_id: Option<String>,
 ) -> CommandResult<IndexedSessionCatalogPage> {
     state
-        .list_indexed_sessions(limit, cursor.as_deref(), query.as_deref())
+        .list_indexed_sessions(
+            limit,
+            cursor.as_deref(),
+            query.as_deref(),
+            exact_session_id.as_deref(),
+        )
         .map_err(|err| err.to_string())
 }
 
