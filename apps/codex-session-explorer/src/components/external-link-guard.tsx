@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
 import { DEBUG_EVENT_NAME } from "@/lib/debug-events";
+import { isTauri } from "@/lib/tauri";
 
 const EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:", "tel:"]);
 
@@ -40,8 +41,24 @@ function shouldOpenExternally(anchor: HTMLAnchorElement) {
 }
 
 async function openExternalLink(href: string) {
-  const { openUrl } = await import("@tauri-apps/plugin-opener");
-  await openUrl(href);
+  const url = new URL(href, window.location.href);
+
+  if (isTauri()) {
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener");
+      await openUrl(href);
+      return;
+    } catch {
+      // Fallback to the browser path below when the plugin is unavailable.
+    }
+  }
+
+  if (url.protocol === "mailto:" || url.protocol === "tel:") {
+    window.location.assign(href);
+    return;
+  }
+
+  window.open(href, "_blank", "noopener,noreferrer");
 }
 
 function emitExternalLinkDebugEvent(href: string) {

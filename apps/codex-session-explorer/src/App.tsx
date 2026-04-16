@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
 import {
   AlertTriangle,
   FolderSearch2,
@@ -17,14 +16,8 @@ import {
 } from "lucide-react";
 
 import {
-  detectCodexHome,
+  createViewerBackendClient,
   extractErrorMessage,
-  initializeCodexHome,
-  listIndexedSessions,
-  loadSession,
-  loadSessionPreviewById,
-  loadSessionPreview,
-  tailSession,
   type IndexedSessionSummary,
   type LoadedSession,
   type ResolvedCodexHome,
@@ -32,6 +25,7 @@ import {
   type SessionPreview,
   type TailCursor,
   type TimelineItem,
+  type ViewerBackendCapabilities,
 } from "./backend";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -60,25 +54,18 @@ import {
   buildAgentGraphViewModel,
   preferredAgentThreadId,
 } from "@/components/agent-thread-view-model";
-import { isTauri } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
 
 type BootState = "booting" | "needs_home" | "ready" | "error";
 
-type OpenSessionEventPayload = {
-  sessionRef?: string;
-  session_ref?: string;
-} | string;
-
 const PANEL_CARD_CLASS = "min-h-0 gap-0 border-border bg-card shadow-none";
 const SURFACE_CARD_CLASS = "border-border bg-background shadow-none";
-const OPEN_SESSION_EVENT = "viewer:open-session";
-const CLEAR_SESSION_EVENT = "viewer:clear-session";
 const SESSIONS_PAGE_SIZE = 50;
 const LIVE_TAIL_POLL_MS = 2500;
 const SUMMARY_TEXT_PREVIEW_LIMIT = 220;
 const SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const viewerBackendClient = createViewerBackendClient();
 
 function extractExactSessionId(query: string | undefined) {
   const trimmed = query?.trim();
@@ -245,20 +232,10 @@ function resolveSessionPath(sessionsDir: string | null, sessionRef: string | nul
   return `${normalizedDir}${separator}${normalizedRef}`;
 }
 
-function readSessionRef(payload: OpenSessionEventPayload) {
-  if (typeof payload === "string") {
-    return payload.trim();
-  }
-
-  if (typeof payload?.sessionRef === "string") {
-    return payload.sessionRef.trim();
-  }
-
-  if (typeof payload?.session_ref === "string") {
-    return payload.session_ref.trim();
-  }
-
-  return "";
+function createDefaultTailStatus(capabilities: ViewerBackendCapabilities) {
+  return capabilities.needsCodexHome
+    ? "Жду выбора сессии из dialog picker, отдельного окна или команды."
+    : "Remote backend готов. Выберите сессию из каталога.";
 }
 
 function findLatestTimelineEvent(items: TimelineItem[]): { eventId: string; seq: number } | null {
@@ -405,10 +382,12 @@ function SessionCatalogCard({
   onOpen,
   selected,
   session,
+  showLocalPaths,
 }: {
   onOpen: (sessionId: string) => void;
   selected: boolean;
   session: IndexedSessionSummary;
+  showLocalPaths: boolean;
 }) {
   return (
     <button className="w-full text-left" onClick={() => onOpen(session.session_id)} type="button">
@@ -441,11 +420,15 @@ function SessionCatalogCard({
             label="Tokens"
             value={formatTokenCount(session.tokens_used)}
           />
-          <CatalogMetaItem
-            label="Cwd"
-            title={session.cwd ?? "n/a"}
-            value={session.cwd ?? "n/a"}
-          />
+          {showLocalPaths ? (
+            <CatalogMetaItem
+              label="Cwd"
+              title={session.cwd ?? "n/a"}
+              value={session.cwd ?? "n/a"}
+            />
+          ) : (
+            <CatalogMetaItem label="Backend" value="remote" />
+          )}
           {session.agent_name ? (
             <CatalogMetaItem
               label="Agent"
@@ -460,6 +443,8 @@ function SessionCatalogCard({
 }
 
 export default function App() {
+  const backendCapabilities = viewerBackendClient.capabilities;
+  const backendMode = viewerBackendClient.mode;
   const [bootState, setBootState] = useState<BootState>("booting");
   const [bootError, setBootError] = useState<string | null>(null);
   const [resolvedHome, setResolvedHome] = useState<ResolvedCodexHome | null>(null);
@@ -493,10 +478,9 @@ export default function App() {
   const initialAutoloadPendingRef = useRef(false);
   const displayedSessionId = selectedPreview?.session_id ?? selectedSessionId ?? null;
   const displayedSessionRef = selectedPreview?.session_ref ?? selectedSessionRef ?? null;
-  const displayedSessionPath = resolveSessionPath(
-    resolvedHome?.sessions_dir ?? null,
-    displayedSessionRef,
-  );
+  const displayedSessionPath = backendCapabilities.showsLocalPaths
+    ? resolveSessionPath(resolvedHome?.sessions_dir ?? null, displayedSessionRef)
+    : null;
   const selectedIndexedSummary =
     selectedPreview?.indexed_summary
     ?? (displayedSessionId
@@ -555,7 +539,7 @@ export default function App() {
         selectedIndexedSummary.tokens_used != null
           ? { label: "Tokens", value: formatTokenCount(selectedIndexedSummary.tokens_used) }
           : null,
-        selectedIndexedSummary.has_user_event
+        selectedIndexedSummary.has_user_event != null
           ? { label: "User event", value: formatBoolValue(selectedIndexedSummary.has_user_event) }
           : null,
         selectedIndexedSummary.archived
@@ -603,11 +587,17 @@ export default function App() {
     setSessionBusy(false);
     setTailStatus(
       reason ??
-        "Жду выбора сессии из dialog picker, отдельного окна или команды. Main viewer больше не рендерит sidebar session catalog.",
+        createDefaultTailStatus(backendCapabilities),
     );
-  }, []);
+  }, [backendCapabilities]);
 
   const toggleLiveTail = useCallback(() => {
+    if (!backendCapabilities.liveTail) {
+      setLiveTailEnabled(false);
+      setTailStatus("Live tail пока недоступен в этом режиме backend.");
+      return;
+    }
+
     const next = !liveTailEnabled;
     setLiveTailEnabled(next);
 
@@ -625,7 +615,7 @@ export default function App() {
     }
 
     setTailStatus("Live tail выключен. Автоматическое обновление остановлено.");
-  }, [liveTailEnabled, selectedSessionRef, sessionBusy]);
+  }, [backendCapabilities.liveTail, liveTailEnabled, selectedSessionRef, sessionBusy]);
 
   const focusTimelineEvent = useCallback((eventId: string | null) => {
     if (!eventId) {
@@ -669,7 +659,7 @@ export default function App() {
       }
 
       try {
-        const page = await listIndexedSessions({
+        const page = await viewerBackendClient.listIndexedSessions({
           cursor,
           exactSessionId: extractExactSessionId(query),
           limit: SESSIONS_PAGE_SIZE,
@@ -726,7 +716,7 @@ export default function App() {
       setTailStatus("Загружаю основную ленту выбранной сессии.");
 
       try {
-        const loadedSession = await loadSession(normalizedSessionRef);
+        const loadedSession = await viewerBackendClient.loadSession(normalizedSessionRef);
         if (
           selectedSessionRefRef.current !== normalizedSessionRef ||
           requestId !== sessionRequestIdRef.current
@@ -742,7 +732,7 @@ export default function App() {
         setTailCursor(loadedSession.tail_cursor);
         setTailStatus("Основная лента загружена. Догружаю summary выбранной сессии.");
 
-        const preview = await loadSessionPreview(loadedSession.session_ref);
+        const preview = await viewerBackendClient.loadSessionPreview(loadedSession.session_ref);
         if (
           selectedSessionRefRef.current !== loadedSession.session_ref ||
           requestId !== sessionRequestIdRef.current
@@ -791,7 +781,7 @@ export default function App() {
       setTailStatus("Резолвлю выбранную запись каталога и загружаю основную ленту.");
 
       try {
-        const preview = await loadSessionPreviewById(normalizedSessionId);
+        const preview = await viewerBackendClient.loadSessionPreviewById(normalizedSessionId);
         if (requestId !== sessionRequestIdRef.current) {
           return;
         }
@@ -801,7 +791,7 @@ export default function App() {
         setSelectedSessionRef(preview.session_ref);
         setTailStatus("Session ref найден. Загружаю основную ленту rollout.");
 
-        const loadedSession = await loadSession(preview.session_ref);
+        const loadedSession = await viewerBackendClient.loadSession(preview.session_ref);
         if (requestId !== sessionRequestIdRef.current) {
           return;
         }
@@ -853,27 +843,15 @@ export default function App() {
 
     async function bootstrap() {
       try {
-        const detected = await detectCodexHome();
+        const initialized = await viewerBackendClient.initialize();
         if (!active) {
           return;
         }
 
-        if (!detected.detected_home) {
-          setBootState("needs_home");
-          setTailStatus("CODEX_HOME не найден; viewer не может открыть выбранную сессию.");
-          return;
-        }
-
-        const initialized = await initializeCodexHome();
-        if (!active) {
-          return;
-        }
-
-        setResolvedHome(initialized.resolved_home);
-        setBootState("ready");
-        setTailStatus(
-          "Backend инициализирован. Жду выбора сессии из dialog picker, отдельного окна или команды.",
-        );
+        setResolvedHome(initialized.resolvedHome);
+        setBootError(null);
+        setBootState(initialized.status);
+        setTailStatus(initialized.statusMessage);
       } catch (error) {
         if (!active) {
           return;
@@ -892,9 +870,9 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (bootState !== "ready" || !pendingSessionRefRef.current) {
-      return;
-    }
+      if (bootState !== "ready" || !pendingSessionRefRef.current) {
+        return;
+      }
 
     const sessionRef = pendingSessionRefRef.current;
     pendingSessionRefRef.current = null;
@@ -909,10 +887,14 @@ export default function App() {
     initialCatalogRequestedRef.current = true;
     initialAutoloadPendingRef.current = !pendingSessionRefRef.current;
     if (initialAutoloadPendingRef.current) {
-      setTailStatus("Backend инициализирован. Ищу активную сессию в indexed catalog.");
+      setTailStatus(
+        backendCapabilities.needsCodexHome
+          ? "Viewer backend инициализирован. Ищу активную сессию в локальном каталоге."
+          : "Remote backend инициализирован. Ищу активную сессию в каталоге.",
+      );
     }
     void refreshSessionCatalog({ query: "" });
-  }, [bootState, refreshSessionCatalog]);
+  }, [backendCapabilities.needsCodexHome, bootState, refreshSessionCatalog]);
 
   useEffect(() => {
     if (!initialAutoloadPendingRef.current || catalogBusy) {
@@ -931,9 +913,13 @@ export default function App() {
     }
 
     if (!catalogError) {
-      setTailStatus("Backend инициализирован, но активная сессия в indexed catalog не найдена.");
+      setTailStatus(
+        backendCapabilities.needsCodexHome
+          ? "Viewer backend инициализирован, но активная сессия в локальном каталоге не найдена."
+          : "Remote backend инициализирован, но активная сессия в каталоге не найдена.",
+      );
     }
-  }, [catalogBusy, catalogError, catalogSessions, openSessionById]);
+  }, [backendCapabilities.needsCodexHome, catalogBusy, catalogError, catalogSessions, openSessionById]);
 
   useEffect(() => {
     if (!isSessionDialogOpen || bootState !== "ready") {
@@ -944,22 +930,16 @@ export default function App() {
   }, [bootState, isSessionDialogOpen, refreshSessionCatalog]);
 
   useEffect(() => {
-    if (!isTauri()) {
+    if (!backendCapabilities.supportsViewerCommands) {
       return;
     }
 
-    let unlistenOpen: (() => void) | undefined;
-    let unlistenClear: (() => void) | undefined;
+    let mounted = true;
+    let cleanup = () => {};
 
-    async function bindListeners() {
-      unlistenOpen = await listen<OpenSessionEventPayload>(OPEN_SESSION_EVENT, (event) => {
-        const sessionRef = readSessionRef(event.payload);
-
-        if (!sessionRef) {
-          setSessionError("Внешняя команда открытия пришла без sessionRef.");
-          return;
-        }
-
+    void viewerBackendClient
+      .subscribeToViewerCommands({
+        onOpenSession: (sessionRef) => {
         if (bootState !== "ready") {
           pendingSessionRefRef.current = sessionRef;
           setTailStatus(`Выбор сессии ${sessionRef} получен и будет применён после инициализации.`);
@@ -967,23 +947,31 @@ export default function App() {
         }
 
         void openSession(sessionRef);
-      });
+        },
+        onClearSession: () => {
+          clearSelectedSession("Выбранная сессия очищена внешней командой.");
+        },
+        onError: (message) => {
+          setSessionError(message);
+        },
+      })
+      .then((nextCleanup) => {
+        if (mounted) {
+          cleanup = nextCleanup;
+          return;
+        }
 
-      unlistenClear = await listen(CLEAR_SESSION_EVENT, () => {
-        clearSelectedSession("Выбранная сессия очищена внешней командой.");
+        nextCleanup();
       });
-    }
-
-    void bindListeners();
 
     return () => {
-      void unlistenOpen?.();
-      void unlistenClear?.();
+      mounted = false;
+      cleanup();
     };
-  }, [bootState, clearSelectedSession, openSession]);
+  }, [backendCapabilities.supportsViewerCommands, bootState, clearSelectedSession, openSession]);
 
   useEffect(() => {
-    if (!liveTailEnabled || !selectedSessionRef || !tailCursorRef.current) {
+    if (!backendCapabilities.liveTail || !liveTailEnabled || !selectedSessionRef || !tailCursorRef.current) {
       return;
     }
 
@@ -998,7 +986,7 @@ export default function App() {
       }
 
       try {
-        const result = await tailSession(sessionRef, currentCursor);
+        const result = await viewerBackendClient.tailSession(sessionRef, currentCursor);
         if (cancelled) {
           return;
         }
@@ -1019,8 +1007,8 @@ export default function App() {
           setTailStatus(`Получено новых событий: ${result.events.length}. Обновляю основную ленту.`);
 
           const [loadedSession, preview] = await Promise.all([
-            loadSession(sessionRef),
-            loadSessionPreview(sessionRef),
+            viewerBackendClient.loadSession(sessionRef),
+            viewerBackendClient.loadSessionPreview(sessionRef),
           ]);
           if (
             cancelled ||
@@ -1062,7 +1050,7 @@ export default function App() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [liveTailEnabled, selectedSessionRef]);
+  }, [backendCapabilities.liveTail, liveTailEnabled, selectedSessionRef]);
 
   return (
     <>
@@ -1112,21 +1100,21 @@ export default function App() {
               </Alert>
             ) : null}
 
-            {bootState === "needs_home" ? (
+            {bootState === "error" && bootError ? (
+              <Alert variant="destructive">
+                <AlertTriangle className="size-4" />
+                <AlertTitle>Viewer bootstrap failed</AlertTitle>
+                <AlertDescription className="ui-selectable">{bootError}</AlertDescription>
+              </Alert>
+            ) : null}
+
+            {bootState === "needs_home" && backendCapabilities.needsCodexHome ? (
               <Alert>
                 <AlertTriangle className="size-4" />
                 <AlertTitle>CODEX_HOME не найден</AlertTitle>
                 <AlertDescription>
                   Пока локальный `CODEX_HOME` не найден, viewer не может прочитать session catalog.
                 </AlertDescription>
-              </Alert>
-            ) : null}
-
-            {bootState === "error" && bootError ? (
-              <Alert variant="destructive">
-                <AlertTriangle className="size-4" />
-                <AlertTitle>Viewer bootstrap failed</AlertTitle>
-                <AlertDescription className="ui-selectable">{bootError}</AlertDescription>
               </Alert>
             ) : null}
 
@@ -1165,6 +1153,7 @@ export default function App() {
                     onOpen={openSessionFromDialog}
                     selected={session.session_id === (selectedPreview?.session_id ?? selectedSessionId)}
                     session={session}
+                    showLocalPaths={backendCapabilities.showsLocalPaths}
                   />
                 ))}
 
@@ -1173,7 +1162,9 @@ export default function App() {
                     <RefreshCcw className="size-4 animate-spin" />
                     <AlertTitle>Каталог загружается</AlertTitle>
                     <AlertDescription>
-                      Viewer читает каталог сессий из локального `CODEX_HOME`.
+                      {backendCapabilities.needsCodexHome
+                        ? "Viewer читает каталог сессий из локального `CODEX_HOME`."
+                        : "Viewer читает каталог сессий из remote backend API."}
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -1183,7 +1174,9 @@ export default function App() {
                     <Target className="size-4" />
                     <AlertTitle>Сессии не найдены</AlertTitle>
                     <AlertDescription>
-                      Попробуйте очистить поиск или проверьте источники каталога в `CODEX_HOME`.
+                      {backendCapabilities.needsCodexHome
+                        ? "Попробуйте очистить поиск или проверьте источники каталога в `CODEX_HOME`."
+                        : "Попробуйте очистить поиск или проверьте ответы remote backend API."}
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -1193,7 +1186,9 @@ export default function App() {
 
           <DialogFooter className="sm:justify-between">
             <p className="ui-selectable break-all text-xs text-muted-foreground">
-              {resolvedHome?.session_index_path ?? "session index unavailable"}
+              {backendCapabilities.showsSessionIndexPath
+                ? resolvedHome?.session_index_path ?? "session index unavailable"
+                : "remote backend"}
             </p>
 
             <div className="flex flex-col-reverse gap-2 sm:flex-row">
@@ -1227,7 +1222,7 @@ export default function App() {
                   <div className="flex flex-wrap items-center gap-2">
                     <CardTitle className="text-lg leading-none">codex-session-explorer</CardTitle>
                     <span className="inline-flex items-center rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground">
-                      Tail: {liveTailEnabled ? "on" : "off"}
+                      {backendMode} · Tail: {backendCapabilities.liveTail && liveTailEnabled ? "on" : "off"}
                     </span>
                   </div>
                   <div className="flex min-w-0 flex-col gap-1">
@@ -1241,9 +1236,16 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <Button onClick={toggleLiveTail} type="button" variant="outline">
+                  <Button
+                    disabled={!backendCapabilities.liveTail}
+                    onClick={toggleLiveTail}
+                    type="button"
+                    variant="outline"
+                  >
                     <RadioTower data-icon="inline-start" />
-                    Tail {liveTailEnabled ? "Off" : "On"}
+                    {backendCapabilities.liveTail
+                      ? `Tail ${liveTailEnabled ? "Off" : "On"}`
+                      : "Tail unavailable"}
                   </Button>
                   <Button
                     onClick={() => {
@@ -1280,7 +1282,11 @@ export default function App() {
                 </div>
                 <CardDescription className="ui-selectable break-all">
                   <span className="block">Id: {displayedSessionId ?? "not set"}</span>
-                  <span className="block">Path: {displayedSessionPath ?? "not resolved"}</span>
+                  <span className="block">
+                    {backendCapabilities.showsLocalPaths
+                      ? `Path: ${displayedSessionPath ?? "not resolved"}`
+                      : `Backend: ${backendMode}`}
+                  </span>
                 </CardDescription>
                 <CardAction className="flex gap-2">
                   <Button
@@ -1311,7 +1317,7 @@ export default function App() {
               </CardHeader>
 
               <CardContent className="flex min-h-0 flex-1 flex-col gap-4 pt-4">
-                {bootState === "needs_home" ? (
+                {bootState === "needs_home" && backendCapabilities.needsCodexHome ? (
                   <Alert>
                     <AlertTriangle className="size-4" />
                     <AlertTitle>CODEX_HOME не найден</AlertTitle>
@@ -1398,7 +1404,7 @@ export default function App() {
                             />
                             <SessionSummaryMetaItem
                               label="Tail"
-                              value={liveTailEnabled ? "on" : "off"}
+                              value={backendCapabilities.liveTail && liveTailEnabled ? "on" : "off"}
                             />
                             <SessionSummaryMetaItem
                               label="First ts"
@@ -1427,7 +1433,7 @@ export default function App() {
                               ) : null}
 
                               <div className="flex flex-col gap-3">
-                                {selectedIndexedSummary.cwd ? (
+                                {backendCapabilities.showsLocalPaths && selectedIndexedSummary.cwd ? (
                                   <SessionSummaryLongField
                                     label="Cwd"
                                     value={selectedIndexedSummary.cwd}
@@ -1461,7 +1467,7 @@ export default function App() {
                                     value={selectedIndexedSummary.git_origin_url}
                                   />
                                 ) : null}
-                                {selectedIndexedSummary.agent_path ? (
+                                {backendCapabilities.showsLocalPaths && selectedIndexedSummary.agent_path ? (
                                   <SessionSummaryLongField
                                     label="Agent path"
                                     monospace

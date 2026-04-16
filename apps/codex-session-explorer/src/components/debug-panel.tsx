@@ -1,8 +1,4 @@
 import { useEffect, useState } from "react";
-import { getIdentifier, getName, getTauriVersion, getVersion } from "@tauri-apps/api/app";
-import { appConfigDir, appDataDir, resourceDir } from "@tauri-apps/api/path";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { attachConsole } from "@tauri-apps/plugin-log";
 import {
   AlertTriangle,
   Bug,
@@ -96,6 +92,45 @@ function stringifyValue(value: unknown) {
   } catch {
     return String(value);
   }
+}
+
+async function attachTauriConsoleBridge() {
+  const { attachConsole } = await import("@tauri-apps/plugin-log");
+  return attachConsole();
+}
+
+async function loadTauriSnapshot() {
+  const [{ getIdentifier, getName, getTauriVersion, getVersion }, pathApi, windowApi] =
+    await Promise.all([
+      import("@tauri-apps/api/app"),
+      import("@tauri-apps/api/path"),
+      import("@tauri-apps/api/window"),
+    ]);
+
+  const currentWindow = windowApi.getCurrentWindow();
+  const [name, version, identifier, tauriVersion, title, appDataPath, appConfigPath, resourcePath] =
+    await Promise.all([
+      getName(),
+      getVersion(),
+      getIdentifier(),
+      getTauriVersion(),
+      currentWindow.title(),
+      pathApi.appDataDir(),
+      pathApi.appConfigDir(),
+      pathApi.resourceDir(),
+    ]);
+
+  return {
+    name,
+    version,
+    identifier,
+    tauriVersion,
+    windowLabel: currentWindow.label,
+    windowTitle: title,
+    appDataDir: appDataPath,
+    appConfigDir: appConfigPath,
+    resourceDir: resourcePath,
+  };
 }
 
 function DebugSection({
@@ -306,7 +341,7 @@ export function DebugPanel() {
     let detachConsole: (() => void) | undefined;
 
     if (isTauri()) {
-      void attachConsole()
+      void attachTauriConsoleBridge()
         .then((detach) => {
           detachConsole = detach;
         })
@@ -346,37 +381,7 @@ export function DebugPanel() {
     };
 
     if (isTauri()) {
-      const currentWindow = getCurrentWindow();
-
-      const [
-        name,
-        version,
-        identifier,
-        tauriVersion,
-        title,
-        appDataPath,
-        appConfigPath,
-        resourcePath,
-      ] = await Promise.all([
-        getName(),
-        getVersion(),
-        getIdentifier(),
-        getTauriVersion(),
-        currentWindow.title(),
-        appDataDir(),
-        appConfigDir(),
-        resourceDir(),
-      ]);
-
-      nextSnapshot.name = name;
-      nextSnapshot.version = version;
-      nextSnapshot.identifier = identifier;
-      nextSnapshot.tauriVersion = tauriVersion;
-      nextSnapshot.windowLabel = currentWindow.label;
-      nextSnapshot.windowTitle = title;
-      nextSnapshot.appDataDir = appDataPath;
-      nextSnapshot.appConfigDir = appConfigPath;
-      nextSnapshot.resourceDir = resourcePath;
+      Object.assign(nextSnapshot, await loadTauriSnapshot());
     }
 
     return nextSnapshot;
