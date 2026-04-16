@@ -4108,21 +4108,37 @@ mod tests {
     }
 
     #[test]
-    fn load_records_from_run_input_replays_fixture_run() {
-        let run_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(
-            "target/manual-smoke/.codex-worker/tasks/all-operation-emulation--07f4203b/runs/20260406T145552Z--18a3cc56f6037e36-1",
-        );
-        let input_path = run_dir.join("events.jsonl");
+    fn load_records_from_run_input_uses_local_fixture() {
+        let temp = tempfile::tempdir().expect("tmpdir should be created");
+        let task_dir = temp.path().join("task-demo");
+        let run_dir = task_dir.join("runs").join("20260323T000000Z--run-1");
+        std::fs::create_dir_all(&run_dir).expect("run dir should be created");
+        std::fs::write(
+            task_dir.join("task.json"),
+            r#"{"task_id":"task-demo"}"#,
+        )
+        .expect("task json should be written");
+        std::fs::write(
+            run_dir.join("stdout.jsonl"),
+            concat!(
+                r#"{"type":"thread.started","thread_id":"root-thread"}"#,
+                "\n",
+                r#"{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}"#,
+                "\n"
+            ),
+        )
+        .expect("stdout should be written");
+        std::fs::write(run_dir.join("stderr.log"), "").expect("stderr should be written");
+        let run_dir = PathBuf::from(run_dir);
+        let input_path = run_dir.clone();
 
         let (source_path, events) =
             load_records_from_run_input(&input_path).expect("fixture run should replay");
 
         assert_eq!(source_path, run_dir);
-        assert!(!events.is_empty());
-        assert_eq!(
-            events.first().map(|event| event.task_id.as_str()),
-            Some("all-operation-emulation")
-        );
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "thread.started");
+        assert_eq!(events[1].event_type, "message.agent");
     }
 
     #[test]

@@ -390,7 +390,7 @@ Session file может содержать `session_meta` не только св
 
 Отложенное действие:
 
-- см. отдельный план в [event-processing-plan.md](/home/alko/develop/open-source/ai/infrastructure/codex-worker-rs/docs/event-processing-plan.md).
+- дальнейшие изменения по обработке событий теперь фиксируются напрямую в [docs/log-events.md](./log-events.md) и в архитектурных документах.
 
 ### 3. Переходы статуса после позднего импорта session file
 

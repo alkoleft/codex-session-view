@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn normalize_path_canonicalizes_existing_absolute_paths() {
         let unique = format!(
-            "codex-worker-rs-{}-{}",
+            "codex-log-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

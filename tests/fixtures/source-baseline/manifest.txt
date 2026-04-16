@@ -1,7 +1,0 @@
-source_repo=/home/alko/develop/open-source/ai/infrastructure/codex-worker
-tree_hash=c736a6bcb529fc042d70f79be92520e48242b38f
-head_context=2e18f3ab5b79d0b3cc7bccf7e0dde23ffd19507c
-archive_path=tests/fixtures/source-baseline/python-reference.tar
-archive_sha256=0dfb43bf1dd6b6d3c34cc5e3badedce1a3e377bc2f7876647714d2ab45c6f7e2
-untracked_excluded=true
-generation_method=git-archive-tree-plus-permissions-normalization-deterministic-tar

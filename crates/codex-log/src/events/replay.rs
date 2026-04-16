@@ -373,97 +373,84 @@ fn to_btree(map: &HashMap<String, u64>) -> BTreeMap<String, u64> {
 #[cfg(test)]
 mod tests {
     use super::ReplayedRunStream;
-    use std::collections::BTreeMap;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
-    use serde_json::Value;
+    use serde_json::json;
     use tempfile::tempdir;
 
     #[test]
-    fn replay_all_operation_emulation_matches_expected_replay_counts() {
-        let run_dir = fixture_run_dir(
-            "target/manual-smoke/.codex-worker/tasks/all-operation-emulation--07f4203b/runs/20260406T145552Z--18a3cc56f6037e36-1",
+    fn replay_root_fixture_is_hermetic() {
+        let run_dir = write_fixture_run(
+            "task-root",
+            "20260406T145552Z--run-root",
+            concat!(
+                r#"{"type":"thread.started","thread_id":"root-thread"}"#,
+                "\n",
+                r#"{"type":"turn.started"}"#,
+                "\n",
+                r#"{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}"#,
+                "\n",
+                r#"{"type":"item.completed","item":{"type":"command_execution","id":"cmd-1","command":"git status --short","status":"completed","exit_code":0}}"#,
+                "\n",
+                r#"{"type":"item.completed","item":{"type":"file_change","id":"fc-1","changes":[{"kind":"update","path":"/tmp/demo.py"}]}}"#,
+                "\n",
+                r#"{"type":"error","message":"boom"}"#,
+                "\n"
+            ),
+            None,
         );
         let replayed = ReplayedRunStream::replay_run_dir(&run_dir).expect("replay should succeed");
 
-        assert_common_event_counts(
-            &replayed.event_counts,
-            &[
-                ("message.agent", 9),
-                ("agent.completed", 1),
-                ("agent.started", 1),
-                ("file.change", 4),
-                ("stderr.line", 1),
-                ("thread.started", 1),
-                ("todo.update", 4),
-                ("web.search", 32),
-                ("mcp.call", 3),
-                ("mcp.result", 3),
-            ],
-            7,
-            7,
-        );
-        assert_eq!(
-            replayed.tool_counts,
-            summary_counts(&run_dir.join("summary.json"), "tool_counts")
-        );
-        assert_eq!(
-            replayed.subagent_counts,
-            summary_counts(&run_dir.join("summary.json"), "subagent_counts")
-        );
-        assert_eq!(
-            replayed.root_thread_id.as_deref(),
-            Some("019d634a-ff70-72d2-bc0e-fc1a43c51f85")
-        );
+        assert_eq!(replayed.event_counts.get("thread.started").copied(), Some(1));
+        assert_eq!(replayed.event_counts.get("agent.started").copied(), Some(1));
+        assert_eq!(replayed.event_counts.get("message.agent").copied(), Some(1));
+        assert_eq!(replayed.event_counts.get("shell.result").copied(), Some(1));
+        assert_eq!(replayed.event_counts.get("file.change").copied(), Some(1));
+        assert_eq!(replayed.event_counts.get("error").copied(), Some(1));
+        assert_eq!(replayed.tool_counts.get("command_execution").copied(), Some(1));
+        assert_eq!(replayed.root_thread_id.as_deref(), Some("root-thread"));
         assert!(replayed.subagent_threads.is_empty());
     }
 
     #[test]
-    fn replay_all_operation_emulation_on_sub_agent_matches_expected_replay_counts() {
-        let run_dir = fixture_run_dir(
-            "target/manual-smoke/.codex-worker/tasks/all-operation-emulation-on-sub-agent--71f2caf3/runs/20260406T145909Z--18a3cc84d99c426e-2",
+    fn replay_subagent_fixture_keeps_counts_explicit() {
+        let run_dir = write_fixture_run(
+            "task-subagent",
+            "20260406T145909Z--run-subagent",
+            concat!(
+                r#"{"type":"thread.started","thread_id":"root-thread"}"#,
+                "\n",
+                r#"{"type":"item.completed","item":{"type":"collab_tool_call","id":"spawn-1","tool":"spawn_agent","status":"completed","sender_thread_id":"root-thread","receiver_thread_ids":["sub-1"],"prompt":"demo","agents_states":{"sub-1":{"status":"running"}}}}"#,
+                "\n"
+            ),
+            Some((
+                "sub-1.jsonl",
+                concat!(
+                    r#"{"type":"session_meta","timestamp":"2026-04-06T14:59:09Z","payload":{"id":"sub-1","parent_thread_id":"root-thread","agent_nickname":"Riley","agent_role":"reviewer"}}"#,
+                    "\n",
+                    r#"{"type":"response_item","timestamp":"2026-04-06T14:59:10Z","payload":{"type":"function_call","call_id":"call-1","name":"update_plan","arguments":"{\"steps\":[{\"step\":\"check\",\"status\":\"completed\"}]}"}}"#,
+                    "\n",
+                    r#"{"type":"response_item","timestamp":"2026-04-06T14:59:11Z","payload":{"type":"function_call_output","call_id":"call-1","output":"{\"ok\":true}"}}"#,
+                    "\n",
+                    r#"{"type":"event_msg","timestamp":"2026-04-06T14:59:12Z","payload":{"type":"agent_message","role":"assistant","text":"done"}}"#,
+                    "\n"
+                ),
+            )),
         );
         let replayed = ReplayedRunStream::replay_run_dir(&run_dir).expect("replay should succeed");
 
-        assert_common_event_counts(
-            &replayed.event_counts,
-            &[
-                ("message.agent", 8),
-                ("message.assistant", 7),
-                ("message.developer", 3),
-                ("message.user", 4),
-                ("task.started", 3),
-                ("task.completed", 2),
-                ("runtime.context", 3),
-                ("info.tokens", 11),
-                ("agent.reasoning", 14),
-                ("agent.completed", 1),
-                ("agent.session", 1),
-                ("agent.started", 1),
-                ("file.change", 4),
-                ("thread.started", 1),
-                ("todo.update", 3),
-                ("web.search", 28),
-                ("web.open", 2),
-                ("mcp.call", 4),
-                ("mcp.result", 4),
-            ],
-            17,
-            17,
-        );
-        assert_eq!(
-            replayed.tool_counts,
-            summary_counts(&run_dir.join("summary.json"), "tool_counts")
-        );
-        assert_eq!(
-            replayed.subagent_counts,
-            summary_counts(&run_dir.join("summary.json"), "subagent_counts")
-        );
+        assert_eq!(replayed.event_counts.get("agent.session").copied(), Some(1));
+        assert_eq!(replayed.event_counts.get("thread.started").copied(), Some(1));
+        assert_eq!(replayed.event_counts.get("collab.spawn_agent").copied(), Some(1));
+        assert_eq!(replayed.event_counts.get("todo.update").copied(), Some(2));
+        assert_eq!(replayed.event_counts.get("message.assistant").copied(), Some(1));
+        assert_eq!(replayed.tool_counts.get("spawn_agent").copied(), Some(1));
+        assert_eq!(replayed.tool_counts.get("update_plan").copied(), Some(2));
+        assert_eq!(replayed.subagent_counts.get("spawn_agent").copied(), Some(1));
+        assert_eq!(replayed.subagent_counts.get("update_plan").copied(), None);
         assert_eq!(replayed.subagent_threads.len(), 1);
-        assert!(replayed
-            .subagent_threads
-            .contains("019d634f-b421-7611-832a-1a3b8070d0d3"));
+        assert!(replayed.subagent_threads.contains("sub-1"));
         assert_eq!(replayed.event_counts.get("raw.unparsed").copied(), None);
     }
 
@@ -506,43 +493,26 @@ mod tests {
             .any(|event| event.event_type == "collab.spawn_agent"));
     }
 
-    fn fixture_run_dir(relative: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative)
-    }
+    fn write_fixture_run(
+        task_id: &str,
+        run_id: &str,
+        stdout: &str,
+        subagent: Option<(&str, &str)>,
+    ) -> PathBuf {
+        let temp = tempdir().expect("temp dir should be created");
+        let task_dir = temp.keep().join(task_id);
+        let run_dir = task_dir.join("runs").join(run_id);
+        let subagents_dir = run_dir.join("subagents");
+        fs::create_dir_all(&subagents_dir).expect("run dir should be created");
 
-    fn assert_common_event_counts(
-        actual: &BTreeMap<String, u64>,
-        stable_counts: &[(&str, u64)],
-        expected_call_total: u64,
-        expected_result_total: u64,
-    ) {
-        for (event_type, expected) in stable_counts {
-            assert_eq!(actual.get(*event_type).copied(), Some(*expected));
+        fs::write(task_dir.join("task.json"), json!({"task_id": task_id}).to_string())
+            .expect("task.json should be written");
+        fs::write(run_dir.join("stdout.jsonl"), stdout).expect("stdout should be written");
+        fs::write(run_dir.join("stderr.log"), "").expect("stderr should be written");
+        if let Some((name, contents)) = subagent {
+            fs::write(subagents_dir.join(name), contents).expect("subagent should be written");
         }
 
-        let total_calls = actual.get("tool.call").copied().unwrap_or(0)
-            + actual.get("shell.call").copied().unwrap_or(0)
-            + actual.get("mcp.call").copied().unwrap_or(0);
-        let total_results = actual.get("tool.result").copied().unwrap_or(0)
-            + actual.get("shell.result").copied().unwrap_or(0)
-            + actual.get("mcp.result").copied().unwrap_or(0);
-
-        assert_eq!(total_calls, expected_call_total);
-        assert_eq!(total_results, expected_result_total);
-    }
-
-    fn summary_counts(path: &Path, field: &str) -> BTreeMap<String, u64> {
-        let payload: Value =
-            serde_json::from_str(&std::fs::read_to_string(path).expect("summary")).expect("json");
-        payload
-            .get(field)
-            .and_then(Value::as_object)
-            .map(|object| {
-                object
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.as_u64().unwrap_or_default()))
-                    .collect()
-            })
-            .unwrap_or_default()
+        run_dir
     }
 }
