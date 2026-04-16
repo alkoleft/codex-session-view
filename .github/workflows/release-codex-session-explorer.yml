@@ -23,13 +23,13 @@ jobs:
         include:
           - name: linux-x64
             platform: ubuntu-22.04
-            args: ""
+            args: "--features desktop"
           - name: windows-x64
             platform: windows-latest
-            args: ""
+            args: "--features desktop"
           - name: macos-aarch64
             platform: macos-latest
-            args: "--target aarch64-apple-darwin"
+            args: "--features desktop --target aarch64-apple-darwin"
 
     steps:
       - name: Checkout
