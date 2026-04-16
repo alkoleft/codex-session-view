@@ -1,0 +1,75 @@
+name: release-codex-session-explorer
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-codex-session-explorer-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x64
+            platform: ubuntu-22.04
+            args: ""
+          - name: windows-x64
+            platform: windows-latest
+            args: ""
+          - name: macos-aarch64
+            platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: apps/codex-session-explorer/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./apps/codex-session-explorer/src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm --prefix apps/codex-session-explorer ci
+
+      - name: Build and upload Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/codex-session-explorer
+          tagName: ${{ github.ref_name }}
+          releaseName: "codex-session-explorer ${{ github.ref_name }}"
+          releaseBody: "Черновик релиза с автособранными bundle-артефактами `codex-session-explorer`."
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
