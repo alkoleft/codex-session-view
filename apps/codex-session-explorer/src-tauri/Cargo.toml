@@ -1,5 +1,5 @@
 [package]
-name = "log-viewer"
+name = "codex-session-explorer"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,11 +8,11 @@ default = []
 desktop = ["dep:tauri"]
 
 [lib]
-name = "log_viewer"
+name = "codex_session_explorer"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "log-viewer"
+name = "codex-session-explorer"
 path = "src/main.rs"
 required-features = ["desktop"]
 

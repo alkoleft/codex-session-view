@@ -9,19 +9,17 @@
 
 ## Источники
 
-- `apps/log-viewer/src/index.css`
-- `apps/log-viewer/src/components/session-event-list.tsx`
-- `apps/log-viewer/src/components/session-event-list-common.tsx`
-- `apps/log-viewer/src/components/session-event-list-shell-card.tsx`
-- `apps/log-viewer/src/components/session-event-list-patch-card.tsx`
-- `apps/log-viewer/src/components/session-event-list-plan-card.tsx`
-- `apps/log-viewer/src/components/session-event-list-user-input-card.tsx`
-- `apps/log-viewer/src/components/agents-panel.tsx`
-- `src/ui/console.rs`
+- `apps/codex-session-explorer/src/index.css`
+- `apps/codex-session-explorer/src/components/session-event-list.tsx`
+- `apps/codex-session-explorer/src/components/session-event-list-common.tsx`
+- `apps/codex-session-explorer/src/components/session-event-list-shell-card.tsx`
+- `apps/codex-session-explorer/src/components/session-event-list-patch-card.tsx`
+- `apps/codex-session-explorer/src/components/session-event-list-plan-card.tsx`
+- `apps/codex-session-explorer/src/components/session-event-list-user-input-card.tsx`
+- `apps/codex-session-explorer/src/components/agents-panel.tsx`
 - `crates/codex-log/src/events/projector.rs`
-- `src/bin/events_tree_html.rs`
 
-## 1. Базовые UI-токены `log-viewer`
+## 1. Базовые UI-токены `codex-session-explorer`
 
 | Токен | Светлая тема | Тёмная тема | Назначение |
 | --- | --- | --- | --- |
@@ -175,17 +173,7 @@ surface` в React viewer. HTML reference использует ту же сема
 - После закрытия агента цвет возвращается в пул.
 - При повторном появлении того же активного `thread` используется уже закреплённый цвет.
 
-## 7. HTML reference parity
-
-`src/bin/events_tree_html.rs` держит ту же цветовую семантику, что и React viewer:
-
-- `task lifecycle` использует тот же `task mode accent map`;
-- `category badges` повторяют те же семейства:
-  `assistant` зелёный, `command` синий, `search` teal, `subagent` фиолетовый,
-  `file` жёлтый, `todo` cyan, `error` красный;
-- `user prompt` выделяется зелёным `success-like` блоком.
-
-## Итог
+## 7. Итог
 
 Главный принцип палитры сейчас такой:
 

@@ -1225,7 +1225,7 @@ export default function App() {
               <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <CardTitle className="text-lg leading-none">Codex Log Viewer</CardTitle>
+                    <CardTitle className="text-lg leading-none">codex-session-explorer</CardTitle>
                     <span className="inline-flex items-center rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground">
                       Tail: {liveTailEnabled ? "on" : "off"}
                     </span>

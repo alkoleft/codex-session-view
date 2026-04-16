@@ -6,3 +6,5 @@
 
 - [Документация arc42](./architecture/arc42/architecture.md)
 - [Индекс архитектурных документов](./architecture/README.md)
+
+Актуальная область архитектуры ограничена `codex-session-view` как продуктом, `codex-log` как логовым ядром, `codex-session-explorer` как desktop viewer и будущим отдельным CLI для чтения и отправки логов в БД без текущей реализации.

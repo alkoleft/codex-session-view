@@ -1,0 +1,52 @@
+name: workspace-checks
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - feature/**
+
+jobs:
+  rust:
+    name: rust-workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Test codex-log
+        run: cargo test -p codex-log
+
+      - name: Test codex-session-explorer
+        run: cargo test -p codex-session-explorer
+
+  frontend:
+    name: codex-session-explorer-frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: apps/codex-session-explorer/package-lock.json
+
+      - name: Install dependencies
+        run: npm --prefix apps/codex-session-explorer ci
+
+      - name: Run frontend tests
+        run: npm --prefix apps/codex-session-explorer test
+
+      - name: Build frontend
+        run: npm --prefix apps/codex-session-explorer run build

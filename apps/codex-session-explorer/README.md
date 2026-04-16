@@ -1,6 +1,6 @@
-# Log Viewer
+# codex-session-explorer
 
-Desktop-приложение для просмотра Codex sessions на базе `agmmnn/tauri-ui`.
+Desktop-приложение для просмотра логов Codex-сессий.
 
 ## Что внутри
 
@@ -8,7 +8,7 @@ Desktop-приложение для просмотра Codex sessions на ба�
 - Tauri 2 shell с startup flash prevention.
 - `tauri-ui` batteries: external link guard и dev-only debug panel по `Cmd/Ctrl + D`.
 - Read-only IPC к каталогу сессий, preview и live tail в том же `src-tauri` crate.
-- Единый viewer app в репозитории: `apps/log-viewer`.
+- Продуктовое имя приложения: `codex-session-explorer`.
 
 ## Примечание по scaffold
 

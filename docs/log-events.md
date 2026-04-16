@@ -1,6 +1,6 @@
 # События логов и их нормализация
 
-Документ фиксирует текущую модель логов в `codex-worker-rs`:
+Документ фиксирует текущую модель логов в `codex-log` и `codex-session-explorer`:
 
 - какие источники событий есть;
 - как сырой лог маппится в канонический `EventRecord`;
@@ -17,13 +17,9 @@
 - `crates/codex-log/src/events/payloads.rs`
 - `crates/codex-log/src/session.rs`
 - `crates/codex-log/src/tree.rs`
-- `apps/log-viewer/src/components/session-event-list.tsx`
-- `src/runner.rs`
+- `apps/codex-session-explorer/src/components/session-event-list.tsx`
 
-Совместимые re-export файлы в `src/events/*` сохранены только для плавной миграции существующего
-worker crate. Каноническая логика ingestion, session discovery, tail и tree/view-model теперь
-находится в `crates/codex-log`, а UI-склейка парных operation-cards для `log-viewer`
-живёт отдельно во frontend-компоненте viewer.
+Каноническая логика ingestion, session discovery, tail и tree/view-model находится в `crates/codex-log`, а UI-склейка operation-карточек для viewer живёт отдельно во frontend-компоненте `apps/codex-session-explorer`.
 
 ## 1. Источники логов
 
@@ -31,9 +27,9 @@ worker crate. Каноническая логика ingestion, session discovery
 
 ### 1.1. Сырые входные источники
 
-- root stdout поток `codex exec --json`
-- root stderr поток процесса
-- session-файлы субагентов (`CODEX_HOME/sessions/.../*.jsonl` или standalone `rollout-*.jsonl`)
+- stdout JSONL поток session/run логов, если он присутствует в исходных артефактах
+- stderr или текстовые сопутствующие записи, если они были сохранены рядом с логом
+- session-файлы (`CODEX_HOME/sessions/.../*.jsonl` или standalone `rollout-*.jsonl`)
 
 ### 1.1.1. Discovery и metadata overlay для session-файлов
 
@@ -42,7 +38,7 @@ worker crate. Каноническая логика ingestion, session discovery
 - `SessionCatalog::list_sessions` и viewer v1 продолжают считать источником истины файловую
   структуру `CODEX_HOME/sessions/YYYY/MM/DD/*.jsonl`, а `session_index.jsonl` используют как
   metadata overlay;
-- `SessionCatalog::list_indexed_sessions` и dialog picker в `log-viewer`
+- `SessionCatalog::list_indexed_sessions` и dialog picker в `codex-session-explorer`
   в первую очередь читают `CODEX_HOME/state_*.sqlite`, таблицу `threads`, и только при
   недоступности SQLite откатываются к `session_index.jsonl`.
 
@@ -91,10 +87,7 @@ worker crate. Каноническая логика ingestion, session discovery
 ### 1.2. Канонический on-disk формат
 
 Все поддержанные события приводятся к `EventRecord`.
-Worker по-прежнему зеркалит их в `events.jsonl`, но этот файл теперь рассматривается как
-compatibility artifact для runner/tests/manual inspection, а не как источник runtime correlation.
-Runtime correlation для viewer/session/tree строится по replay-цепочке `stdout.jsonl` +
-subagent session / standalone rollout и поверх неё агрегируется через `operation_stream`.
+Если рядом существует `events.jsonl`, он рассматривается как совместимый артефакт чтения, но не как отдельный продуктовый слой. Runtime correlation для viewer/session/tree строится по replay-цепочке исходных session/run sources и поверх неё агрегируется через `operation_stream`.
 
 ```json
 {
@@ -116,9 +109,9 @@ subagent session / standalone rollout и поверх неё агрегируе�
 | --- | --- |
 | `schema_version` | Версия схемы `events.jsonl`. Сейчас всегда `1`. |
 | `ts` | ISO-время события. Для subagent session берётся из `timestamp`, иначе ставится текущее UTC-время. |
-| `task_id`, `run_id` | Идентификаторы текущего запуска worker. |
-| `seq` | Монотонный номер события внутри run. Общий и для root, и для импортированных subagent session. Для standalone viewer tail это локальный номер внутри session file. |
-| `event_type` | Канонический внутренний тип события. Именно по нему работает projector, tree, HTML render и Tauri viewer. |
+| `task_id`, `run_id` | Идентификаторы логического запуска или сессии. |
+| `seq` | Монотонный номер события внутри потока. Для standalone viewer tail это локальный номер внутри session file. |
+| `event_type` | Канонический внутренний тип события. Именно по нему работает projector, tree и viewer. |
 | `raw_type` | Исходный тип записи до нормализации: например `thread.started`, `response_item`, `event_msg`, `stderr`, `invalid_json`. |
 | `parse_status` | Качество разбора: `parsed`, `best_effort`, `unparsed`. |
 | `payload` | Нормализованная полезная нагрузка. |
@@ -139,8 +132,7 @@ subagent session / standalone rollout и поверх неё агрегируе�
 `tree.rs`-эвристики напрямую. Сначала события классифицируются в `atomic` / `lifecycle` и
 агрегируются в operation stream:
 
-- lifecycle surface задаётся per-kind policy registry в
-  `crates/codex-log/src/events/operation_stream.rs`;
+- lifecycle surface задаётся per-kind policy registry в `crates/codex-log/src/events/operation_stream.rs`;
 - на этом слое вычисляются `OperationSnapshot`, `revision` и terminal/update semantics;
 - перед thread grouping, child-thread anchors и lifecycle parent/root anchoring `tree.rs`
   канонизирует `run_id`, `thread_id`, `sender_thread_id`, `parent_thread_id` и
@@ -150,17 +142,12 @@ subagent session / standalone rollout и поверх неё агрегируе�
   поздний `response_item.function_call_output`;
 - `tree.rs` использует snapshot metadata как приоритетный источник parent/root anchors для
   lifecycle-операций;
-- поддерживаемый downstream renderer сейчас один: `log-viewer`; он должен
-  предпочитать snapshot-selected terminal/result и откатываться к старым UI-эвристикам только как
-  fallback для старых логов, где operation metadata ещё нет;
-- `src/bin/events_tree_html.rs` остаётся reference artifact и может отставать от поддерживаемой
-  runtime-поверхности.
+- поддерживаемый downstream renderer сейчас один: `codex-session-explorer`; он должен предпочитать snapshot-selected terminal/result и откатываться к старым UI-эвристикам только как fallback для старых логов, где operation metadata ещё нет.
 
 Следствие для `events.jsonl`:
 
 - файл может оставаться на диске ради совместимости;
-- отсутствие или устаревание `events.jsonl` не должно менять runtime correlation, если replay
-  строится из исходных raw run/session sources.
+- отсутствие или устаревание `events.jsonl` не должно менять runtime correlation, если replay строится из исходных raw run/session sources.
 
 ## 2. Внутренняя payload-модель
 
@@ -647,13 +634,13 @@ Incremental tail для standalone rollout и live-import subagent sessions ра
 
 Дедупликация выше отвечает за содержимое `events.jsonl`. Ниже описано вторичное
 объединение уже нормализованных событий при построении дерева и при UI-рендере merged cards
-в `log-viewer`.
+в `codex-session-explorer`.
 
 Источник истины этого слоя разделён на два уровня:
 
 - `crates/codex-log/src/tree.rs` строит базовое дерево событий и привязку child-thread к якорным
   операциям;
-- `apps/log-viewer/src/components/session-event-list.tsx` поверх этого дерева
+- `apps/codex-session-explorer/src/components/session-event-list.tsx` поверх этого дерева
   склеивает парные `started/completed` события в одну карточку и inline-раскрывает subagent
   timeline в общую хронологическую ленту.
 
@@ -769,7 +756,7 @@ HTML renderer рендерит единые карточки для пар:
 ### 8.6. Дополнительные projected fields для `patch.apply`
 
 Для `load_session` / event tree `EventEntry` теперь отдельно проецирует patch-specific поля,
-которые нужны `log-viewer` для detail-рендера `patch.apply` без парсинга сырого
+которые нужны `codex-session-explorer` для detail-рендера `patch.apply` без парсинга сырого
 payload на стороне UI:
 
 - `patch_apply_status`: строка из `payload.status` для `patch.apply` / `patch.apply.duplicate`;
@@ -807,9 +794,9 @@ payload на стороне UI:
 - `shell_parsed_commands[]`: нормализованный список записей из `parsed_cmd` с полями
   `kind`, `command`, `query`, `name`, `path`.
 
-### 8.8. Agent-centric derivation в `log-viewer`
+### 8.8. Agent-centric derivation в `codex-session-explorer`
 
-Начиная с viewer redesign для фоновых агентов, `apps/log-viewer` строит
+Начиная с viewer redesign для фоновых агентов, `apps/codex-session-explorer` строит
 дополнительную frontend-only модель `AgentThreadViewModel` поверх уже загруженного `LoadedSession`.
 Это не новый backend/API контракт и не отдельный persisted слой: timeline и `EventTree` остаются
 источником истины, а правая панель `Agents` является производным представлением.
