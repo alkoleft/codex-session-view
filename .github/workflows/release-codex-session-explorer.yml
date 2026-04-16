@@ -73,3 +73,52 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Build portable artifact metadata
+        id: portable
+        shell: bash
+        run: |
+          case "${{ matrix.platform }}" in
+            ubuntu-22.04)
+              echo "artifact_name=codex-session-explorer-${{ github.ref_name }}-linux-x64-portable.tar.gz" >> "$GITHUB_OUTPUT"
+              echo "artifact_path=target/release/codex-session-explorer" >> "$GITHUB_OUTPUT"
+              ;;
+            windows-latest)
+              echo "artifact_name=codex-session-explorer-${{ github.ref_name }}-windows-x64-portable.zip" >> "$GITHUB_OUTPUT"
+              echo "artifact_path=target/release/codex-session-explorer.exe" >> "$GITHUB_OUTPUT"
+              ;;
+            macos-latest)
+              echo "artifact_name=codex-session-explorer-${{ github.ref_name }}-macos-aarch64-portable.zip" >> "$GITHUB_OUTPUT"
+              echo "artifact_path=target/aarch64-apple-darwin/release/bundle/macos/codex-session-explorer.app" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Package portable artifact
+        shell: bash
+        run: |
+          mkdir -p portable-dist
+          artifact_name="${{ steps.portable.outputs.artifact_name }}"
+          artifact_path="${{ steps.portable.outputs.artifact_path }}"
+
+          if [ ! -e "$artifact_path" ]; then
+            echo "Portable source not found: $artifact_path" >&2
+            exit 1
+          fi
+
+          case "${{ matrix.platform }}" in
+            ubuntu-22.04)
+              tar -C "$(dirname "$artifact_path")" -czf "portable-dist/$artifact_name" "$(basename "$artifact_path")"
+              ;;
+            windows-latest)
+              powershell -NoProfile -Command "Compress-Archive -Path '$artifact_path' -DestinationPath 'portable-dist/$artifact_name' -Force"
+              ;;
+            macos-latest)
+              ditto -c -k --sequesterRsrc --keepParent "$artifact_path" "portable-dist/$artifact_name"
+              ;;
+          esac
+
+      - name: Upload portable artifact to draft release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" "portable-dist/${{ steps.portable.outputs.artifact_name }}" --clobber
