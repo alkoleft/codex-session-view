@@ -5,6 +5,16 @@
 - `crates/codex-log` — Rust-библиотека для чтения, нормализации, replay и проекции логов;
 - `apps/codex-session-explorer` — desktop-приложение `codex-session-explorer` для интерактивного просмотра этих логов.
 
+## Скриншоты
+
+### Окно выбора сессии
+
+![Окно выбора сессии codex-session-explorer](./docs/screenshots/codex-session-explorer-real-session-picker.png)
+
+### Выбранная сессия
+
+![Выбранная сессия codex-session-explorer](./docs/screenshots/codex-session-explorer-real-selected-session.png)
+
 Проект больше не содержит worker-runtime, root bin или task-runner сценариев. Вся активная разработка сосредоточена на логовом ядре и viewer.
 
 ## Быстрый старт

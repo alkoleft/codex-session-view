@@ -1,6 +1,6 @@
 # codex-session-explorer
 
-Desktop-приложение для просмотра логов Codex-сессий.
+`codex-session-explorer` это desktop-приложение для интерактивного разбора логов Codex-сессий. Оно помогает открывать сессии из локального `CODEX_HOME`, просматривать timeline событий, исследовать агентские ветки и читать детали shell/patch/user-input событий без ручного парсинга сырых логов.
 
 ## Что внутри
 
@@ -9,6 +9,16 @@ Desktop-приложение для просмотра логов Codex-сесс
 - `tauri-ui` batteries: external link guard и dev-only debug panel по `Cmd/Ctrl + D`.
 - Read-only IPC к каталогу сессий, preview и live tail в том же `src-tauri` crate.
 - Продуктовое имя приложения: `codex-session-explorer`.
+
+## Скриншоты
+
+### Основной экран
+
+![Окно выбора сессии codex-session-explorer](../../docs/screenshots/codex-session-explorer-real-session-picker.png)
+
+### Выбранная сессия
+
+![Выбранная сессия codex-session-explorer](../../docs/screenshots/codex-session-explorer-real-selected-session.png)
 
 ## Примечание по scaffold
 
