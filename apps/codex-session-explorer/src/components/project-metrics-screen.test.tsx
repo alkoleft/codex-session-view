@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -27,8 +27,8 @@ import type {
   ProjectMetricsResponse,
   SessionMetrics,
 } from "@/backend";
-import { createInitialProjectMetricsRange } from "@/components/project-metrics";
-import { ProjectMetricsScreen } from "@/components/project-metrics-screen";
+import { buildProjectMetricsViewModel, createInitialProjectMetricsRange } from "@/components/project-metrics";
+import { ProjectMetricsScreen, SeriesDot } from "@/components/project-metrics-screen";
 
 function covered(
   value: number | null,
@@ -296,6 +296,37 @@ describe("ProjectMetricsScreen", () => {
 
     await user.click(screen.getByRole("button", { name: "Open session" }));
     expect(onOpenSession).toHaveBeenCalledWith("session-16");
+  });
+
+  it("keeps chart-point click lightweight and updates selection without opening the session", () => {
+    const onActivateSession = vi.fn();
+    const onOpenSession = vi.fn();
+    const response = makeResponse(4);
+    const viewModel = buildProjectMetricsViewModel(response, true);
+    const row = viewModel.chartRows.find((item) => item.metrics.tokens.value != null);
+
+    expect(row).toBeTruthy();
+
+    render(
+      <svg>
+        <SeriesDot
+          currentSessionId={null}
+          cx={24}
+          cy={18}
+          onActivateSession={onActivateSession}
+          payload={row}
+          seriesKey="tokens"
+          stroke="#2563eb"
+        />
+      </svg>,
+    );
+
+    const chartPoint = document.querySelector(`circle[data-session-id="${row!.sessionId}"]`);
+    expect(chartPoint).toBeTruthy();
+    fireEvent.click(chartPoint!);
+
+    expect(onActivateSession).toHaveBeenCalledWith(row!.sessionId);
+    expect(onOpenSession).not.toHaveBeenCalled();
   });
 
   it("uses a scrollable container for long project selector lists", async () => {

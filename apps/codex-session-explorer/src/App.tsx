@@ -589,6 +589,7 @@ export default function App() {
   const selectedProjectOption = selectedProjectKey
     ? projectOptions.find((option) => option.projectKey === selectedProjectKey) ?? null
     : null;
+  const compactShell = mainScreen === "project_metrics";
 
   const applyPreview = useCallback((preview: SessionPreview) => {
     tailCursorRef.current = preview.tail_cursor;
@@ -1360,33 +1361,77 @@ export default function App() {
 
       <main
         data-ui-scroll-container
-        className="box-border flex h-full min-h-0 overflow-hidden px-4 py-4 sm:px-6 sm:py-6"
+        className={cn(
+          "box-border flex min-h-0 flex-1 overflow-x-hidden px-4 py-4 sm:px-6 sm:py-6",
+          compactShell ? "overflow-y-auto" : "h-full overflow-y-hidden",
+        )}
       >
-        <div className="flex h-full min-h-0 w-full flex-1 flex-col gap-5 overflow-hidden">
+        <div
+          className={cn(
+            "flex w-full flex-col",
+            compactShell
+              ? "min-h-full gap-3"
+              : "h-full min-h-0 flex-1 gap-5 overflow-hidden",
+          )}
+        >
           <Card className={PANEL_CARD_CLASS}>
-            <CardHeader className="gap-3 py-4">
+            <CardHeader className={cn("gap-3", compactShell ? "py-3" : "py-4")}>
               <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                <div className="flex min-w-0 flex-1 flex-col gap-2">
+                <div className={cn("flex min-w-0 flex-1 flex-col", compactShell ? "gap-1" : "gap-2")}>
                   <div className="flex flex-wrap items-center gap-2">
                     <CardTitle className="text-lg leading-none">codex-session-explorer</CardTitle>
                     <span className="inline-flex items-center rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground">
                       {backendMode} · Tail: {backendCapabilities.liveTail && liveTailEnabled ? "on" : "off"}
                     </span>
-                  </div>
-                  <div className="flex min-w-0 flex-col gap-1">
-                    <p className="text-sm leading-6 text-foreground">{tailStatus}</p>
-                    {tailCursor ? (
-                      <p className="text-xs leading-5 text-muted-foreground">
-                        offset {tailCursor.offset} · next_seq {tailCursor.next_seq}
-                      </p>
+                    {compactShell && selectedProjectOption ? (
+                      <span className="inline-flex items-center rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground">
+                        {selectedProjectOption.label}
+                      </span>
                     ) : null}
                   </div>
+                  {compactShell ? (
+                    <p className="min-w-0 truncate text-xs leading-5 text-muted-foreground">
+                      {selectedProjectOption
+                        ? "Project metrics workspace"
+                        : tailStatus}
+                    </p>
+                  ) : (
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <p className="text-sm leading-6 text-foreground">{tailStatus}</p>
+                      {tailCursor ? (
+                        <p className="text-xs leading-5 text-muted-foreground">
+                          offset {tailCursor.offset} · next_seq {tailCursor.next_seq}
+                        </p>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-wrap gap-2">
                   <Button
+                    onClick={() => {
+                      setMainScreen("session");
+                    }}
+                    size={compactShell ? "sm" : "default"}
+                    type="button"
+                    variant={mainScreen === "session" ? "default" : "outline"}
+                  >
+                    Session
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setMainScreen("project_metrics");
+                    }}
+                    size={compactShell ? "sm" : "default"}
+                    type="button"
+                    variant={mainScreen === "project_metrics" ? "default" : "outline"}
+                  >
+                    Project metrics
+                  </Button>
+                  <Button
                     disabled={!backendCapabilities.liveTail}
                     onClick={toggleLiveTail}
+                    size={compactShell ? "sm" : "default"}
                     type="button"
                     variant="outline"
                   >
@@ -1399,6 +1444,7 @@ export default function App() {
                     onClick={() => {
                       setIsSessionDialogOpen(true);
                     }}
+                    size={compactShell ? "sm" : "default"}
                     type="button"
                   >
                     <FolderSearch2 data-icon="inline-start" />
@@ -1409,6 +1455,7 @@ export default function App() {
                       onClick={() => {
                         clearSelectedSession("Выбор очищен локально. Сессию можно открыть из диалога.");
                       }}
+                      size={compactShell ? "sm" : "default"}
                       type="button"
                       variant="outline"
                     >
@@ -1421,28 +1468,12 @@ export default function App() {
             </CardHeader>
           </Card>
 
-          <section className="flex min-h-0 flex-1 flex-col gap-5">
-            <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={() => {
-                  setMainScreen("session");
-                }}
-                type="button"
-                variant={mainScreen === "session" ? "default" : "outline"}
-              >
-                Session
-              </Button>
-              <Button
-                onClick={() => {
-                  setMainScreen("project_metrics");
-                }}
-                type="button"
-                variant={mainScreen === "project_metrics" ? "default" : "outline"}
-              >
-                Project metrics
-              </Button>
-            </div>
-
+          <section
+            className={cn(
+              "flex flex-col",
+              compactShell ? "gap-3" : "min-h-0 flex-1 gap-5",
+            )}
+          >
             {mainScreen === "project_metrics" ? (
               <ProjectMetricsScreen
                 catalogBusy={catalogBusy}

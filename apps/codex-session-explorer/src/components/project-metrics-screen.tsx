@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  FolderGit2,
   Gauge,
   RefreshCcw,
   Search,
@@ -166,11 +165,11 @@ export function ProjectMetricsScreen({
   const selectedWindowLabel = describeRangePreset(range.preset);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <Card className={cn(SURFACE_CARD_CLASS, "min-h-0 w-full flex-1")}>
-        <CardHeader className="gap-4 border-b border-border/50 pb-4">
+    <div className="flex min-w-0 flex-col">
+      <Card className={cn(SURFACE_CARD_CLASS, "w-full")}>
+        <CardHeader className="gap-3 border-b border-border/50 pb-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               <div className="flex flex-wrap items-center gap-2">
                 <BarChart3 className="size-4 text-[color:var(--accent-strong)]" />
                 <CardTitle>Project metrics</CardTitle>
@@ -180,9 +179,6 @@ export function ProjectMetricsScreen({
                   </Badge>
                 ) : null}
               </div>
-              <p className="text-xs text-muted-foreground sm:text-sm">
-                Chart-first timeline поверх `query_project_metrics`.
-              </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -204,7 +200,7 @@ export function ProjectMetricsScreen({
           </div>
 
           <div
-            className="grid gap-2 xl:grid-cols-[minmax(0,1.85fr)_minmax(0,0.8fr)_minmax(220px,1fr)_auto]"
+            className="grid gap-2 xl:grid-cols-[minmax(0,1.75fr)_minmax(0,0.72fr)_minmax(220px,1fr)_auto]"
             data-testid="project-metrics-toolbar"
           >
             <div className="relative" ref={projectMenuRef}>
@@ -348,17 +344,14 @@ export function ProjectMetricsScreen({
               ))}
             </div>
 
-            <label className="flex min-h-10 items-center gap-3 rounded-xl border border-border/70 bg-background px-3 text-sm text-foreground">
+            <label className="flex min-h-10 items-center gap-2 rounded-xl border border-border/70 bg-background px-3 text-sm text-foreground">
               <input
                 checked={includeSpawnAgents}
                 className="size-4 rounded border-border bg-background accent-[color:var(--accent-strong)]"
                 onChange={(event) => onIncludeSpawnAgentsChange(event.target.checked)}
                 type="checkbox"
               />
-              <span className="min-w-0">
-                <span className={TOOLBAR_META_CLASS}>Scope detail</span>
-                <span className="mt-0.5 block font-medium">Include spawn agents</span>
-              </span>
+              <span className="min-w-0 font-medium">Spawn agents</span>
             </label>
           </div>
 
@@ -385,17 +378,6 @@ export function ProjectMetricsScreen({
             </div>
           ) : null}
 
-          {selectedProject ? (
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
-              <FolderGit2 className="size-3.5 shrink-0" />
-              <span className="font-medium text-foreground">{selectedProject.label}</span>
-              <span className="min-w-0 flex-1 break-all">{selectedProject.description}</span>
-              <Badge className="h-5 px-2 text-[10px]" variant="outline">
-                {formatScopeCountsSummary(selectedProject.availableScopeCounts)}
-              </Badge>
-              <CoveragePill coverage={selectedProject.state === "degraded" ? "unknown" : "known"} />
-            </div>
-          ) : null}
         </CardHeader>
 
         <CardContent className="min-h-0 flex-1 pt-4">
@@ -720,7 +702,7 @@ function ProjectMetricsContent({
             ) : (
               <>
                 <div className="rounded-xl border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                  Hollow points = `partial`, gaps in the line = `unknown`. Hover updates the inspector, click opens the session.
+                  Hollow points = `partial`, gaps in the line = `unknown`. Hover and click update the inspector; session opening stays on the explicit action buttons.
                 </div>
 
                 <div className="h-[28rem] w-full lg:h-[32rem]">
@@ -775,7 +757,6 @@ function ProjectMetricsContent({
                             <SeriesDot
                               currentSessionId={currentSessionId}
                               onActivateSession={onActiveSessionIdChange}
-                              onOpenSession={onOpenSession}
                               seriesKey={series.key}
                             />
                           }
@@ -1203,13 +1184,11 @@ function SummaryChartTooltip({
 function SeriesDot({
   currentSessionId,
   onActivateSession,
-  onOpenSession,
   seriesKey,
   ...props
 }: DotProps & {
   currentSessionId: string | null;
   onActivateSession: (value: string) => void;
-  onOpenSession: (sessionId: string) => void;
   payload?: ProjectMetricsChartRow;
   seriesKey: ProjectMetricSeriesKey;
 }) {
@@ -1236,7 +1215,6 @@ function SeriesDot({
       fillOpacity={selected ? 1 : 0.92}
       onClick={() => {
         onActivateSession(row.sessionId);
-        onOpenSession(row.sessionId);
       }}
       onMouseEnter={() => onActivateSession(row.sessionId)}
       r={selected ? 5.5 : 4}
@@ -1497,4 +1475,4 @@ function MetaItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-export { clampZoomWindow, createInitialProjectMetricsRange, focusRecentWindow };
+export { clampZoomWindow, createInitialProjectMetricsRange, focusRecentWindow, SeriesDot };

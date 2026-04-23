@@ -78,7 +78,8 @@ body {
   height: 100vh;
   height: 100dvh;
   overflow-x: hidden;
-  overflow-y: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 @layer base {
