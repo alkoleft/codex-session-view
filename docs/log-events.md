@@ -650,6 +650,7 @@ Incremental tail для standalone rollout и live-import subagent sessions ра
 
 - `operation_kind`
 - `operation_id`
+- для viewer-contract дополнительно проецируются `operation_terminal_seq`, `operation_is_preferred_terminal` и `operation_status`
 
 `operation_id` берётся из:
 
@@ -657,6 +658,11 @@ Incremental tail для standalone rollout и live-import subagent sessions ра
 - иначе из `item_id`.
 
 Результат (`completed` / `updated`) подвешивается под стартовое событие той же операции.
+
+`operation_status` берётся из terminal snapshot operation-stream и несёт последнее известное
+`status` для всей операции, а не только для конкретной строки лога. Благодаря этому viewer может
+считать неуспешные операции (`failed` / `error`) без повторного парсинга raw payload и без
+локальных эвристик по `tool.result` / `patch.apply`.
 
 Это работает для:
 

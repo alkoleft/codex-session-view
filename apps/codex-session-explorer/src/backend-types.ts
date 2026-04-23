@@ -178,6 +178,7 @@ export type EventEntry = {
   operation_terminal_seq: number | null;
   operation_last_seq: number | null;
   operation_is_preferred_terminal: boolean;
+  operation_status: string | null;
   phase: string | null;
   aggregated_output: string | null;
   output_value: unknown;

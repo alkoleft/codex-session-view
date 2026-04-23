@@ -50,6 +50,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { SessionEventList } from "@/components/session-event-list";
 import { AgentsPanel } from "@/components/agents-panel";
+import { SessionMetricsPanel } from "@/components/session-metrics-panel";
 import {
   buildAgentGraphViewModel,
   preferredAgentThreadId,
@@ -1484,6 +1485,12 @@ export default function App() {
                         </div>
                       </CardContent>
                     </Card>
+
+                    <SessionMetricsPanel
+                      selectedIndexedSummary={selectedIndexedSummary}
+                      selectedLoadedSession={selectedLoadedSession}
+                      selectedPreview={selectedPreview}
+                    />
 
                     <AgentsPanel
                       activeAgent={activeAgent}

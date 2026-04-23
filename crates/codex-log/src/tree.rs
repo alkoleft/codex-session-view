@@ -141,6 +141,8 @@ pub struct EventEntry {
     pub operation_last_seq: Option<u64>,
     #[serde(default)]
     pub operation_is_preferred_terminal: bool,
+    #[serde(default)]
+    pub operation_status: Option<String>,
     pub phase: Option<String>,
     pub aggregated_output: Option<String>,
     pub output_value: Option<Value>,
@@ -1363,6 +1365,9 @@ fn format_event_entry(
             .as_ref()
             .and_then(|snapshot| snapshot.terminal_seq)
             == Some(event.seq),
+        operation_status: operation_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.last_status.clone()),
         phase: payload
             .and_then(|obj| obj.get("phase"))
             .and_then(Value::as_str)
@@ -3199,6 +3204,7 @@ mod tests {
         );
         assert_eq!(web_search_started.event.operation_started_seq, Some(2));
         assert_eq!(web_search_started.event.operation_terminal_seq, Some(3));
+        assert_eq!(web_search_started.event.operation_status.as_deref(), None);
         assert_eq!(
             web_search_completed
                 .event
@@ -3432,11 +3438,61 @@ mod tests {
         );
         assert_eq!(patch_started.event.operation_started_seq, Some(2));
         assert_eq!(patch_completed.event.operation_terminal_seq, Some(3));
+        assert_eq!(
+            patch_completed.event.operation_status.as_deref(),
+            Some("completed")
+        );
         assert!(patch_completed.event.operation_is_preferred_terminal);
         assert_eq!(
             patch_completed.event.parent_event_id.as_deref(),
             Some("run-1:2")
         );
+    }
+
+    #[test]
+    fn build_event_tree_projects_operation_status_from_terminal_snapshot() {
+        let events = vec![
+            make_event("thread.started", json!({"thread_id":"root-thread"}), 1),
+            make_event(
+                "tool.call",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"search_query",
+                    "tool_use_id":"tool-1",
+                    "input":{"q":"rust serde flatten"}
+                }),
+                2,
+            ),
+            make_event(
+                "tool.result",
+                json!({
+                    "actor_type":"agent",
+                    "thread_id":"root-thread",
+                    "tool_name":"search_query",
+                    "tool_use_id":"tool-1",
+                    "status":"failed",
+                    "phase":"completed",
+                    "error":"timeout"
+                }),
+                3,
+            ),
+        ];
+
+        let tree = build_event_tree(Path::new("/tmp/events.jsonl"), &events, 120);
+        let root = &tree.roots[0];
+        let tool_call = match &root.items[1] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected tool call event"),
+        };
+        let tool_result = match &tool_call.children[0] {
+            TimelineItem::Event(node) => node,
+            TimelineItem::Thread(_) => panic!("expected tool result child"),
+        };
+
+        assert_eq!(tool_call.event.operation_status.as_deref(), Some("failed"));
+        assert_eq!(tool_result.event.operation_status.as_deref(), Some("failed"));
+        assert!(tool_result.event.operation_is_preferred_terminal);
     }
 
     #[test]

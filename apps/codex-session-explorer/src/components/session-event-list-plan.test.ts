@@ -38,6 +38,7 @@ function makeEvent(overrides: Partial<EventEntry> = {}): EventEntry {
     operation_terminal_seq: null,
     operation_last_seq: null,
     operation_is_preferred_terminal: false,
+    operation_status: null,
     phase: null,
     aggregated_output: null,
     output_value: null,
