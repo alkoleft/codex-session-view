@@ -103,8 +103,8 @@ export function ProjectMetricsScreen({
   const selectedWindowLabel = describeRangePreset(range.preset);
 
   return (
-    <div className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]">
-      <Card className={cn(SURFACE_CARD_CLASS, "min-h-0")}>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <Card className={cn(SURFACE_CARD_CLASS, "min-h-0 w-full flex-1")}>
         <CardHeader className="gap-3 border-b border-border/50">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="space-y-1">
@@ -320,55 +320,57 @@ export function ProjectMetricsScreen({
 
           {viewModel && metrics && metrics.sessions.length > 0 ? (
             <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1.5fr)_minmax(290px,0.85fr)]">
-              <div className="flex min-h-0 flex-col gap-4">
-                {viewModel.degraded ? (
-                  <Alert>
-                    <AlertTriangle className="size-4" />
-                    <AlertTitle>Degraded project identity</AlertTitle>
-                    <AlertDescription>
-                      Часть project identity неполная. Метрики показаны честно, но bucket нельзя считать полным project catalog.
-                    </AlertDescription>
-                  </Alert>
-                ) : null}
+              <ScrollArea className="h-[min(58vh,48rem)] min-h-0">
+                <div className="flex min-h-0 flex-col gap-4 pr-3">
+                  {viewModel.degraded ? (
+                    <Alert>
+                      <AlertTriangle className="size-4" />
+                      <AlertTitle>Degraded project identity</AlertTitle>
+                      <AlertDescription>
+                        Часть project identity неполная. Метрики показаны честно, но bucket нельзя считать полным project catalog.
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
 
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {viewModel.summaryCards.map((card) => (
-                    <Card className={SURFACE_CARD_CLASS} key={card.label} size="sm">
-                      <CardContent className="py-1">
-                        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                          {card.label}
-                        </div>
-                        <div
-                          className={cn(
-                            "mt-2 text-xl font-semibold tracking-[-0.03em]",
-                            card.tone === "accent" && "text-[color:var(--accent-strong)]",
-                            card.tone === "danger" && "text-rose-300",
-                          )}
-                        >
-                          {card.value}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {viewModel.summaryCards.map((card) => (
+                      <Card className={SURFACE_CARD_CLASS} key={card.label} size="sm">
+                        <CardContent className="py-1">
+                          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                            {card.label}
+                          </div>
+                          <div
+                            className={cn(
+                              "mt-2 text-xl font-semibold tracking-[-0.03em]",
+                              card.tone === "accent" && "text-[color:var(--accent-strong)]",
+                              card.tone === "danger" && "text-rose-300",
+                            )}
+                          >
+                            {card.value}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
 
-                <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                  <CoveragePill coverage="known" />
-                  <CoveragePill coverage="partial" />
-                  <CoveragePill coverage="unknown" />
-                </div>
+                  <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <CoveragePill coverage="known" />
+                    <CoveragePill coverage="partial" />
+                    <CoveragePill coverage="unknown" />
+                  </div>
 
-                <div className="grid gap-4">
-                  {viewModel.charts.map((chart) => (
-                    <MetricChart
-                      chart={chart}
-                      currentSessionId={currentSessionId}
-                      key={chart.key}
-                      onOpenSession={onOpenSession}
-                    />
-                  ))}
+                  <div className="grid gap-4">
+                    {viewModel.charts.map((chart) => (
+                      <MetricChart
+                        chart={chart}
+                        currentSessionId={currentSessionId}
+                        key={chart.key}
+                        onOpenSession={onOpenSession}
+                      />
+                    ))}
+                  </div>
                 </div>
-              </div>
+              </ScrollArea>
 
               <Card className={cn(SURFACE_CARD_CLASS, "min-h-0")} size="sm">
                 <CardHeader className="gap-2">

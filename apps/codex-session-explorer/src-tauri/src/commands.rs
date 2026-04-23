@@ -2,9 +2,10 @@ use codex_log::session::{
     IndexedSessionCatalogPage, LoadedSession, SessionCatalogPage, TailCursor, TailResult,
 };
 use codex_log::session_metrics::{ProjectMetricsResponse, SessionMetrics, SessionMetricsQuery};
+use codex_session_explorer_backend::{
+    DetectCodexHomeResponse, InitializeCodexHomeResponse, SessionPreview, ViewerBackend,
+};
 use tauri::State;
-
-use crate::{DetectCodexHomeResponse, InitializeCodexHomeResponse, SessionPreview, ViewerBackend};
 
 type CommandResult<T> = Result<T, String>;
 

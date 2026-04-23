@@ -75,11 +75,10 @@ body {
 }
 
 [data-ui-scroll-container] {
-  min-height: 100vh;
-  min-height: 100dvh;
+  height: 100vh;
+  height: 100dvh;
   overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior-y: none;
+  overflow-y: hidden;
 }
 
 @layer base {

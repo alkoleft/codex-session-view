@@ -2,5 +2,7 @@
 resolver = "2"
 members = [
     "crates/codex-log",
+    "crates/codex-session-explorer-backend",
     "apps/codex-session-explorer/src-tauri",
+    "apps/codex-session-explorer-http",
 ]

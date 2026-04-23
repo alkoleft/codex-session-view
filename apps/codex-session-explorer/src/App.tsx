@@ -51,6 +51,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { SessionEventList } from "@/components/session-event-list";
 import { AgentsPanel } from "@/components/agents-panel";
+import { ProjectMetricsScreen } from "@/components/project-metrics-screen";
+import {
+  aggregateProjectMetricsResponses,
+  buildProjectSelectorOptions,
+  createInitialProjectMetricsRange,
+  resolveProjectMetricsRange,
+  type ProjectMetricsRangeSelection,
+  type ProjectSelectorOption,
+} from "@/components/project-metrics";
 import { SessionMetricsPanel } from "@/components/session-metrics-panel";
 import {
   buildAgentGraphViewModel,
@@ -59,6 +68,7 @@ import {
 import { cn } from "@/lib/utils";
 
 type BootState = "booting" | "needs_home" | "ready" | "error";
+type MainScreen = "session" | "project_metrics";
 
 const PANEL_CARD_CLASS = "min-h-0 gap-0 border-border bg-card shadow-none";
 const SURFACE_CARD_CLASS = "border-border bg-background shadow-none";
@@ -464,6 +474,16 @@ export default function App() {
   const [selectedPreview, setSelectedPreview] = useState<SessionPreview | null>(null);
   const [selectedLoadedSession, setSelectedLoadedSession] = useState<LoadedSession | null>(null);
   const [projectMetrics, setProjectMetrics] = useState<ProjectMetricsResponse | null>(null);
+  const [mainScreen, setMainScreen] = useState<MainScreen>("session");
+  const [projectOptions, setProjectOptions] = useState<ProjectSelectorOption[]>([]);
+  const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
+  const [projectMetricsRange, setProjectMetricsRange] = useState<ProjectMetricsRangeSelection>(
+    () => createInitialProjectMetricsRange(),
+  );
+  const [projectMetricsIncludeSpawnAgents, setProjectMetricsIncludeSpawnAgents] = useState(true);
+  const [projectMetricsLoading, setProjectMetricsLoading] = useState(false);
+  const [projectMetricsError, setProjectMetricsError] = useState<string | null>(null);
+  const [projectMetricsRefreshToken, setProjectMetricsRefreshToken] = useState(0);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [selectedAgentThreadId, setSelectedAgentThreadId] = useState<string | null>(null);
@@ -564,6 +584,9 @@ export default function App() {
     activeAgentThreadId && agentGraph
       ? agentGraph.byThreadId[activeAgentThreadId] ?? null
       : null;
+  const selectedProjectOption = selectedProjectKey
+    ? projectOptions.find((option) => option.projectKey === selectedProjectKey) ?? null
+    : null;
 
   const applyPreview = useCallback((preview: SessionPreview) => {
     tailCursorRef.current = preview.tail_cursor;
@@ -583,6 +606,8 @@ export default function App() {
     setSelectedSessionRef(null);
     setSelectedPreview(null);
     setSelectedLoadedSession(null);
+    setProjectMetrics(null);
+    setProjectMetricsError(null);
     setTailCursor(null);
     setTimelineFocusEventId(null);
     setTimelineFocusRevision(0);
@@ -713,6 +738,7 @@ export default function App() {
       setSessionError(null);
       setSelectedLoadedSession(null);
       setProjectMetrics(null);
+      setProjectMetricsError(null);
       setTimelineFocusEventId(null);
       setTimelineFocusRevision(0);
       tailCursorRef.current = null;
@@ -779,6 +805,7 @@ export default function App() {
       setSessionError(null);
       setSelectedLoadedSession(null);
       setProjectMetrics(null);
+      setProjectMetricsError(null);
       setTimelineFocusEventId(null);
       setTimelineFocusRevision(0);
       tailCursorRef.current = null;
@@ -976,35 +1003,99 @@ export default function App() {
   }, [backendCapabilities.supportsViewerCommands, bootState, clearSelectedSession, openSession]);
 
   useEffect(() => {
-    const metrics = selectedLoadedSession?.metrics;
-    if (!metrics) {
-      setProjectMetrics(null);
-      return;
-    }
-
     let cancelled = false;
-    void viewerBackendClient
-      .queryProjectMetrics({
-        project_key: metrics.project.project_key,
-        start_ts: null,
-        end_ts: null,
-        include_spawn_agents: true,
-      })
-      .then((response) => {
-        if (!cancelled) {
-          setProjectMetrics(response);
+
+    void buildProjectSelectorOptions(catalogSessions)
+      .then((options) => {
+        if (cancelled) {
+          return;
         }
+
+        setProjectOptions(options);
+        setSelectedProjectKey((current) => {
+          if (current && options.some((option) => option.projectKey === current)) {
+            return current;
+          }
+
+          const backendProjectKey = selectedLoadedSession?.metrics?.project.project_key;
+          if (backendProjectKey) {
+            const matched = options.find((option) =>
+              option.backendProjectKeys.includes(backendProjectKey),
+            );
+            if (matched) {
+              return matched.projectKey;
+            }
+          }
+
+          return options[0]?.projectKey ?? null;
+        });
       })
       .catch(() => {
         if (!cancelled) {
-          setProjectMetrics(null);
+          setProjectOptions([]);
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [selectedLoadedSession?.metrics]);
+  }, [catalogSessions, selectedLoadedSession?.metrics?.project.project_key]);
+
+  useEffect(() => {
+    if (!selectedProjectOption) {
+      setProjectMetrics(null);
+      setProjectMetricsError(null);
+      setProjectMetricsLoading(false);
+      return;
+    }
+
+    const { start_ts, end_ts } = resolveProjectMetricsRange(projectMetricsRange);
+    let cancelled = false;
+    setProjectMetricsLoading(true);
+    setProjectMetricsError(null);
+
+    void Promise.all(
+      selectedProjectOption.backendProjectKeys.map((projectKey) =>
+        viewerBackendClient.queryProjectMetrics({
+          project_key: projectKey,
+          start_ts,
+          end_ts,
+          include_spawn_agents: projectMetricsIncludeSpawnAgents,
+        }),
+      ),
+    )
+      .then((responses) => {
+        if (cancelled) {
+          return;
+        }
+
+        setProjectMetrics(
+          aggregateProjectMetricsResponses(selectedProjectOption.projectKey, responses),
+        );
+      })
+      .catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        setProjectMetrics(null);
+        setProjectMetricsError(extractErrorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setProjectMetricsLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    projectMetricsIncludeSpawnAgents,
+    projectMetricsRange,
+    projectMetricsRefreshToken,
+    selectedProjectOption,
+  ]);
 
   useEffect(() => {
     if (!backendCapabilities.liveTail || !liveTailEnabled || !selectedSessionRef || !tailCursorRef.current) {
@@ -1249,8 +1340,11 @@ export default function App() {
         </DialogContent>
       </Dialog>
 
-      <main data-ui-scroll-container className="h-full px-4 py-4 sm:px-6 sm:py-6">
-        <div className="flex min-h-full w-full flex-col gap-5">
+      <main
+        data-ui-scroll-container
+        className="box-border flex h-full min-h-0 overflow-hidden px-4 py-4 sm:px-6 sm:py-6"
+      >
+        <div className="flex h-full min-h-0 w-full flex-1 flex-col gap-5 overflow-hidden">
           <Card className={PANEL_CARD_CLASS}>
             <CardHeader className="gap-3 py-4">
               <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
@@ -1309,7 +1403,52 @@ export default function App() {
             </CardHeader>
           </Card>
 
-          <section className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(360px,0.9fr)]">
+          <section className="flex min-h-0 flex-1 flex-col gap-5">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={() => {
+                  setMainScreen("session");
+                }}
+                type="button"
+                variant={mainScreen === "session" ? "default" : "outline"}
+              >
+                Session
+              </Button>
+              <Button
+                onClick={() => {
+                  setMainScreen("project_metrics");
+                }}
+                type="button"
+                variant={mainScreen === "project_metrics" ? "default" : "outline"}
+              >
+                Project metrics
+              </Button>
+            </div>
+
+            {mainScreen === "project_metrics" ? (
+              <ProjectMetricsScreen
+                catalogBusy={catalogBusy}
+                currentSessionId={displayedSessionId}
+                error={projectMetricsError}
+                includeSpawnAgents={projectMetricsIncludeSpawnAgents}
+                loading={projectMetricsLoading}
+                metrics={projectMetrics}
+                onIncludeSpawnAgentsChange={setProjectMetricsIncludeSpawnAgents}
+                onOpenSession={(sessionId) => {
+                  setMainScreen("session");
+                  void openSessionById(sessionId);
+                }}
+                onProjectChange={setSelectedProjectKey}
+                onRangeChange={setProjectMetricsRange}
+                onRefresh={() => {
+                  setProjectMetricsRefreshToken((current) => current + 1);
+                }}
+                projectOptions={projectOptions}
+                range={projectMetricsRange}
+                selectedProjectKey={selectedProjectKey}
+              />
+            ) : (
+              <section className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(360px,0.9fr)]">
             <Card className={cn(PANEL_CARD_CLASS, "h-full")}>
               <CardHeader className="gap-3">
                 <div className="flex items-center gap-2">
@@ -1539,6 +1678,8 @@ export default function App() {
                 </ScrollArea>
               </CardContent>
             </Card>
+              </section>
+            )}
           </section>
         </div>
       </main>

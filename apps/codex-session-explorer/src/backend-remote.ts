@@ -70,11 +70,16 @@ export class RemoteViewerBackendClient implements ViewerBackendClient {
 
   private readonly baseUrl: string | null;
 
-  private readonly fetchImpl: typeof fetch;
+  private readonly fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
 
   public constructor(options: RemoteViewerBackendClientOptions) {
     this.baseUrl = resolveRemoteBaseUrl(options.baseUrl);
-    this.fetchImpl = options.fetch ?? fetch;
+    if (options.fetch) {
+      this.fetchImpl = (input, init) => options.fetch!(input, init);
+      return;
+    }
+
+    this.fetchImpl = (input, init) => window.fetch(input, init);
   }
 
   public async initialize() {

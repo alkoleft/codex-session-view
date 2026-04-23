@@ -1,8 +1,7 @@
-mod backend;
 #[cfg(feature = "desktop")]
 mod commands;
 
-pub use backend::{
+pub use codex_session_explorer_backend::{
     DetectCodexHomeResponse, InitializeCodexHomeResponse, SessionPreview, ViewerBackend,
 };
 
@@ -85,4 +84,30 @@ pub fn run() {
     desktop_builder()
         .run(tauri::generate_context!())
         .expect("log viewer should run");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    #[test]
+    fn capabilities_and_permissions_are_locked_to_viewer_commands() {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let permissions = std::fs::read_to_string(manifest_dir.join("permissions/default.toml"))
+            .expect("default permission file should exist");
+        assert!(permissions.contains("allow-detect-codex-home"));
+        assert!(permissions.contains("allow-initialize-codex-home"));
+        assert!(permissions.contains("allow-list-sessions"));
+        assert!(permissions.contains("allow-load-session-preview"));
+        assert!(permissions.contains("allow-load-session"));
+        assert!(permissions.contains("allow-tail-session"));
+        assert!(!permissions.contains("shell"));
+        assert!(!permissions.contains("process"));
+
+        let capabilities = std::fs::read_to_string(manifest_dir.join("capabilities/main.json"))
+            .expect("main capability should exist");
+        assert!(capabilities.contains("\"default\""));
+        assert!(!capabilities.contains("shell:"));
+        assert!(!capabilities.contains("process:"));
+    }
 }

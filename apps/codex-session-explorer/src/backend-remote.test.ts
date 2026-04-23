@@ -107,6 +107,44 @@ describe("RemoteViewerBackendClient", () => {
     );
   });
 
+  it("uses window.fetch without losing the browser binding", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [],
+          next_cursor: null,
+          diagnostics: [],
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      ),
+    );
+
+    vi.stubGlobal("window", {
+      location: {
+        origin: "http://localhost",
+      },
+      fetch: fetchMock,
+    });
+
+    const client = new RemoteViewerBackendClient({
+      baseUrl: null,
+    });
+
+    await client.listIndexedSessions();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost/api/viewer/list_indexed_sessions",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+  });
+
   it("uses JSON error payloads from the remote API", async () => {
     const client = new RemoteViewerBackendClient({
       baseUrl,

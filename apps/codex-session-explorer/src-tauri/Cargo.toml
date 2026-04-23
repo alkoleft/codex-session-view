@@ -21,6 +21,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 codex-log = { path = "../../../crates/codex-log" }
+codex-session-explorer-backend = { path = "../../../crates/codex-session-explorer-backend" }
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 tauri = { version = "2", optional = true, features = [] }

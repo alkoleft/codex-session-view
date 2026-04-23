@@ -1,12 +1,13 @@
 # codex-session-explorer
 
-`codex-session-explorer` это UI для интерактивного разбора логов Codex-сессий. Один и тот же frontend теперь может работать в двух режимах: как Tauri desktop-приложение с локальным backend и как browser UI с внешним HTTP backend, который отдаёт уже нормализованные сущности viewer API.
+`codex-session-explorer` это UI для интерактивного разбора логов Codex-сессий. Один и тот же frontend теперь может работать в двух режимах: как Tauri desktop-приложение с локальным backend и как browser UI поверх отдельного same-origin HTTP backend, который сам раздаёт встроенный frontend и viewer API.
 
 ## Что внутри
 
 - React + Vite frontend с Tailwind/shadcn shell.
-- Tauri 2 shell с startup flash prevention и сохранённым локальным IPC backend.
+- Tauri 2 shell с startup flash prevention и thin adapter над общим Rust viewer backend.
 - Remote/browser режим через HTTP JSON backend без зависимости от Rust/Tauri API.
+- Shared Rust viewer backend, который переиспользуется Tauri и HTTP runtime без дублирования доменной логики.
 - `tauri-ui` batteries: external link guard и dev-only debug panel по `Cmd/Ctrl + D`.
 - Единый frontend-контракт для каталога сессий, preview и полной загрузки сессии.
 - Live tail доступен только в `tauri`-режиме; для `remote` это capability v2.
@@ -37,6 +38,14 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
+Для browser-based production surface frontend собирается один раз и затем встраивается в
+`apps/codex-session-explorer-http`:
+
+```bash
+npm run build
+cargo run -p codex-session-explorer-http -- --port 4321
+```
+
 ## Режимы backend
 
 ### `tauri`
@@ -49,8 +58,9 @@ npm run tauri:build
 
 - Значение по умолчанию вне Tauri runtime.
 - Не требует `CODEX_HOME` и не показывает Tauri-specific path metadata в shell.
-- В v1 покрывает только список сессий, preview и полную загрузку сессии.
-- Live tail, SSE и WebSocket оставлены на следующую итерацию.
+- В browser-based приложении обычно запускается same-origin поверх `codex-session-explorer-http`, поэтому `VITE_VIEWER_REMOTE_BASE_URL` не обязателен.
+- Поддерживает список сессий, preview, полную загрузку сессии, session metrics и project metrics.
+- Live tail и viewer commands остаются capability-gated и в browser runtime по умолчанию недоступны.
 
 ## Конфигурация frontend
 
@@ -58,6 +68,7 @@ npm run tauri:build
 - `VITE_VIEWER_REMOTE_BASE_URL=https://host` задаёт базовый URL внешнего viewer backend для режима `remote`.
 - Если `VITE_VIEWER_BACKEND_MODE` не задан, frontend выбирает `tauri` внутри Tauri runtime и `remote` вне Tauri runtime.
 - `VITE_VIEWER_REMOTE_BASE_URL` применяется только когда выбран `remote` backend; в `tauri`-режиме он игнорируется.
+- Если frontend открыт из того же origin, что и HTTP backend, `RemoteViewerBackendClient` автоматически использует `window.location.origin`.
 
 Пример browser/dev запуска со stub backend:
 
@@ -75,6 +86,9 @@ Frontend ожидает `POST` endpoint’ы:
 - `/api/viewer/load_session_preview_by_id`
 - `/api/viewer/load_session_preview`
 - `/api/viewer/load_session`
+- `/api/viewer/load_session_metrics`
+- `/api/viewer/query_project_metrics`
+- `/api/viewer/tail_session`
 
 Требования к контракту:
 
@@ -84,6 +98,6 @@ Frontend ожидает `POST` endpoint’ы:
 
 ## Ограничения browser/remote v1
 
-- Нет live tail и подписки на viewer commands из Tauri window events.
+- Нет live tail polling по умолчанию и подписки на viewer commands из Tauri window events.
 - Внешние ссылки в browser-режиме открываются через browser-safe fallback.
 - Remote backend должен сам поставлять уже нормализованные события во внутреннем формате viewer API; дополнительный mapping во frontend не добавляется.

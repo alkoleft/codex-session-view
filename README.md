@@ -3,7 +3,9 @@
 `codex-session-view` это монорепозиторий для работы с логами Codex-сессий. Это не инструмент запуска `codex`; текущий scope ограничен чтением, нормализацией и просмотром логов.
 
 - `crates/codex-log` — Rust-библиотека для чтения, нормализации, replay и проекции логов;
+- `crates/codex-session-explorer-backend` — общий Rust backend-слой viewer без зависимости от Tauri runtime;
 - `apps/codex-session-explorer` — desktop-приложение `codex-session-explorer` для интерактивного просмотра этих логов.
+- `apps/codex-session-explorer-http` — локальный HTTP backend, который раздаёт встроенный frontend `codex-session-explorer` для browser-based запуска.
 
 ## Скриншоты
 
@@ -23,12 +25,24 @@
 cargo test --workspace
 npm --prefix apps/codex-session-explorer test
 npm --prefix apps/codex-session-explorer run build
+cargo build -p codex-session-explorer-http
 ```
+
+Для browser-based варианта production flow такой:
+
+```bash
+npm --prefix apps/codex-session-explorer run build
+cargo run -p codex-session-explorer-http -- --port 4321
+```
+
+По умолчанию HTTP app пытается определить `CODEX_HOME` автоматически; при необходимости можно явно передать `--codex-home /path/to/.codex`.
 
 ## Структура репозитория
 
 - `crates/codex-log` содержит source of truth для `EventRecord`, readers, session catalog, replay и tree/view-model.
-- `apps/codex-session-explorer/src-tauri` использует `codex-log` как backend-ядро для desktop viewer.
+- `crates/codex-session-explorer-backend` содержит переиспользуемую доменную логику viewer для desktop и HTTP runtime.
+- `apps/codex-session-explorer/src-tauri` теперь является thin adapter над общим backend-слоем.
+- `apps/codex-session-explorer-http` поднимает same-origin `/api/viewer/*` и раздаёт встроенный frontend.
 - `docs/` фиксирует актуальную модель логов, архитектуру и roadmap будущего CLI.
 
 ## Аналоги

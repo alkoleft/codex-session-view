@@ -12,8 +12,7 @@ use codex_log::session::{
 };
 use codex_log::session_metrics::{
     compute_session_metrics, extract_project_identity, ProjectMetricsResponse, SessionMetrics,
-    SessionMetricsQuery, SessionMetricsStore, METRICS_PROJECTION_VERSION,
-    METRICS_SCHEMA_VERSION,
+    SessionMetricsQuery, SessionMetricsStore, METRICS_PROJECTION_VERSION, METRICS_SCHEMA_VERSION,
 };
 use codex_log::tree::{
     build_event_tree_with_standalone_startup_metadata, load_records_from_standalone_rollout,
@@ -82,6 +81,13 @@ impl ViewerBackend {
             .write()
             .expect("viewer backend lock should not be poisoned") = Some(resolved_home.clone());
         Ok(InitializeCodexHomeResponse { resolved_home })
+    }
+
+    pub fn resolved_home(&self) -> Option<ResolvedCodexHome> {
+        self.resolved_home
+            .read()
+            .expect("viewer backend lock should not be poisoned")
+            .clone()
     }
 
     pub fn list_sessions(
@@ -584,12 +590,16 @@ mod tests {
         let first_path = write_rollout_file(
             &home,
             "session-a",
-            &[r#"{"timestamp":"2026-04-07T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":5}}}}"#],
+            &[
+                r#"{"timestamp":"2026-04-07T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":5}}}}"#,
+            ],
         );
         let second_path = write_rollout_file(
             &home,
             "session-b",
-            &[r#"{"timestamp":"2026-04-07T10:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"output_tokens":10}}}}"#],
+            &[
+                r#"{"timestamp":"2026-04-07T10:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"output_tokens":10}}}}"#,
+            ],
         );
         write_state_threads_db(
             &home,
@@ -638,7 +648,10 @@ mod tests {
             .expect("project metrics should load");
 
         assert_eq!(project.session_count, 2);
-        assert_eq!(project.contributing_session_ids, vec!["session-a", "session-b"]);
+        assert_eq!(
+            project.contributing_session_ids,
+            vec!["session-a", "session-b"]
+        );
     }
 
     #[test]
@@ -679,27 +692,6 @@ mod tests {
             .load_session("2026/04/07/escape.jsonl", None)
             .expect_err("symlink escape must be rejected");
         assert!(err.to_string().contains("outside sessions root"));
-    }
-
-    #[test]
-    fn capabilities_and_permissions_are_locked_to_viewer_commands() {
-        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let permissions = std::fs::read_to_string(manifest_dir.join("permissions/default.toml"))
-            .expect("default permission file should exist");
-        assert!(permissions.contains("allow-detect-codex-home"));
-        assert!(permissions.contains("allow-initialize-codex-home"));
-        assert!(permissions.contains("allow-list-sessions"));
-        assert!(permissions.contains("allow-load-session-preview"));
-        assert!(permissions.contains("allow-load-session"));
-        assert!(permissions.contains("allow-tail-session"));
-        assert!(!permissions.contains("shell"));
-        assert!(!permissions.contains("process"));
-
-        let capabilities = std::fs::read_to_string(manifest_dir.join("capabilities/main.json"))
-            .expect("main capability should exist");
-        assert!(capabilities.contains("\"default\""));
-        assert!(!capabilities.contains("shell:"));
-        assert!(!capabilities.contains("process:"));
     }
 
     #[test]
