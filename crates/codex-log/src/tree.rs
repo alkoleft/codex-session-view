@@ -3491,7 +3491,10 @@ mod tests {
         };
 
         assert_eq!(tool_call.event.operation_status.as_deref(), Some("failed"));
-        assert_eq!(tool_result.event.operation_status.as_deref(), Some("failed"));
+        assert_eq!(
+            tool_result.event.operation_status.as_deref(),
+            Some("failed")
+        );
         assert!(tool_result.event.operation_is_preferred_terminal);
     }
 
@@ -4169,11 +4172,8 @@ mod tests {
         let task_dir = temp.path().join("task-demo");
         let run_dir = task_dir.join("runs").join("20260323T000000Z--run-1");
         std::fs::create_dir_all(&run_dir).expect("run dir should be created");
-        std::fs::write(
-            task_dir.join("task.json"),
-            r#"{"task_id":"task-demo"}"#,
-        )
-        .expect("task json should be written");
+        std::fs::write(task_dir.join("task.json"), r#"{"task_id":"task-demo"}"#)
+            .expect("task json should be written");
         std::fs::write(
             run_dir.join("stdout.jsonl"),
             concat!(

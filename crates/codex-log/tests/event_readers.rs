@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet};
 use codex_log::events::payloads::PayloadObject;
 use codex_log::events::readers::{EventLogFileReader, JsonOutputEventReader, RunEventContext};
+use std::collections::{HashMap, HashSet};
 
 fn make_reader() -> JsonOutputEventReader {
     JsonOutputEventReader::new(

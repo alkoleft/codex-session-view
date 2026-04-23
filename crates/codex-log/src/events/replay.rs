@@ -402,13 +402,19 @@ mod tests {
         );
         let replayed = ReplayedRunStream::replay_run_dir(&run_dir).expect("replay should succeed");
 
-        assert_eq!(replayed.event_counts.get("thread.started").copied(), Some(1));
+        assert_eq!(
+            replayed.event_counts.get("thread.started").copied(),
+            Some(1)
+        );
         assert_eq!(replayed.event_counts.get("agent.started").copied(), Some(1));
         assert_eq!(replayed.event_counts.get("message.agent").copied(), Some(1));
         assert_eq!(replayed.event_counts.get("shell.result").copied(), Some(1));
         assert_eq!(replayed.event_counts.get("file.change").copied(), Some(1));
         assert_eq!(replayed.event_counts.get("error").copied(), Some(1));
-        assert_eq!(replayed.tool_counts.get("command_execution").copied(), Some(1));
+        assert_eq!(
+            replayed.tool_counts.get("command_execution").copied(),
+            Some(1)
+        );
         assert_eq!(replayed.root_thread_id.as_deref(), Some("root-thread"));
         assert!(replayed.subagent_threads.is_empty());
     }
@@ -441,13 +447,25 @@ mod tests {
         let replayed = ReplayedRunStream::replay_run_dir(&run_dir).expect("replay should succeed");
 
         assert_eq!(replayed.event_counts.get("agent.session").copied(), Some(1));
-        assert_eq!(replayed.event_counts.get("thread.started").copied(), Some(1));
-        assert_eq!(replayed.event_counts.get("collab.spawn_agent").copied(), Some(1));
+        assert_eq!(
+            replayed.event_counts.get("thread.started").copied(),
+            Some(1)
+        );
+        assert_eq!(
+            replayed.event_counts.get("collab.spawn_agent").copied(),
+            Some(1)
+        );
         assert_eq!(replayed.event_counts.get("todo.update").copied(), Some(2));
-        assert_eq!(replayed.event_counts.get("message.assistant").copied(), Some(1));
+        assert_eq!(
+            replayed.event_counts.get("message.assistant").copied(),
+            Some(1)
+        );
         assert_eq!(replayed.tool_counts.get("spawn_agent").copied(), Some(1));
         assert_eq!(replayed.tool_counts.get("update_plan").copied(), Some(2));
-        assert_eq!(replayed.subagent_counts.get("spawn_agent").copied(), Some(1));
+        assert_eq!(
+            replayed.subagent_counts.get("spawn_agent").copied(),
+            Some(1)
+        );
         assert_eq!(replayed.subagent_counts.get("update_plan").copied(), None);
         assert_eq!(replayed.subagent_threads.len(), 1);
         assert!(replayed.subagent_threads.contains("sub-1"));
@@ -505,8 +523,11 @@ mod tests {
         let subagents_dir = run_dir.join("subagents");
         fs::create_dir_all(&subagents_dir).expect("run dir should be created");
 
-        fs::write(task_dir.join("task.json"), json!({"task_id": task_id}).to_string())
-            .expect("task.json should be written");
+        fs::write(
+            task_dir.join("task.json"),
+            json!({"task_id": task_id}).to_string(),
+        )
+        .expect("task.json should be written");
         fs::write(run_dir.join("stdout.jsonl"), stdout).expect("stdout should be written");
         fs::write(run_dir.join("stderr.log"), "").expect("stderr should be written");
         if let Some((name, contents)) = subagent {

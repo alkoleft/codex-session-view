@@ -1716,8 +1716,14 @@ mod tests {
         let metrics: SessionMetrics =
             serde_json::from_value(legacy).expect("legacy metrics should deserialize");
         assert_eq!(metrics.token_ledger.reasoning_output.value, None);
-        assert_eq!(metrics.token_ledger.reasoning_output.coverage, MetricCoverage::Unknown);
+        assert_eq!(
+            metrics.token_ledger.reasoning_output.coverage,
+            MetricCoverage::Unknown
+        );
         assert_eq!(metrics.context.context_compression.value, None);
-        assert_eq!(metrics.context.context_compression.coverage, MetricCoverage::Unknown);
+        assert_eq!(
+            metrics.context.context_compression.coverage,
+            MetricCoverage::Unknown
+        );
     }
 }
