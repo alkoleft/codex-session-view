@@ -264,13 +264,22 @@ describe("ProjectMetricsScreen", () => {
     );
 
     expect(screen.getByText("Summary chart")).toBeTruthy();
-    expect(screen.getByText(/Recharts/)).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-toolbar")).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-inspector")).toBeTruthy();
     expect(screen.getByText(/Hollow points/)).toBeTruthy();
+
+    expect(screen.queryByTestId("project-metrics-series-panel")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Series" }));
+    expect(screen.getByTestId("project-metrics-series-panel")).toBeTruthy();
 
     const derivedToggle = screen.getByRole("button", { name: /Review \/ 1k tokens/i });
     expect(derivedToggle.getAttribute("aria-pressed")).toBe("false");
     await user.click(derivedToggle);
     expect(derivedToggle.getAttribute("aria-pressed")).toBe("true");
+
+    expect(screen.queryByTestId("project-metrics-overview-panel")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Overview" }));
+    expect(screen.getByTestId("project-metrics-overview-panel")).toBeTruthy();
 
     expect(screen.getByText("Sessions 1-16 of 16")).toBeTruthy();
     expect(screen.getByText("Showing 16 of 16 sessions")).toBeTruthy();

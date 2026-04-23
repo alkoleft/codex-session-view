@@ -11,6 +11,7 @@ import {
   Gauge,
   RefreshCcw,
   Search,
+  SlidersHorizontal,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -24,12 +25,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type {
-  DotProps,
-  TooltipContentProps,
-} from "recharts";
+import type { DotProps, TooltipContentProps } from "recharts";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -39,6 +38,7 @@ import {
   createInitialProjectMetricsRange,
   getProjectMetricPoint,
   type ProjectMetricSeries,
+  type ProjectMetricSeriesCategory,
   type ProjectMetricSeriesKey,
   type ProjectMetricsChartRow,
   type ProjectMetricsRangePreset,
@@ -49,9 +49,9 @@ import {
 import type { ProjectMetricsResponse, SessionScopeFilter } from "@/backend";
 
 const SURFACE_CARD_CLASS = "border-border bg-background shadow-none";
-const FILTER_CONTROL_CLASS =
-  "flex h-10 w-full items-center justify-between rounded-xl border border-border/70 bg-background px-3 text-sm text-foreground transition hover:border-border hover:bg-muted/30";
-const FILTER_META_CLASS = "text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground";
+const TOOLBAR_TRIGGER_CLASS =
+  "flex h-10 w-full items-center justify-between gap-3 rounded-xl border border-border/70 bg-background px-3 text-sm text-foreground transition hover:border-border hover:bg-muted/30";
+const TOOLBAR_META_CLASS = "text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground";
 const ZOOM_BUTTON_CLASS =
   "rounded-full border border-border/70 px-3 py-1.5 text-xs font-medium text-foreground transition hover:border-border hover:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50";
 const ZOOM_BUTTON_ACTIVE_CLASS = "border-foreground/20 bg-muted/50";
@@ -168,51 +168,72 @@ export function ProjectMetricsScreen({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Card className={cn(SURFACE_CARD_CLASS, "min-h-0 w-full flex-1")}>
-        <CardHeader className="gap-3 border-b border-border/50">
+        <CardHeader className="gap-4 border-b border-border/50 pb-4">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="space-y-1">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <BarChart3 className="size-4 text-[color:var(--accent-strong)]" />
                 <CardTitle>Project metrics</CardTitle>
+                {selectedProject ? (
+                  <Badge className="h-6 px-2 text-[11px]" variant="outline">
+                    {selectedProject.sessionCount} sessions
+                  </Badge>
+                ) : null}
               </div>
-              <p className="text-sm text-muted-foreground">
-                Отдельный экран хронологии по проекту поверх `query_project_metrics`.
+              <p className="text-xs text-muted-foreground sm:text-sm">
+                Chart-first timeline поверх `query_project_metrics`.
               </p>
             </div>
-            <Button onClick={onRefresh} size="sm" type="button" variant="outline">
-              <RefreshCcw className={cn("size-3.5", loading && "animate-spin")} data-icon="inline-start" />
-              Refresh
-            </Button>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedProject?.state === "degraded" ? (
+                <Badge className="h-6 px-2 text-[11px]" variant="destructive">
+                  degraded
+                </Badge>
+              ) : null}
+              {catalogBusy ? (
+                <Badge className="h-6 px-2 text-[11px]" variant="outline">
+                  catalog scan
+                </Badge>
+              ) : null}
+              <Button onClick={onRefresh} size="sm" type="button" variant="outline">
+                <RefreshCcw className={cn("size-3.5", loading && "animate-spin")} data-icon="inline-start" />
+                Refresh
+              </Button>
+            </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1.5fr)_minmax(180px,0.7fr)_minmax(260px,1fr)_minmax(220px,0.8fr)]">
-            <div className="relative flex flex-col gap-1.5" ref={projectMenuRef}>
-              <span className={FILTER_META_CLASS}>Project</span>
+          <div
+            className="grid gap-2 xl:grid-cols-[minmax(0,1.85fr)_minmax(0,0.8fr)_minmax(220px,1fr)_auto]"
+            data-testid="project-metrics-toolbar"
+          >
+            <div className="relative" ref={projectMenuRef}>
               <button
+                aria-label={selectedProject?.label ?? "Projects unavailable"}
                 aria-controls={projectMenuId}
                 aria-expanded={projectMenuOpen}
-                className={FILTER_CONTROL_CLASS}
+                className={TOOLBAR_TRIGGER_CLASS}
                 onClick={() => {
                   setProjectMenuOpen((current) => !current);
                   setWindowMenuOpen(false);
                 }}
                 type="button"
               >
-                <span className="min-w-0 truncate text-left font-medium">
-                  {selectedProject?.label ?? "Projects unavailable"}
+                <span className="min-w-0 text-left">
+                  <span className={TOOLBAR_META_CLASS}>Project</span>
+                  <span className="mt-0.5 block truncate font-medium">
+                    {selectedProject?.label ?? "Projects unavailable"}
+                  </span>
                 </span>
                 <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition", projectMenuOpen && "rotate-180")} />
               </button>
               {projectMenuOpen ? (
                 <div
-                  className="absolute z-20 mt-[4.75rem] w-[min(34rem,calc(100vw-3rem))] overflow-hidden rounded-xl border border-border/80 bg-card shadow-2xl shadow-black/25"
+                  className="absolute left-0 top-full z-20 mt-1 w-[min(34rem,calc(100vw-3rem))] overflow-hidden rounded-xl border border-border/80 bg-card shadow-2xl shadow-black/25"
                   id={projectMenuId}
                   role="listbox"
                 >
-                  <div
-                    className="max-h-80 overflow-y-auto overscroll-contain p-1.5"
-                    data-testid="project-selector-scroll"
-                  >
+                  <div className="max-h-80 overflow-y-auto overscroll-contain p-1.5" data-testid="project-selector-scroll">
                     <div className="flex flex-col">
                       {projectOptions.length === 0 ? (
                         <div className="px-3 py-3 text-sm text-muted-foreground">
@@ -256,24 +277,26 @@ export function ProjectMetricsScreen({
               ) : null}
             </div>
 
-            <div className="relative flex flex-col gap-1.5" ref={windowMenuRef}>
-              <span className={FILTER_META_CLASS}>Window</span>
+            <div className="relative" ref={windowMenuRef}>
               <button
                 aria-controls={windowMenuId}
                 aria-expanded={windowMenuOpen}
-                className={FILTER_CONTROL_CLASS}
+                className={TOOLBAR_TRIGGER_CLASS}
                 onClick={() => {
                   setWindowMenuOpen((current) => !current);
                   setProjectMenuOpen(false);
                 }}
                 type="button"
               >
-                <span className="font-medium">{selectedWindowLabel}</span>
+                <span className="min-w-0 text-left">
+                  <span className={TOOLBAR_META_CLASS}>Window</span>
+                  <span className="mt-0.5 block truncate font-medium">{selectedWindowLabel}</span>
+                </span>
                 <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition", windowMenuOpen && "rotate-180")} />
               </button>
               {windowMenuOpen ? (
                 <div
-                  className="absolute z-20 mt-[4.75rem] w-48 overflow-hidden rounded-xl border border-border/80 bg-card shadow-2xl shadow-black/25"
+                  className="absolute left-0 top-full z-20 mt-1 w-52 overflow-hidden rounded-xl border border-border/80 bg-card shadow-2xl shadow-black/25"
                   id={windowMenuId}
                   role="listbox"
                 >
@@ -304,25 +327,25 @@ export function ProjectMetricsScreen({
               ) : null}
             </div>
 
-            <div className="flex flex-col gap-1.5">
-              <span className={FILTER_META_CLASS}>Scope</span>
-              <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-border/70 bg-background p-1">
-                {(["all", "main", "subsession"] as SessionScopeFilter[]).map((value) => (
-                  <button
-                    className={cn(
-                      "rounded-lg px-3 py-2 text-sm font-medium transition",
-                      scopeFilter === value
-                        ? "bg-muted text-foreground"
-                        : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
-                    )}
-                    key={value}
-                    onClick={() => onScopeFilterChange(value)}
-                    type="button"
-                  >
-                    {describeScopeFilter(value)}
-                  </button>
-                ))}
-              </div>
+            <div className="flex flex-wrap items-center gap-1 rounded-xl border border-border/70 bg-background p-1">
+              <span className="px-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                Scope
+              </span>
+              {(["all", "main", "subsession"] as SessionScopeFilter[]).map((value) => (
+                <button
+                  className={cn(
+                    "rounded-lg px-3 py-2 text-sm font-medium transition",
+                    scopeFilter === value
+                      ? "bg-muted text-foreground"
+                      : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+                  )}
+                  key={value}
+                  onClick={() => onScopeFilterChange(value)}
+                  type="button"
+                >
+                  {describeScopeFilter(value)}
+                </button>
+              ))}
             </div>
 
             <label className="flex min-h-10 items-center gap-3 rounded-xl border border-border/70 bg-background px-3 text-sm text-foreground">
@@ -332,14 +355,17 @@ export function ProjectMetricsScreen({
                 onChange={(event) => onIncludeSpawnAgentsChange(event.target.checked)}
                 type="checkbox"
               />
-              <span className="font-medium">Include spawn agents</span>
+              <span className="min-w-0">
+                <span className={TOOLBAR_META_CLASS}>Scope detail</span>
+                <span className="mt-0.5 block font-medium">Include spawn agents</span>
+              </span>
             </label>
           </div>
 
           {range.preset === "custom" ? (
-            <div className="grid gap-3 md:grid-cols-2">
-              <label className="flex flex-col gap-1.5">
-                <span className={FILTER_META_CLASS}>Start</span>
+            <div className="grid gap-2 md:grid-cols-2">
+              <label className="flex flex-col gap-1">
+                <span className={TOOLBAR_META_CLASS}>Start</span>
                 <input
                   className="h-10 rounded-xl border border-border/70 bg-background px-3 text-sm text-foreground transition hover:border-border focus:border-border"
                   onChange={(event) => onRangeChange({ ...range, start: event.target.value })}
@@ -347,8 +373,8 @@ export function ProjectMetricsScreen({
                   value={range.start}
                 />
               </label>
-              <label className="flex flex-col gap-1.5">
-                <span className={FILTER_META_CLASS}>End</span>
+              <label className="flex flex-col gap-1">
+                <span className={TOOLBAR_META_CLASS}>End</span>
                 <input
                   className="h-10 rounded-xl border border-border/70 bg-background px-3 text-sm text-foreground transition hover:border-border focus:border-border"
                   onChange={(event) => onRangeChange({ ...range, end: event.target.value })}
@@ -360,80 +386,79 @@ export function ProjectMetricsScreen({
           ) : null}
 
           {selectedProject ? (
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-2 text-sm text-foreground">
-              <FolderGit2 className="size-4 text-muted-foreground" />
-              <span className="min-w-0 flex-1 break-all leading-6 text-muted-foreground">
-                {selectedProject.description} · {selectedProject.sessionCount} sessions
-              </span>
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
+              <FolderGit2 className="size-3.5 shrink-0" />
+              <span className="font-medium text-foreground">{selectedProject.label}</span>
+              <span className="min-w-0 flex-1 break-all">{selectedProject.description}</span>
+              <Badge className="h-5 px-2 text-[10px]" variant="outline">
+                {formatScopeCountsSummary(selectedProject.availableScopeCounts)}
+              </Badge>
               <CoveragePill coverage={selectedProject.state === "degraded" ? "unknown" : "known"} />
-              {catalogBusy ? (
-                <span className="text-xs font-medium text-muted-foreground">
-                  Scanning full session catalog…
-                </span>
-              ) : null}
             </div>
           ) : null}
         </CardHeader>
 
         <CardContent className="min-h-0 flex-1 pt-4">
-          {error ? (
-            <Alert className="mb-4" variant="destructive">
-              <AlertTriangle className="size-4" />
-              <AlertTitle>Project metrics query failed</AlertTitle>
-              <AlertDescription className="ui-selectable">{error}</AlertDescription>
-            </Alert>
-          ) : null}
+          <div className="flex min-h-0 flex-col gap-3">
+            {error ? (
+              <Alert variant="destructive">
+                <AlertTriangle className="size-4" />
+                <AlertTitle>Project metrics query failed</AlertTitle>
+                <AlertDescription className="ui-selectable">{error}</AlertDescription>
+              </Alert>
+            ) : null}
 
-          {loading ? (
-            <Alert>
-              <RefreshCcw className="size-4 animate-spin" />
-              <AlertTitle>Project metrics loading</AlertTitle>
-              <AlertDescription>Запрос активен, предыдущие ответы не перетрут новый выбор.</AlertDescription>
-            </Alert>
-          ) : null}
+            {loading ? (
+              <Alert>
+                <RefreshCcw className="size-4 animate-spin" />
+                <AlertTitle>Project metrics loading</AlertTitle>
+                <AlertDescription>Запрос активен, предыдущие ответы не перетрут новый выбор.</AlertDescription>
+              </Alert>
+            ) : null}
 
-          {!selectedProjectKey && !loading ? (
-            <Alert>
-              <Gauge className="size-4" />
-              <AlertTitle>Project not selected</AlertTitle>
-              <AlertDescription>Выберите проект из session catalog, чтобы загрузить хронологию.</AlertDescription>
-            </Alert>
-          ) : null}
+            {!selectedProjectKey && !loading ? (
+              <Alert>
+                <Gauge className="size-4" />
+                <AlertTitle>Project not selected</AlertTitle>
+                <AlertDescription>Выберите проект из session catalog, чтобы загрузить хронологию.</AlertDescription>
+              </Alert>
+            ) : null}
 
-          {selectedProjectKey && !loading && !error && metrics && metrics.sessions.length === 0 ? (
-            <Alert>
-              <Gauge className="size-4" />
-              <AlertTitle>No sessions for selected filter</AlertTitle>
-              <AlertDescription>
-                Для выбранных project/range/scope данных нет. Измените окно, scope или выберите другой проект.
-              </AlertDescription>
-            </Alert>
-          ) : null}
+            {selectedProjectKey && !loading && !error && metrics && metrics.sessions.length === 0 ? (
+              <Alert>
+                <Gauge className="size-4" />
+                <AlertTitle>No sessions for selected filter</AlertTitle>
+                <AlertDescription>
+                  Для выбранных project/range/scope данных нет. Измените окно, scope или выберите другой проект.
+                </AlertDescription>
+              </Alert>
+            ) : null}
 
-          {selectedProjectKey && !loading && !error && metrics && scopeFilter !== "all" && metrics.available_scope_counts.unknown > 0 ? (
-            <Alert className="mb-4">
-              <AlertTriangle className="size-4" />
-              <AlertTitle>Unknown session scope remains outside narrow filters</AlertTitle>
-              <AlertDescription>
-                В выбранном окне есть {metrics.available_scope_counts.unknown} сесс.
-                с `unknown` scope. Они остаются видимыми только в режиме `all`.
-              </AlertDescription>
-            </Alert>
-          ) : null}
+            {selectedProjectKey && !loading && !error && metrics && scopeFilter !== "all" && metrics.available_scope_counts.unknown > 0 ? (
+              <Alert>
+                <AlertTriangle className="size-4" />
+                <AlertTitle>Unknown session scope remains outside narrow filters</AlertTitle>
+                <AlertDescription>
+                  В выбранном окне есть {metrics.available_scope_counts.unknown} сесс.
+                  с `unknown` scope. Они остаются видимыми только в режиме `all`.
+                </AlertDescription>
+              </Alert>
+            ) : null}
 
-          {viewModel && metrics && metrics.sessions.length > 0 ? (
-            <ProjectMetricsContent
-              activeSessionId={activeSessionId}
-              currentSessionId={currentSessionId}
-              onActiveSessionIdChange={setActiveSessionId}
-              onOpenSession={onOpenSession}
-              setVisibleSeriesKeys={setVisibleSeriesKeys}
-              setZoomWindow={setZoomWindow}
-              viewModel={viewModel}
-              visibleSeriesKeys={visibleSeriesKeys}
-              zoomWindow={zoomWindow}
-            />
-          ) : null}
+            {viewModel && metrics && metrics.sessions.length > 0 ? (
+              <ProjectMetricsContent
+                activeSessionId={activeSessionId}
+                currentSessionId={currentSessionId}
+                onActiveSessionIdChange={setActiveSessionId}
+                onOpenSession={onOpenSession}
+                setVisibleSeriesKeys={setVisibleSeriesKeys}
+                setZoomWindow={setZoomWindow}
+                viewModel={viewModel}
+                visibleSeriesKeys={visibleSeriesKeys}
+                zoomWindow={zoomWindow}
+              />
+            ) : null}
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -461,19 +486,23 @@ function ProjectMetricsContent({
   visibleSeriesKeys: ProjectMetricSeriesKey[];
   zoomWindow: { startIndex: number; endIndex: number };
 }) {
+  const [secondaryPanel, setSecondaryPanel] = useState<"overview" | "series" | null>(null);
   const clampedWindow = clampZoomWindow(zoomWindow, viewModel.chartRows.length);
   const visibleRows = viewModel.chartRows.slice(clampedWindow.startIndex, clampedWindow.endIndex + 1);
   const visibleSeries = viewModel.chartSeries.filter((series) => visibleSeriesKeys.includes(series.key));
-  const activeRow = findActiveRow({
+  const selectedRow = findActiveRow({
     activeSessionId,
     currentSessionId,
-    rows: visibleRows,
+    rows: viewModel.chartRows,
   });
-  const selectedSessionItem = activeRow
-    ? viewModel.sessions.find((session) => session.sessionId === activeRow.sessionId) ?? null
+  const selectedSessionItem = selectedRow
+    ? viewModel.sessions.find((session) => session.sessionId === selectedRow.sessionId) ?? null
     : null;
+  const selectedRowVisible = selectedRow
+    ? visibleRows.some((row) => row.sessionId === selectedRow.sessionId)
+    : false;
   const windowSize = getWindowSize(clampedWindow);
-  const focusIndex = activeRow?.index ?? getWindowCenterIndex(clampedWindow);
+  const focusIndex = selectedRow?.index ?? getWindowCenterIndex(clampedWindow);
   const quickWindowSizes = [8, 16, 32].filter((size) => size < viewModel.chartRows.length);
   const windowSummary = `Sessions ${clampedWindow.startIndex + 1}-${clampedWindow.endIndex + 1} of ${viewModel.chartRows.length}`;
   const windowLabelSummary = visibleRows.length > 0
@@ -486,384 +515,647 @@ function ProjectMetricsContent({
     }),
   );
 
+  function focusSession(sessionId: string) {
+    const row = viewModel.chartRows.find((item) => item.sessionId === sessionId);
+    onActiveSessionIdChange(sessionId);
+    if (!row) {
+      return;
+    }
+    if (row.index < clampedWindow.startIndex || row.index > clampedWindow.endIndex) {
+      setZoomWindow(focusWindowAroundIndex(viewModel.chartRows.length, Math.max(4, windowSize), row.index));
+    }
+  }
+
   return (
-    <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1.65fr)_minmax(300px,0.85fr)]">
-      <ScrollArea className="h-[min(70vh,56rem)] min-h-0">
-        <div className="flex min-h-0 flex-col gap-4 pr-3">
-          {viewModel.degraded ? (
-            <Alert>
-              <AlertTriangle className="size-4" />
-              <AlertTitle>Degraded project identity</AlertTitle>
-              <AlertDescription>
-                Часть project identity неполная. Метрики показаны честно, но bucket нельзя считать полным project catalog.
-              </AlertDescription>
-            </Alert>
-          ) : null}
+    <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1.85fr)_minmax(320px,0.78fr)]">
+      <div className="flex min-h-0 flex-col gap-4" data-testid="project-metrics-stage">
+        <Card className={SURFACE_CARD_CLASS} size="sm">
+          <CardHeader className="gap-3 border-b border-border/50 pb-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1">
+                <CardTitle className="text-sm">Summary chart</CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  Главный рабочий слой: сначала тренд, затем детали выбранной точки.
+                </p>
+              </div>
 
-          {viewModel.hasUnknownScope ? (
-            <Alert>
-              <AlertTriangle className="size-4" />
-              <AlertTitle>Unknown scope detected</AlertTitle>
-              <AlertDescription>
-                Часть project sessions не удалось надёжно классифицировать как `main` или `subsession`.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {viewModel.summaryCards.map((card) => (
-              <Card className={SURFACE_CARD_CLASS} key={card.label} size="sm">
-                <CardContent className="py-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                    {card.label}
-                  </div>
-                  <div
-                    className={cn(
-                      "mt-2 text-xl font-semibold tracking-[-0.03em]",
-                      card.tone === "accent" && "text-[color:var(--accent-strong)]",
-                      card.tone === "danger" && "text-rose-300",
-                    )}
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap gap-1">
+                  <Button
+                    aria-pressed={secondaryPanel === "overview"}
+                    onClick={() => setSecondaryPanel((current) => current === "overview" ? null : "overview")}
+                    size="xs"
+                    type="button"
+                    variant={secondaryPanel === "overview" ? "secondary" : "outline"}
                   >
-                    {card.value}
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          <Card className={SURFACE_CARD_CLASS} size="sm">
-            <CardHeader className="gap-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <CardTitle className="text-sm">Summary chart</CardTitle>
-                  <p className="text-sm text-muted-foreground">
-                    Готовый chart stack на `Recharts`: hover details, Brush zoom, curated multi-series overlays.
-                  </p>
+                    Overview
+                  </Button>
+                  <Button
+                    aria-pressed={secondaryPanel === "series"}
+                    onClick={() => setSecondaryPanel((current) => current === "series" ? null : "series")}
+                    size="xs"
+                    type="button"
+                    variant={secondaryPanel === "series" ? "secondary" : "outline"}
+                  >
+                    <SlidersHorizontal className="size-3" data-icon="inline-start" />
+                    Series
+                  </Button>
                 </div>
-                <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+                <div className="flex flex-wrap gap-1">
                   <CoveragePill coverage="known" />
                   <CoveragePill coverage="partial" />
                   <CoveragePill coverage="unknown" />
                 </div>
               </div>
+            </div>
 
-              <div className="grid gap-2 md:grid-cols-2">
-                {viewModel.chartSeries.map((series) => {
-                  const selected = visibleSeriesKeys.includes(series.key);
-                  const disabled = series.availablePoints === 0;
+            {secondaryPanel === "overview" ? (
+              <OverviewPanel viewModel={viewModel} />
+            ) : null}
+
+            {secondaryPanel === "series" ? (
+              <SeriesPanel
+                chartRowsCount={viewModel.chartRows.length}
+                series={viewModel.chartSeries}
+                setVisibleSeriesKeys={setVisibleSeriesKeys}
+                visibleSeriesKeys={visibleSeriesKeys}
+              />
+            ) : null}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                <ZoomIn className="size-3.5" />
+                Zoom
+              </span>
+              <button
+                className={cn(ZOOM_BUTTON_CLASS, getWindowSize(clampedWindow) === viewModel.chartRows.length && ZOOM_BUTTON_ACTIVE_CLASS)}
+                onClick={() => {
+                  setZoomWindow(clampZoomWindow({ startIndex: 0, endIndex: viewModel.chartRows.length - 1 }, viewModel.chartRows.length));
+                }}
+                type="button"
+              >
+                All
+              </button>
+              <button
+                className={ZOOM_BUTTON_CLASS}
+                disabled={windowSize <= 2}
+                onClick={() => {
+                  setZoomWindow(zoomWindowIn(clampedWindow, viewModel.chartRows.length, focusIndex));
+                }}
+                type="button"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <ZoomIn className="size-3.5" />
+                  Zoom in
+                </span>
+              </button>
+              <button
+                className={ZOOM_BUTTON_CLASS}
+                disabled={windowSize >= viewModel.chartRows.length}
+                onClick={() => {
+                  setZoomWindow(zoomWindowOut(clampedWindow, viewModel.chartRows.length, focusIndex));
+                }}
+                type="button"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <ZoomOut className="size-3.5" />
+                  Zoom out
+                </span>
+              </button>
+              <button
+                className={ZOOM_BUTTON_CLASS}
+                disabled={clampedWindow.startIndex === 0}
+                onClick={() => {
+                  setZoomWindow(shiftZoomWindow(clampedWindow, viewModel.chartRows.length, -Math.max(1, Math.floor(windowSize / 2))));
+                }}
+                type="button"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <ChevronLeft className="size-3.5" />
+                  Earlier
+                </span>
+              </button>
+              <button
+                className={ZOOM_BUTTON_CLASS}
+                disabled={clampedWindow.endIndex >= viewModel.chartRows.length - 1}
+                onClick={() => {
+                  setZoomWindow(shiftZoomWindow(clampedWindow, viewModel.chartRows.length, Math.max(1, Math.floor(windowSize / 2))));
+                }}
+                type="button"
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  Later
+                  <ChevronRight className="size-3.5" />
+                </span>
+              </button>
+              {windowSize < viewModel.chartRows.length ? (
+                <button
+                  className={ZOOM_BUTTON_CLASS}
+                  onClick={() => {
+                    setZoomWindow(focusRecentWindow(viewModel.chartRows.length, windowSize));
+                  }}
+                  type="button"
+                >
+                  Latest
+                </button>
+              ) : null}
+              {quickWindowSizes.map((size) => (
+                <button
+                  aria-label={`Show ${size} sessions`}
+                  className={cn(ZOOM_BUTTON_CLASS, windowSize === size && ZOOM_BUTTON_ACTIVE_CLASS)}
+                  key={size}
+                  onClick={() => {
+                    setZoomWindow(focusWindowAroundIndex(viewModel.chartRows.length, size, focusIndex));
+                  }}
+                  type="button"
+                >
+                  {size}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{windowSummary}</span>
+              <span>·</span>
+              <span>{windowLabelSummary}</span>
+              <span className="ml-auto">Showing {visibleRows.length} of {viewModel.chartRows.length} sessions</span>
+            </div>
+          </CardHeader>
+
+          <CardContent className="space-y-3 pt-3">
+            {viewModel.degraded ? (
+              <Alert>
+                <AlertTriangle className="size-4" />
+                <AlertTitle>Degraded project identity</AlertTitle>
+                <AlertDescription>
+                  Часть project identity неполная. Метрики показаны честно, но bucket нельзя считать полным project catalog.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            {viewModel.hasUnknownScope ? (
+              <Alert>
+                <AlertTriangle className="size-4" />
+                <AlertTitle>Unknown scope detected</AlertTitle>
+                <AlertDescription>
+                  Часть project sessions не удалось надёжно классифицировать как `main` или `subsession`.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
+            {visibleSeries.length === 0 ? (
+              <Alert>
+                <Search className="size-4" />
+                <AlertTitle>No series selected</AlertTitle>
+                <AlertDescription>Включите хотя бы одну curated series, чтобы построить summary chart.</AlertDescription>
+              </Alert>
+            ) : !hasAvailableVisibleData ? (
+              <Alert>
+                <AlertTriangle className="size-4" />
+                <AlertTitle>Visible window has no chartable values</AlertTitle>
+                <AlertDescription>
+                  В текущем zoom-window у выбранных series только `unknown` значения. Расширьте окно или включите другие метрики.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <>
+                <div className="rounded-xl border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
+                  Hollow points = `partial`, gaps in the line = `unknown`. Hover updates the inspector, click opens the session.
+                </div>
+
+                <div className="h-[28rem] w-full lg:h-[32rem]">
+                  <ResponsiveContainer height="100%" width="100%">
+                    <LineChart
+                      data={viewModel.chartRows}
+                      margin={{ top: 12, right: 24, bottom: 20, left: 8 }}
+                      onMouseMove={(state) => {
+                        const row = extractChartRow(
+                          (state as { activePayload?: unknown }).activePayload,
+                        );
+                        if (row) {
+                          onActiveSessionIdChange(row.sessionId);
+                        }
+                      }}
+                    >
+                      <CartesianGrid stroke="currentColor" strokeDasharray="4 6" strokeOpacity={0.12} />
+                      <XAxis
+                        dataKey="label"
+                        minTickGap={24}
+                        stroke="currentColor"
+                        strokeOpacity={0.45}
+                        tick={{ fill: "currentColor", fontSize: 12 }}
+                      />
+                      <YAxis
+                        domain={computeSeriesDomain(viewModel.chartRows, visibleSeriesKeys)}
+                        hide
+                        yAxisId="preview"
+                      />
+                      {visibleSeries.map((series) => (
+                        <YAxis
+                          domain={computeSeriesDomain(viewModel.chartRows, [series.key])}
+                          hide
+                          key={series.key}
+                          yAxisId={series.key}
+                        />
+                      ))}
+                      <Tooltip
+                        content={(props) => (
+                          <SummaryChartTooltip
+                            {...props}
+                            series={visibleSeries}
+                          />
+                        )}
+                      />
+                      {visibleSeries.map((series) => (
+                        <Line
+                          activeDot={{ r: 6, strokeWidth: 2 }}
+                          connectNulls={false}
+                          dataKey={(row: ProjectMetricsChartRow) => getProjectMetricPoint(row, series.key).value}
+                          dot={
+                            <SeriesDot
+                              currentSessionId={currentSessionId}
+                              onActivateSession={onActiveSessionIdChange}
+                              onOpenSession={onOpenSession}
+                              seriesKey={series.key}
+                            />
+                          }
+                          isAnimationActive={false}
+                          key={series.key}
+                          name={series.label}
+                          stroke={series.color}
+                          strokeWidth={2.2}
+                          type="monotone"
+                          yAxisId={series.key}
+                        />
+                      ))}
+                      <Brush
+                        dataKey="label"
+                        endIndex={clampedWindow.endIndex}
+                        fill="color-mix(in srgb, var(--background) 88%, transparent)"
+                        height={26}
+                        onChange={(nextWindow) => {
+                          if (
+                            typeof nextWindow?.startIndex !== "number"
+                            || typeof nextWindow?.endIndex !== "number"
+                          ) {
+                            return;
+                          }
+                          setZoomWindow(clampZoomWindow(nextWindow, viewModel.chartRows.length));
+                        }}
+                        startIndex={clampedWindow.startIndex}
+                        stroke="color-mix(in srgb, currentColor 35%, transparent)"
+                        travellerWidth={10}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {selectedRow && !selectedRowVisible ? (
+                  <Alert>
+                    <Search className="size-4" />
+                    <AlertTitle>Selected session is outside the current window</AlertTitle>
+                    <AlertDescription className="flex flex-wrap items-center gap-2">
+                      <span>Inspector stays synced, but the selected point is not visible on the current chart window.</span>
+                      <Button
+                        onClick={() => {
+                          setZoomWindow(focusWindowAroundIndex(viewModel.chartRows.length, Math.max(4, windowSize), selectedRow.index));
+                        }}
+                        size="xs"
+                        type="button"
+                        variant="outline"
+                      >
+                        Bring into view
+                      </Button>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+              </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <ProjectMetricsInspector
+        currentSessionId={currentSessionId}
+        onFocusSession={focusSession}
+        onOpenSession={onOpenSession}
+        selectedRow={selectedRow}
+        selectedSessionItem={selectedSessionItem}
+        series={visibleSeries}
+        sessions={viewModel.sessions}
+      />
+    </div>
+  );
+}
+
+function OverviewPanel({ viewModel }: { viewModel: ProjectMetricsViewModel }) {
+  return (
+    <div
+      className="rounded-2xl border border-border/70 bg-muted/10 p-3"
+      data-testid="project-metrics-overview-panel"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          Overview
+        </div>
+        <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
+          {viewModel.degraded ? <Badge variant="outline">degraded project</Badge> : null}
+          {viewModel.hasUnknownScope ? <Badge variant="outline">unknown scope present</Badge> : null}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {viewModel.summaryCards.map((card) => (
+          <div className="rounded-xl border border-border/70 bg-background/80 px-3 py-2.5" key={card.label}>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              {card.label}
+            </div>
+            <div
+              className={cn(
+                "mt-1.5 text-base font-semibold tracking-[-0.03em] text-foreground",
+                card.tone === "accent" && "text-[color:var(--accent-strong)]",
+                card.tone === "danger" && "text-rose-300",
+              )}
+            >
+              {card.value}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SeriesPanel({
+  chartRowsCount,
+  series,
+  setVisibleSeriesKeys,
+  visibleSeriesKeys,
+}: {
+  chartRowsCount: number;
+  series: ProjectMetricSeries[];
+  setVisibleSeriesKeys: Dispatch<SetStateAction<ProjectMetricSeriesKey[]>>;
+  visibleSeriesKeys: ProjectMetricSeriesKey[];
+}) {
+  return (
+    <div
+      className="rounded-2xl border border-border/70 bg-muted/10 p-3"
+      data-testid="project-metrics-series-panel"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          Series catalog
+        </div>
+        <div className="text-xs text-muted-foreground">
+          Compact control surface instead of the full toggle grid.
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-3 lg:grid-cols-2">
+        {(["operational", "derived"] as ProjectMetricSeriesCategory[]).map((category) => {
+          const categorySeries = series.filter((item) => item.category === category);
+          if (categorySeries.length === 0) {
+            return null;
+          }
+          return (
+            <div className="space-y-2" key={category}>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                {category}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {categorySeries.map((item) => {
+                  const selected = visibleSeriesKeys.includes(item.key);
+                  const disabled = item.availablePoints === 0;
                   return (
                     <button
                       aria-pressed={selected}
                       className={cn(
-                        "rounded-xl border px-3 py-3 text-left transition",
+                        "flex min-w-[12rem] flex-1 items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left text-sm transition",
                         selected
-                          ? "border-foreground/20 bg-muted/50"
+                          ? "border-foreground/20 bg-muted/60"
                           : "border-border/70 bg-background hover:border-border hover:bg-muted/30",
                         disabled && "opacity-70",
                       )}
-                      key={series.key}
+                      key={item.key}
                       onClick={() => {
-                        setVisibleSeriesKeys((current) => toggleSeries(current, series.key));
+                        setVisibleSeriesKeys((current) => toggleSeries(current, item.key));
                       }}
+                      title={item.description}
                       type="button"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <span className="space-y-1">
-                          <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-                            <span
-                              aria-hidden="true"
-                              className="size-2.5 rounded-full"
-                              style={{ backgroundColor: series.color }}
-                            />
-                            {series.label}
-                          </span>
-                          <span className="block text-xs leading-5 text-muted-foreground">
-                            {series.description}
-                          </span>
+                      <span className="min-w-0">
+                        <span className="flex items-center gap-2 font-medium text-foreground">
+                          <span
+                            aria-hidden="true"
+                            className="size-2.5 rounded-full"
+                            style={{ backgroundColor: item.color }}
+                          />
+                          <span className="truncate">{item.label}</span>
                         </span>
-                        <span className="rounded-full border border-border/70 px-2 py-0.5 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                          {series.category}
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {item.availablePoints}/{chartRowsCount} ready
+                          {item.partialPoints > 0 ? ` · ${item.partialPoints} partial` : ""}
+                          {item.unknownPoints > 0 ? ` · ${item.unknownPoints} unknown` : ""}
                         </span>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                        <span>{series.availablePoints}/{viewModel.chartRows.length} ready</span>
-                        {series.partialPoints > 0 ? <span>{series.partialPoints} partial</span> : null}
-                        {series.unknownPoints > 0 ? <span>{series.unknownPoints} unknown</span> : null}
-                      </div>
+                      </span>
+                      <span className="shrink-0 rounded-full border border-border/70 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                        {selected ? "on" : "off"}
+                      </span>
                     </button>
                   );
                 })}
               </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                  <ZoomIn className="size-3.5" />
-                  Zoom
-                </span>
-                <button
-                  className={cn(ZOOM_BUTTON_CLASS, getWindowSize(clampedWindow) === viewModel.chartRows.length && ZOOM_BUTTON_ACTIVE_CLASS)}
-                  onClick={() => {
-                    setZoomWindow(clampZoomWindow({ startIndex: 0, endIndex: viewModel.chartRows.length - 1 }, viewModel.chartRows.length));
-                  }}
-                  type="button"
-                >
-                  All
-                </button>
-                <button
-                  className={ZOOM_BUTTON_CLASS}
-                  disabled={windowSize <= 2}
-                  onClick={() => {
-                    setZoomWindow(zoomWindowIn(clampedWindow, viewModel.chartRows.length, focusIndex));
-                  }}
-                  type="button"
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <ZoomIn className="size-3.5" />
-                    Zoom in
-                  </span>
-                </button>
-                <button
-                  className={ZOOM_BUTTON_CLASS}
-                  disabled={windowSize >= viewModel.chartRows.length}
-                  onClick={() => {
-                    setZoomWindow(zoomWindowOut(clampedWindow, viewModel.chartRows.length, focusIndex));
-                  }}
-                  type="button"
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <ZoomOut className="size-3.5" />
-                    Zoom out
-                  </span>
-                </button>
-                <button
-                  className={ZOOM_BUTTON_CLASS}
-                  disabled={clampedWindow.startIndex === 0}
-                  onClick={() => {
-                    setZoomWindow(shiftZoomWindow(clampedWindow, viewModel.chartRows.length, -Math.max(1, Math.floor(windowSize / 2))));
-                  }}
-                  type="button"
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    <ChevronLeft className="size-3.5" />
-                    Earlier
-                  </span>
-                </button>
-                <button
-                  className={ZOOM_BUTTON_CLASS}
-                  disabled={clampedWindow.endIndex >= viewModel.chartRows.length - 1}
-                  onClick={() => {
-                    setZoomWindow(shiftZoomWindow(clampedWindow, viewModel.chartRows.length, Math.max(1, Math.floor(windowSize / 2))));
-                  }}
-                  type="button"
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    Later
-                    <ChevronRight className="size-3.5" />
-                  </span>
-                </button>
-                {windowSize < viewModel.chartRows.length ? (
-                  <button
-                    className={ZOOM_BUTTON_CLASS}
-                    onClick={() => {
-                      setZoomWindow(focusRecentWindow(viewModel.chartRows.length, windowSize));
-                    }}
-                    type="button"
-                  >
-                    Latest
-                  </button>
-                ) : null}
-                {quickWindowSizes.map((size) => (
-                  <button
-                    aria-label={`Show ${size} sessions`}
-                    className={cn(ZOOM_BUTTON_CLASS, windowSize === size && ZOOM_BUTTON_ACTIVE_CLASS)}
-                    key={size}
-                    onClick={() => {
-                      setZoomWindow(focusWindowAroundIndex(viewModel.chartRows.length, size, focusIndex));
-                    }}
-                    type="button"
-                  >
-                    {size}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">{windowSummary}</span>
-                <span>·</span>
-                <span>{windowLabelSummary}</span>
-                <span className="ml-auto">Showing {visibleRows.length} of {viewModel.chartRows.length} sessions</span>
-              </div>
-
-              <div className="rounded-xl border border-border/70 bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
-                Hollow points = `partial`, gaps in the line = `unknown`. Use buttons for coarse zoom/pan and `Brush` for fine adjustment.
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4 pt-0">
-              {visibleSeries.length === 0 ? (
-                <Alert>
-                  <Search className="size-4" />
-                  <AlertTitle>No series selected</AlertTitle>
-                  <AlertDescription>Включите хотя бы одну curated series, чтобы построить summary chart.</AlertDescription>
-                </Alert>
-              ) : !hasAvailableVisibleData ? (
-                <Alert>
-                  <AlertTriangle className="size-4" />
-                  <AlertTitle>Visible window has no chartable values</AlertTitle>
-                  <AlertDescription>
-                    В текущем zoom-window у выбранных series только `unknown` значения. Расширьте окно или включите другие метрики.
-                  </AlertDescription>
-                </Alert>
-              ) : (
-                <>
-                  <div className="h-[24rem] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart
-                        data={viewModel.chartRows}
-                        margin={{ top: 12, right: 24, bottom: 20, left: 8 }}
-                        onMouseMove={(state) => {
-                          const row = extractChartRow(
-                            (state as { activePayload?: unknown }).activePayload,
-                          );
-                          if (row) {
-                            onActiveSessionIdChange(row.sessionId);
-                          }
-                        }}
-                      >
-                        <CartesianGrid stroke="currentColor" strokeDasharray="4 6" strokeOpacity={0.12} />
-                        <XAxis
-                          dataKey="label"
-                          minTickGap={24}
-                          stroke="currentColor"
-                          strokeOpacity={0.45}
-                          tick={{ fill: "currentColor", fontSize: 12 }}
-                        />
-                        <YAxis
-                          hide
-                          yAxisId="preview"
-                          domain={computeSeriesDomain(viewModel.chartRows, visibleSeriesKeys)}
-                        />
-                        {visibleSeries.map((series) => (
-                          <YAxis
-                            domain={computeSeriesDomain(viewModel.chartRows, [series.key])}
-                            hide
-                            key={series.key}
-                            yAxisId={series.key}
-                          />
-                        ))}
-                        <Tooltip
-                          content={(props) => (
-                            <SummaryChartTooltip
-                              {...props}
-                              series={visibleSeries}
-                            />
-                          )}
-                        />
-                        {visibleSeries.map((series) => (
-                          <Line
-                            activeDot={{ r: 6, strokeWidth: 2 }}
-                            connectNulls={false}
-                            dataKey={(row: ProjectMetricsChartRow) => getProjectMetricPoint(row, series.key).value}
-                            dot={
-                              <SeriesDot
-                                currentSessionId={currentSessionId}
-                                onActivateSession={onActiveSessionIdChange}
-                                onOpenSession={onOpenSession}
-                                seriesKey={series.key}
-                              />
-                            }
-                            isAnimationActive={false}
-                            key={series.key}
-                            name={series.label}
-                            stroke={series.color}
-                            strokeWidth={2.2}
-                            type="monotone"
-                            yAxisId={series.key}
-                          />
-                        ))}
-                        <Brush
-                          dataKey="label"
-                          endIndex={clampedWindow.endIndex}
-                          fill="color-mix(in srgb, var(--background) 88%, transparent)"
-                          height={26}
-                          onChange={(nextWindow) => {
-                            if (
-                              typeof nextWindow?.startIndex !== "number"
-                              || typeof nextWindow?.endIndex !== "number"
-                            ) {
-                              return;
-                            }
-                            setZoomWindow(clampZoomWindow(nextWindow, viewModel.chartRows.length));
-                          }}
-                          startIndex={clampedWindow.startIndex}
-                          stroke="color-mix(in srgb, currentColor 35%, transparent)"
-                          travellerWidth={10}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </div>
-
-                  {activeRow ? (
-                    <ActivePointPanel
-                      activeRow={activeRow}
-                      onOpenSession={onOpenSession}
-                      selectedSessionItem={selectedSessionItem}
-                      series={visibleSeries}
-                    />
-                  ) : (
-                    <Alert>
-                      <Search className="size-4" />
-                      <AlertTitle>No active point</AlertTitle>
-                      <AlertDescription>Наведите курсор на chart point или кликните по session row справа.</AlertDescription>
-                    </Alert>
-                  )}
-                </>
-              )}
-            </CardContent>
-          </Card>
+function ProjectMetricsInspector({
+  currentSessionId,
+  onFocusSession,
+  onOpenSession,
+  selectedRow,
+  selectedSessionItem,
+  series,
+  sessions,
+}: {
+  currentSessionId: string | null;
+  onFocusSession: (sessionId: string) => void;
+  onOpenSession: (sessionId: string) => void;
+  selectedRow: ProjectMetricsChartRow | null;
+  selectedSessionItem: ProjectMetricsViewModel["sessions"][number] | null;
+  series: ProjectMetricSeries[];
+  sessions: ProjectMetricsViewModel["sessions"];
+}) {
+  return (
+    <Card
+      className={cn(SURFACE_CARD_CLASS, "min-h-0")}
+      data-testid="project-metrics-inspector"
+      size="sm"
+    >
+      <CardHeader className="gap-3 border-b border-border/50 pb-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <CardTitle className="text-sm">Inspector</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Active point details and contributing sessions stay in one synchronized flow.
+            </p>
+          </div>
+          {selectedRow ? (
+            <Button
+              onClick={() => onOpenSession(selectedRow.sessionId)}
+              size="xs"
+              type="button"
+              variant="outline"
+            >
+              Open session
+            </Button>
+          ) : null}
         </div>
-      </ScrollArea>
+      </CardHeader>
 
-      <Card className={cn(SURFACE_CARD_CLASS, "min-h-0")} size="sm">
-        <CardHeader className="gap-2">
-          <CardTitle className="text-sm">Contributing sessions</CardTitle>
-        </CardHeader>
-        <CardContent className="min-h-0 pt-0">
-          <ScrollArea className="h-[min(70vh,56rem)]">
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-3">
+        {selectedRow ? (
+          <>
+            <div className="rounded-2xl border border-border/70 bg-muted/10 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    Selected point
+                  </div>
+                  <div className="text-base font-semibold text-foreground">{selectedRow.label}</div>
+                  <div className="font-mono text-xs text-muted-foreground">{selectedRow.sessionId}</div>
+                </div>
+                {series.length > 0 ? <CoveragePill coverage={dominantCoverage(selectedRow, series)} /> : null}
+              </div>
+
+              {selectedSessionItem ? (
+                <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                  <MetaItem label="Outcome" value={selectedSessionItem.outcome} />
+                  <MetaItem label="Duration" value={selectedSessionItem.duration} />
+                  <MetaItem label="Tokens" value={selectedSessionItem.tokens} />
+                  <MetaItem label="Tool calls" value={selectedSessionItem.toolCalls} />
+                  <MetaItem label="Failures" value={selectedSessionItem.failures} />
+                  <MetaItem label="Project state" value={selectedSessionItem.projectState} />
+                  <MetaItem label="Scope" value={describeScopeBadge(selectedSessionItem.sessionScope)} />
+                </dl>
+              ) : null}
+            </div>
+
+            {series.length > 0 ? (
+              <div className="rounded-2xl border border-border/70 bg-background/80 p-3">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                  Metric snapshot
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {series.map((item) => {
+                    const point = getProjectMetricPoint(selectedRow, item.key);
+                    return (
+                      <div className="rounded-xl border border-border/70 bg-muted/20 p-3" key={item.key}>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                            <span className="size-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                            {item.shortLabel}
+                          </span>
+                          <CoveragePill coverage={point.coverage} />
+                        </div>
+                        <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                          {point.formattedValue}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">{item.valueLabel}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <Alert>
+                <Search className="size-4" />
+                <AlertTitle>No active series in the chart</AlertTitle>
+                <AlertDescription>Enable at least one series to populate the metric snapshot.</AlertDescription>
+              </Alert>
+            )}
+          </>
+        ) : (
+          <Alert>
+            <Search className="size-4" />
+            <AlertTitle>No active point</AlertTitle>
+            <AlertDescription>Наведите курсор на chart point или выберите сессию ниже.</AlertDescription>
+          </Alert>
+        )}
+
+        <div className="min-h-0 rounded-2xl border border-border/70 bg-background/80 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                Contributing sessions
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Hover/click on the chart and inspector selection remain aligned.
+              </div>
+            </div>
+            <Badge className="h-5 px-2 text-[10px]" variant="outline">
+              {sessions.length} total
+            </Badge>
+          </div>
+
+          <ScrollArea className="mt-3 h-[min(48vh,30rem)]">
             <div className="flex flex-col gap-2 pr-3">
-              {viewModel.sessions.map((session) => (
-                <button
-                  className={cn(
-                    "rounded-lg border border-border/70 bg-background/70 px-3 py-3 text-left transition hover:border-border hover:bg-muted/40",
-                    session.sessionId === currentSessionId && "border-foreground/20 bg-muted/50",
-                    session.sessionId === activeRow?.sessionId && "ring-1 ring-foreground/15",
-                  )}
-                  key={session.sessionId}
-                  onClick={() => {
-                    onActiveSessionIdChange(session.sessionId);
-                    onOpenSession(session.sessionId);
-                  }}
-                  type="button"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono text-xs text-foreground">{session.sessionId.slice(0, 8)}</span>
-                    <CoveragePill coverage={session.coverage} />
+              {sessions.map((session) => {
+                const selected = session.sessionId === selectedRow?.sessionId;
+                const opened = session.sessionId === currentSessionId;
+                return (
+                  <div
+                    className={cn(
+                      "rounded-xl border border-border/70 bg-background/70 p-3",
+                      selected && "border-foreground/20 bg-muted/50",
+                      opened && "ring-1 ring-foreground/15",
+                    )}
+                    key={session.sessionId}
+                  >
+                    <div className="flex items-start gap-2">
+                      <button
+                        className="min-w-0 flex-1 text-left"
+                        onClick={() => onFocusSession(session.sessionId)}
+                        type="button"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-mono text-xs text-foreground">{session.sessionId.slice(0, 8)}</span>
+                          <CoveragePill coverage={session.coverage} />
+                        </div>
+                        <div className="mt-2 text-xs text-muted-foreground">
+                          {session.startedAt ?? "n/a"} · {session.outcome} · {describeScopeBadge(session.sessionScope)}
+                        </div>
+                        <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                          <MetaItem label="Duration" value={session.duration} />
+                          <MetaItem label="Tokens" value={session.tokens} />
+                          <MetaItem label="Tool calls" value={session.toolCalls} />
+                          <MetaItem label="Failures" value={session.failures} />
+                        </dl>
+                      </button>
+                      <Button
+                        onClick={() => {
+                          onFocusSession(session.sessionId);
+                          onOpenSession(session.sessionId);
+                        }}
+                        size="xs"
+                        type="button"
+                        variant="outline"
+                      >
+                        Open
+                      </Button>
+                    </div>
                   </div>
-                  <div className="mt-2 text-xs text-muted-foreground">
-                    {session.startedAt ?? "n/a"} · {session.outcome} · {describeScopeBadge(session.sessionScope)}
-                  </div>
-                  <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                    <MetaItem label="Duration" value={session.duration} />
-                    <MetaItem label="Tokens" value={session.tokens} />
-                    <MetaItem label="Tool calls" value={session.toolCalls} />
-                    <MetaItem label="Failures" value={session.failures} />
-                  </dl>
-                </button>
-              ))}
+                );
+              })}
             </div>
           </ScrollArea>
-        </CardContent>
-      </Card>
-    </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -903,82 +1195,6 @@ function SummaryChartTooltip({
             </div>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-function ActivePointPanel({
-  activeRow,
-  onOpenSession,
-  selectedSessionItem,
-  series,
-}: {
-  activeRow: ProjectMetricsChartRow;
-  onOpenSession: (sessionId: string) => void;
-  selectedSessionItem: ProjectMetricsViewModel["sessions"][number] | null;
-  series: ProjectMetricSeries[];
-}) {
-  return (
-    <div className="grid gap-4 rounded-2xl border border-border/70 bg-background/70 p-4 lg:grid-cols-[minmax(0,1.3fr)_minmax(220px,0.7fr)]">
-      <div className="space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              Active point
-            </div>
-            <div className="text-base font-semibold text-foreground">{activeRow.label}</div>
-            <div className="font-mono text-xs text-muted-foreground">{activeRow.sessionId}</div>
-          </div>
-          <Button
-            onClick={() => onOpenSession(activeRow.sessionId)}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
-            Open session
-          </Button>
-        </div>
-
-        <div className="grid gap-2 sm:grid-cols-2">
-          {series.map((item) => {
-            const point = getProjectMetricPoint(activeRow, item.key);
-            return (
-              <div className="rounded-xl border border-border/70 bg-muted/20 p-3" key={item.key}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    <span className="size-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                    {item.shortLabel}
-                  </span>
-                  <CoveragePill coverage={point.coverage} />
-                </div>
-                <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
-                  {point.formattedValue}
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground">{item.valueLabel}</div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-border/70 bg-muted/10 p-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-          Session context
-        </div>
-        {selectedSessionItem ? (
-          <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <MetaItem label="Outcome" value={selectedSessionItem.outcome} />
-            <MetaItem label="Duration" value={selectedSessionItem.duration} />
-            <MetaItem label="Tokens" value={selectedSessionItem.tokens} />
-            <MetaItem label="Tool calls" value={selectedSessionItem.toolCalls} />
-            <MetaItem label="Failures" value={selectedSessionItem.failures} />
-            <MetaItem label="Project state" value={selectedSessionItem.projectState} />
-            <MetaItem label="Scope" value={describeScopeBadge(selectedSessionItem.sessionScope)} />
-          </dl>
-        ) : (
-          <p className="mt-3 text-sm text-muted-foreground">Session summary unavailable.</p>
-        )}
       </div>
     </div>
   );
