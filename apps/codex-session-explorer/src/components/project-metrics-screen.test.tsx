@@ -28,7 +28,12 @@ import type {
   SessionMetrics,
 } from "@/backend";
 import { buildProjectMetricsViewModel, createInitialProjectMetricsRange } from "@/components/project-metrics";
-import { ProjectMetricsScreen, SeriesDot } from "@/components/project-metrics-screen";
+import {
+  buildChartAnalysis,
+  ProjectMetricsScreen,
+  resolveSelectionWindow,
+  SeriesDot,
+} from "@/components/project-metrics-screen";
 
 function covered(
   value: number | null,
@@ -266,7 +271,8 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByText("Summary chart")).toBeTruthy();
     expect(screen.getByTestId("project-metrics-toolbar")).toBeTruthy();
     expect(screen.getByTestId("project-metrics-inspector")).toBeTruthy();
-    expect(screen.getByText(/Hollow points/)).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-analytics-controls")).toBeTruthy();
+    expect(screen.getByText(/Solid line = displayed values/)).toBeTruthy();
 
     expect(screen.queryByTestId("project-metrics-series-panel")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Series" }));
@@ -294,6 +300,19 @@ describe("ProjectMetricsScreen", () => {
     await user.click(screen.getByRole("button", { name: /Latest/i }));
     expect(screen.getByText("Sessions 9-16 of 16")).toBeTruthy();
 
+    fireEvent.change(screen.getByLabelText("Window size"), {
+      target: { value: "6" },
+    });
+    expect(screen.getByText("Sessions 11-16 of 16")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Window position"), {
+      target: { value: "4" },
+    });
+    expect(screen.getByText("Sessions 5-10 of 16")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Exclude outliers" }));
+    expect(screen.getByRole("button", { name: "Exclude outliers" }).getAttribute("aria-pressed")).toBe("true");
+
     await user.click(screen.getByRole("button", { name: "Open session" }));
     expect(onOpenSession).toHaveBeenCalledWith("session-16");
   });
@@ -314,7 +333,16 @@ describe("ProjectMetricsScreen", () => {
           cx={24}
           cy={18}
           onActivateSession={onActivateSession}
-          payload={row}
+          outlierMode="keep"
+          payload={{
+            index: row!.index,
+            label: row!.label,
+            outlierFlags: {},
+            processedValues: { tokens: row!.metrics.tokens.value },
+            row: row!,
+            sessionId: row!.sessionId,
+            trendValues: {},
+          }}
           seriesKey="tokens"
           stroke="#2563eb"
         />
@@ -406,5 +434,46 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByRole("button", { name: "Subsession" })).toBeTruthy();
     expect(screen.getByText(/Unknown session scope remains outside narrow filters/i)).toBeTruthy();
     expect(screen.getByText(/unknown scope/i)).toBeTruthy();
+  });
+
+  it("builds clamped and excluded views for visible-window outliers", () => {
+    const response = makeResponse(8);
+    response.sessions[7] = makeSession(8);
+    response.sessions[7].duration.total_ms = covered(9_000_000);
+
+    const viewModel = buildProjectMetricsViewModel(response, true);
+    const durationSeries = viewModel.chartSeries.find((item) => item.key === "duration");
+
+    expect(durationSeries).toBeTruthy();
+
+    const clamped = buildChartAnalysis({
+      outlierMode: "clamp",
+      rows: viewModel.chartRows,
+      series: [durationSeries!],
+      window: { startIndex: 0, endIndex: viewModel.chartRows.length - 1 },
+    });
+    const excluded = buildChartAnalysis({
+      outlierMode: "exclude",
+      rows: viewModel.chartRows,
+      series: [durationSeries!],
+      window: { startIndex: 0, endIndex: viewModel.chartRows.length - 1 },
+    });
+
+    expect(clamped.seriesAnalytics.duration?.outlierCount).toBe(1);
+    expect(clamped.chartData.at(-1)?.processedValues.duration).not.toBe(
+      viewModel.chartRows.at(-1)?.metrics.duration.value,
+    );
+    expect(excluded.chartData.at(-1)?.processedValues.duration).toBeNull();
+  });
+});
+
+describe("resolveSelectionWindow", () => {
+  it("normalizes drag direction and ignores one-point selection", () => {
+    expect(resolveSelectionWindow(9, 4, 16)).toEqual({
+      startIndex: 4,
+      endIndex: 9,
+    });
+    expect(resolveSelectionWindow(4, 4, 16)).toBeNull();
+    expect(resolveSelectionWindow(null, 4, 16)).toBeNull();
   });
 });

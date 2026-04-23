@@ -381,6 +381,27 @@ export function getProjectMetricPoint(
   return row.metrics[seriesKey];
 }
 
+export function formatProjectMetricSeriesValue(
+  seriesKey: ProjectMetricSeriesKey,
+  value: number | null,
+  coverage: MetricCoverage = value == null ? "unknown" : "known",
+): string {
+  const definition = PROJECT_METRIC_SERIES_DEFINITIONS.find((item) => item.key === seriesKey);
+  if (!definition) {
+    return formatCoveredNumber({
+      value,
+      coverage,
+      source: "derived",
+    });
+  }
+
+  return definition.formatValue({
+    value,
+    coverage,
+    source: "derived",
+  });
+}
+
 function buildChartRow(
   session: SessionMetrics,
   index: number,
