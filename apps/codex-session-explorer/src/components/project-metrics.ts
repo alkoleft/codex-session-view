@@ -30,7 +30,17 @@ export type ProjectSummaryCard = {
   tone?: "default" | "accent" | "danger";
 };
 
-export type ProjectMetricChartPoint = {
+export type ProjectMetricSeriesKey =
+  | "duration"
+  | "tokens"
+  | "failures"
+  | "toolCalls"
+  | "tokensPerSuccess"
+  | "reviewFindingsPer1k";
+
+export type ProjectMetricSeriesCategory = "operational" | "derived";
+
+export type ProjectMetricPoint = {
   sessionId: string;
   startedAt: string | null;
   label: string;
@@ -39,11 +49,31 @@ export type ProjectMetricChartPoint = {
   coverage: MetricCoverage;
 };
 
-export type ProjectMetricChart = {
-  key: string;
+export type ProjectMetricSeries = {
+  key: ProjectMetricSeriesKey;
   label: string;
+  shortLabel: string;
   valueLabel: string;
-  points: ProjectMetricChartPoint[];
+  description: string;
+  category: ProjectMetricSeriesCategory;
+  defaultVisible: boolean;
+  color: string;
+  availablePoints: number;
+  partialPoints: number;
+  unknownPoints: number;
+};
+
+export type ProjectMetricsChartRow = {
+  sessionId: string;
+  startedAt: string | null;
+  label: string;
+  index: number;
+  metrics: Record<ProjectMetricSeriesKey, ProjectMetricPoint>;
+};
+
+export type ProjectMetricsZoomWindow = {
+  startIndex: number;
+  endIndex: number;
 };
 
 export type ContributingSessionItem = {
@@ -60,7 +90,10 @@ export type ContributingSessionItem = {
 
 export type ProjectMetricsViewModel = {
   summaryCards: ProjectSummaryCard[];
-  charts: ProjectMetricChart[];
+  chartRows: ProjectMetricsChartRow[];
+  chartSeries: ProjectMetricSeries[];
+  defaultVisibleSeriesKeys: ProjectMetricSeriesKey[];
+  initialZoomWindow: ProjectMetricsZoomWindow;
   sessions: ContributingSessionItem[];
   degraded: boolean;
 };
@@ -76,6 +109,100 @@ type DedupedProject = {
   sessionIds: Set<string>;
   backendProjectKeys: Set<string>;
 };
+
+type ProjectMetricSeriesDefinition = {
+  key: ProjectMetricSeriesKey;
+  label: string;
+  shortLabel: string;
+  valueLabel: string;
+  description: string;
+  category: ProjectMetricSeriesCategory;
+  defaultVisible: boolean;
+  color: string;
+  selectMetric: (session: SessionMetrics, includeSpawnAgents: boolean) => CoveredMetric<number>;
+  formatValue: (metric: CoveredMetric<number>) => string;
+};
+
+const PROJECT_METRIC_SERIES_DEFINITIONS: readonly ProjectMetricSeriesDefinition[] = [
+  {
+    key: "duration",
+    label: "Total duration",
+    shortLabel: "Duration",
+    valueLabel: "Duration",
+    description: "Время работы по сессии.",
+    category: "operational",
+    defaultVisible: true,
+    color: "#f97316",
+    selectMetric: (session, includeSpawnAgents) =>
+      includeSpawnAgents
+        ? session.duration.total_ms
+        : subtractCoveredMetric(session.duration.total_ms, session.duration.spawn_agent_ms),
+    formatValue: formatDurationMetric,
+  },
+  {
+    key: "tokens",
+    label: "Total tokens",
+    shortLabel: "Tokens",
+    valueLabel: "Tokens",
+    description: "Общий токен usage по сессии.",
+    category: "operational",
+    defaultVisible: true,
+    color: "#2563eb",
+    selectMetric: (session, includeSpawnAgents) =>
+      includeSpawnAgents
+        ? session.token_ledger.total
+        : subtractCoveredMetric(session.token_ledger.total, session.token_ledger.spawn_agent),
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "failures",
+    label: "Errors / failed ops",
+    shortLabel: "Failures",
+    valueLabel: "Failures",
+    description: "Ошибки и неуспешные операции без подмены unknown нулями.",
+    category: "operational",
+    defaultVisible: true,
+    color: "#e11d48",
+    selectMetric: (session) => preferFailureMetric(session),
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "toolCalls",
+    label: "Tool-call volume",
+    shortLabel: "Tool calls",
+    valueLabel: "Tool calls",
+    description: "Количество tool-call операций по сессии.",
+    category: "operational",
+    defaultVisible: true,
+    color: "#059669",
+    selectMetric: (session) => session.operations.tool_calls,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "tokensPerSuccess",
+    label: "Tokens / success",
+    shortLabel: "Tokens/success",
+    valueLabel: "Tokens / success",
+    description: "Derived efficiency по успешным сессиям.",
+    category: "derived",
+    defaultVisible: false,
+    color: "#0f766e",
+    selectMetric: (session) => session.derived_efficiency.tokens_per_successful_session,
+    formatValue: formatCoveredFloat,
+  },
+  {
+    key: "reviewFindingsPer1k",
+    label: "Review / 1k tokens",
+    shortLabel: "Review/1k",
+    valueLabel: "Review findings / 1k tokens",
+    description: "Плотность review findings на 1000 токенов.",
+    category: "derived",
+    defaultVisible: false,
+    color: "#7c3aed",
+    selectMetric: (session) => session.derived_efficiency.review_findings_per_1k_tokens,
+    formatValue: formatCoveredFloat,
+  },
+] as const;
 
 export function createInitialProjectMetricsRange(): ProjectMetricsRangeSelection {
   return {
@@ -231,6 +358,12 @@ export function buildProjectMetricsViewModel(
         response.token_ledger.total,
         response.token_ledger.spawn_agent,
       );
+  const chartRows = sessions.map((session, index) =>
+    buildChartRow(session, index, includeSpawnAgents),
+  );
+  const chartSeries = PROJECT_METRIC_SERIES_DEFINITIONS.map((series) =>
+    buildChartSeriesMeta(series, chartRows),
+  );
 
   return {
     degraded,
@@ -261,46 +394,12 @@ export function buildProjectMetricsViewModel(
         value: formatCoveredFloat(response.derived_efficiency.review_findings_per_1k_tokens),
       },
     ],
-    charts: [
-      buildProjectMetricChart({
-        key: "duration",
-        label: "Total duration",
-        valueLabel: "Duration",
-        sessions,
-        selectMetric: (session) =>
-          includeSpawnAgents
-            ? session.duration.total_ms
-            : subtractCoveredMetric(session.duration.total_ms, session.duration.spawn_agent_ms),
-        formatValue: formatDurationMetric,
-      }),
-      buildProjectMetricChart({
-        key: "tokens",
-        label: "Total tokens",
-        valueLabel: "Tokens",
-        sessions,
-        selectMetric: (session) =>
-          includeSpawnAgents
-            ? session.token_ledger.total
-            : subtractCoveredMetric(session.token_ledger.total, session.token_ledger.spawn_agent),
-        formatValue: formatCoveredNumber,
-      }),
-      buildProjectMetricChart({
-        key: "failures",
-        label: "Errors / failed ops",
-        valueLabel: "Failures",
-        sessions,
-        selectMetric: (session) => preferFailureMetric(session),
-        formatValue: formatCoveredNumber,
-      }),
-      buildProjectMetricChart({
-        key: "tool-calls",
-        label: "Tool-call volume",
-        valueLabel: "Tool calls",
-        sessions,
-        selectMetric: (session) => session.operations.tool_calls,
-        formatValue: formatCoveredNumber,
-      }),
-    ],
+    chartRows,
+    chartSeries,
+    defaultVisibleSeriesKeys: chartSeries
+      .filter((series) => series.defaultVisible)
+      .map((series) => series.key),
+    initialZoomWindow: buildInitialZoomWindow(chartRows.length),
     sessions: sessions.map((session) => ({
       sessionId: session.session_id,
       startedAt: session.started_at,
@@ -321,6 +420,13 @@ export function buildProjectMetricsViewModel(
       projectState: session.project.state,
     })),
   };
+}
+
+export function getProjectMetricPoint(
+  row: ProjectMetricsChartRow,
+  seriesKey: ProjectMetricSeriesKey,
+): ProjectMetricPoint {
+  return row.metrics[seriesKey];
 }
 
 export async function deriveProjectIdentity(
@@ -362,36 +468,85 @@ export async function deriveProjectIdentity(
   };
 }
 
-function buildProjectMetricChart({
-  key,
-  label,
-  valueLabel,
-  sessions,
-  selectMetric,
-  formatValue,
-}: {
-  key: string;
-  label: string;
-  valueLabel: string;
-  sessions: SessionMetrics[];
-  selectMetric: (session: SessionMetrics) => CoveredMetric<number>;
-  formatValue: (metric: CoveredMetric<number>) => string;
-}): ProjectMetricChart {
-  return {
-    key,
-    label,
-    valueLabel,
-    points: sessions.map((session) => {
-      const metric = selectMetric(session);
-      return {
-        sessionId: session.session_id,
-        startedAt: session.started_at,
-        label: formatDateTime(session.started_at),
-        value: metric.value,
-        formattedValue: formatValue(metric),
-        coverage: metric.coverage,
-      };
+function buildChartRow(
+  session: SessionMetrics,
+  index: number,
+  includeSpawnAgents: boolean,
+): ProjectMetricsChartRow {
+  const metrics = Object.fromEntries(
+    PROJECT_METRIC_SERIES_DEFINITIONS.map((series) => {
+      const metric = series.selectMetric(session, includeSpawnAgents);
+      return [
+        series.key,
+        {
+          sessionId: session.session_id,
+          startedAt: session.started_at,
+          label: formatDateTime(session.started_at),
+          value: metric.value,
+          formattedValue: series.formatValue(metric),
+          coverage: metric.coverage,
+        },
+      ];
     }),
+  ) as Record<ProjectMetricSeriesKey, ProjectMetricPoint>;
+
+  return {
+    sessionId: session.session_id,
+    startedAt: session.started_at,
+    label: formatDateTime(session.started_at),
+    index,
+    metrics,
+  };
+}
+
+function buildChartSeriesMeta(
+  definition: ProjectMetricSeriesDefinition,
+  rows: ProjectMetricsChartRow[],
+): ProjectMetricSeries {
+  let availablePoints = 0;
+  let partialPoints = 0;
+  let unknownPoints = 0;
+
+  for (const row of rows) {
+    const point = row.metrics[definition.key];
+    if (point.coverage === "partial") {
+      partialPoints += 1;
+    }
+    if (point.coverage === "unknown") {
+      unknownPoints += 1;
+      continue;
+    }
+    if (point.value != null) {
+      availablePoints += 1;
+    }
+  }
+
+  return {
+    key: definition.key,
+    label: definition.label,
+    shortLabel: definition.shortLabel,
+    valueLabel: definition.valueLabel,
+    description: definition.description,
+    category: definition.category,
+    defaultVisible: definition.defaultVisible,
+    color: definition.color,
+    availablePoints,
+    partialPoints,
+    unknownPoints,
+  };
+}
+
+function buildInitialZoomWindow(totalPoints: number): ProjectMetricsZoomWindow {
+  if (totalPoints <= 1) {
+    return {
+      startIndex: 0,
+      endIndex: Math.max(0, totalPoints - 1),
+    };
+  }
+
+  return {
+    startIndex: 0,
+    endIndex: totalPoints - 1,
   };
 }
 

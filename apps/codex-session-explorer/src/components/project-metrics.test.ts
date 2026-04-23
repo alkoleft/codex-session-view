@@ -12,6 +12,7 @@ import {
   buildProjectMetricsViewModel,
   buildProjectSelectorOptions,
   createInitialProjectMetricsRange,
+  getProjectMetricPoint,
   resolveProjectMetricsRange,
 } from "@/components/project-metrics";
 
@@ -252,7 +253,7 @@ describe("resolveProjectMetricsRange", () => {
 });
 
 describe("buildProjectMetricsViewModel", () => {
-  it("preserves unknown coverage gaps and excludes spawn-agent contribution when requested", () => {
+  it("builds summary-chart rows, derived toggles, and explicit unknown coverage gaps", () => {
     const response = makeResponse([
       makeSession({
         session_id: "session-1",
@@ -298,10 +299,16 @@ describe("buildProjectMetricsViewModel", () => {
 
     expect(viewModel.degraded).toBe(true);
     expect(viewModel.summaryCards.find((card) => card.label === "Total tokens")?.value).toBe("6 000");
-    expect(viewModel.charts.find((chart) => chart.key === "tokens")?.points[1]).toMatchObject({
+    expect(getProjectMetricPoint(viewModel.chartRows[1], "tokens")).toMatchObject({
       coverage: "unknown",
       value: null,
     });
+    expect(viewModel.chartSeries.find((series) => series.key === "tokensPerSuccess")).toMatchObject({
+      category: "derived",
+      defaultVisible: false,
+    });
+    expect(viewModel.defaultVisibleSeriesKeys).toEqual(["duration", "tokens", "failures", "toolCalls"]);
+    expect(viewModel.initialZoomWindow).toEqual({ startIndex: 0, endIndex: 1 });
     expect(viewModel.sessions[0].tokens).toBe("3 000");
     expect(viewModel.sessions[1].failures).toContain("partial");
   });
