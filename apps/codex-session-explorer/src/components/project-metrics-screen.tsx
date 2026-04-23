@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useId, useRef, useState } from "react";
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, SetStateAction, WheelEvent as ReactWheelEvent } from "react";
 import {
   AlertTriangle,
   BarChart3,
@@ -641,6 +641,25 @@ function ProjectMetricsContent({
     clearSelection();
   }
 
+  function handleChartWheel(event: ReactWheelEvent<HTMLDivElement>) {
+    if (viewModel.chartRows.length <= windowSize) {
+      return;
+    }
+
+    const dominantDelta =
+      Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+    if (!Number.isFinite(dominantDelta) || dominantDelta === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    const direction = dominantDelta > 0 ? 1 : -1;
+    const step = pickWheelPanStep(windowSize, dominantDelta);
+    setZoomWindow(
+      shiftZoomWindow(clampedWindow, viewModel.chartRows.length, direction * step),
+    );
+  }
+
   return (
     <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1.85fr)_minmax(320px,0.78fr)]">
       <div className="flex min-h-0 flex-col gap-4" data-testid="project-metrics-stage">
@@ -939,7 +958,7 @@ function ProjectMetricsContent({
               <>
                 <div className="rounded-xl border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
                   Solid line = displayed values, dashed line = trend, dotted horizontal = median.
-                  Trend and median are drawn on top with contrast halo. Drag across the chart to zoom into an interval.
+                  Trend and median are drawn on top with contrast halo. Drag across the chart to zoom into an interval, or use wheel to pan the visible window.
                 </div>
                 {selectionPreview ? (
                   <div className="rounded-xl border border-[color:var(--accent-strong)]/35 bg-[color:var(--accent-strong)]/10 px-3 py-2 text-xs text-foreground">
@@ -951,7 +970,11 @@ function ProjectMetricsContent({
                   </div>
                 ) : null}
 
-                <div className="h-[28rem] w-full lg:h-[32rem]">
+                <div
+                  className="h-[28rem] w-full lg:h-[32rem]"
+                  data-testid="project-metrics-chart-surface"
+                  onWheel={handleChartWheel}
+                >
                   <ResponsiveContainer height="100%" width="100%">
                     <LineChart
                       className="cursor-crosshair"
@@ -1838,6 +1861,11 @@ function resolveSelectionWindow(
     startIndex: nextStartIndex,
     endIndex: nextEndIndex,
   };
+}
+
+function pickWheelPanStep(windowSize: number, delta: number) {
+  const normalized = Math.max(1, Math.ceil(Math.abs(delta) / 120));
+  return Math.max(1, Math.min(normalized, Math.max(1, Math.floor(windowSize / 4))));
 }
 
 function computeSeriesDomain(

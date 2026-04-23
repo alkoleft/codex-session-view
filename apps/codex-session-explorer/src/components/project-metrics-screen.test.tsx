@@ -310,6 +310,11 @@ describe("ProjectMetricsScreen", () => {
     });
     expect(screen.getByText("Sessions 5-10 of 16")).toBeTruthy();
 
+    fireEvent.wheel(screen.getByTestId("project-metrics-chart-surface"), {
+      deltaY: -120,
+    });
+    expect(screen.getByText("Sessions 4-9 of 16")).toBeTruthy();
+
     await user.click(screen.getByRole("button", { name: "Exclude outliers" }));
     expect(screen.getByRole("button", { name: "Exclude outliers" }).getAttribute("aria-pressed")).toBe("true");
 
