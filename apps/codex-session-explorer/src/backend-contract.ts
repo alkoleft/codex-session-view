@@ -3,7 +3,10 @@ import type {
   InitializeCodexHomeResponse,
   ListSessionsArgs,
   LoadedSession,
+  ProjectMetricsResponse,
   ResolvedCodexHome,
+  SessionMetrics,
+  SessionMetricsQuery,
   SessionPreview,
   TailCursor,
   TailResult,
@@ -40,6 +43,8 @@ export interface ViewerBackendClient {
   initialize: () => Promise<ViewerBootstrapResult>;
   listIndexedSessions: (args?: ListSessionsArgs) => Promise<IndexedSessionCatalogPage>;
   loadSession: (sessionRef: string) => Promise<LoadedSession>;
+  loadSessionMetrics: (sessionRef: string) => Promise<SessionMetrics>;
+  queryProjectMetrics: (query: SessionMetricsQuery) => Promise<ProjectMetricsResponse>;
   loadSessionPreview: (sessionRef: string) => Promise<SessionPreview>;
   loadSessionPreviewById: (sessionId: string) => Promise<SessionPreview>;
   subscribeToViewerCommands: (handlers: ViewerCommandHandlers) => Promise<() => void>;

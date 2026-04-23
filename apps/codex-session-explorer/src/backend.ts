@@ -2,7 +2,7 @@ import { resolveViewerBackendConfig } from "./backend-config";
 import type { ViewerBackendClient, ViewerCommandHandlers } from "./backend-contract";
 import { RemoteViewerBackendClient } from "./backend-remote";
 import { TauriViewerBackendClient } from "./backend-tauri";
-import type { TailCursor } from "./backend-types";
+import type { SessionMetricsQuery, TailCursor } from "./backend-types";
 
 export * from "./backend-contract";
 export * from "./backend-types";
@@ -59,6 +59,14 @@ export function loadSessionPreview(sessionRef: string) {
 
 export function loadSession(sessionRef: string) {
   return defaultViewerBackendClient.loadSession(sessionRef);
+}
+
+export function loadSessionMetrics(sessionRef: string) {
+  return defaultViewerBackendClient.loadSessionMetrics(sessionRef);
+}
+
+export function queryProjectMetrics(query: SessionMetricsQuery) {
+  return defaultViewerBackendClient.queryProjectMetrics(query);
 }
 
 export function loadSessionPreviewById(sessionId: string) {

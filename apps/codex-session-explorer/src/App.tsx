@@ -20,6 +20,7 @@ import {
   extractErrorMessage,
   type IndexedSessionSummary,
   type LoadedSession,
+  type ProjectMetricsResponse,
   type ResolvedCodexHome,
   type SessionDiagnostic,
   type SessionPreview,
@@ -462,6 +463,7 @@ export default function App() {
   const [selectedSessionRef, setSelectedSessionRef] = useState<string | null>(null);
   const [selectedPreview, setSelectedPreview] = useState<SessionPreview | null>(null);
   const [selectedLoadedSession, setSelectedLoadedSession] = useState<LoadedSession | null>(null);
+  const [projectMetrics, setProjectMetrics] = useState<ProjectMetricsResponse | null>(null);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [selectedAgentThreadId, setSelectedAgentThreadId] = useState<string | null>(null);
@@ -710,6 +712,7 @@ export default function App() {
       setSessionBusy(true);
       setSessionError(null);
       setSelectedLoadedSession(null);
+      setProjectMetrics(null);
       setTimelineFocusEventId(null);
       setTimelineFocusRevision(0);
       tailCursorRef.current = null;
@@ -775,6 +778,7 @@ export default function App() {
       setSessionBusy(true);
       setSessionError(null);
       setSelectedLoadedSession(null);
+      setProjectMetrics(null);
       setTimelineFocusEventId(null);
       setTimelineFocusRevision(0);
       tailCursorRef.current = null;
@@ -970,6 +974,37 @@ export default function App() {
       cleanup();
     };
   }, [backendCapabilities.supportsViewerCommands, bootState, clearSelectedSession, openSession]);
+
+  useEffect(() => {
+    const metrics = selectedLoadedSession?.metrics;
+    if (!metrics) {
+      setProjectMetrics(null);
+      return;
+    }
+
+    let cancelled = false;
+    void viewerBackendClient
+      .queryProjectMetrics({
+        project_key: metrics.project.project_key,
+        start_ts: null,
+        end_ts: null,
+        include_spawn_agents: true,
+      })
+      .then((response) => {
+        if (!cancelled) {
+          setProjectMetrics(response);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setProjectMetrics(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLoadedSession?.metrics]);
 
   useEffect(() => {
     if (!backendCapabilities.liveTail || !liveTailEnabled || !selectedSessionRef || !tailCursorRef.current) {
@@ -1487,6 +1522,7 @@ export default function App() {
                     </Card>
 
                     <SessionMetricsPanel
+                      projectMetrics={projectMetrics}
                       selectedIndexedSummary={selectedIndexedSummary}
                       selectedLoadedSession={selectedLoadedSession}
                       selectedPreview={selectedPreview}

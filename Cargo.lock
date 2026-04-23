@@ -601,6 +601,7 @@ version = "0.1.0"
 dependencies = [
  "codex-log",
  "log",
+ "rusqlite",
  "serde",
  "tauri",
  "tauri-build",

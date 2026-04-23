@@ -4,6 +4,9 @@ import type {
   InitializeCodexHomeResponse,
   ListSessionsArgs,
   LoadedSession,
+  ProjectMetricsResponse,
+  SessionMetrics,
+  SessionMetricsQuery,
   SessionPreview,
   TailCursor,
   TailResult,
@@ -120,6 +123,19 @@ export class TauriViewerBackendClient implements ViewerBackendClient {
     return invokeBackend<LoadedSession>("load_session", {
       sessionRef,
       textLimit: 120,
+    });
+  }
+
+  public loadSessionMetrics(sessionRef: string) {
+    return invokeBackend<SessionMetrics>("load_session_metrics", {
+      sessionRef,
+      textLimit: 120,
+    });
+  }
+
+  public queryProjectMetrics(query: SessionMetricsQuery) {
+    return invokeBackend<ProjectMetricsResponse>("query_project_metrics", {
+      query,
     });
   }
 

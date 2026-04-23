@@ -1,6 +1,7 @@
 pub mod error;
 pub mod events;
 pub mod session;
+pub mod session_metrics;
 pub mod tree;
 mod util;
 
@@ -14,3 +15,4 @@ pub use events::record::{CodexEvent, EventRecord};
 pub use events::replay;
 pub use events::types;
 pub use session::*;
+pub use session_metrics::*;

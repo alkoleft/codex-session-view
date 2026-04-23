@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-query-project-metrics"
+description = "Разрешает читать агрегированные materialized metrics проекта."
+commands.allow = ["query_project_metrics"]

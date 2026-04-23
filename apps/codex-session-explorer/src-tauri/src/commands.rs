@@ -1,6 +1,7 @@
 use codex_log::session::{
     IndexedSessionCatalogPage, LoadedSession, SessionCatalogPage, TailCursor, TailResult,
 };
+use codex_log::session_metrics::{ProjectMetricsResponse, SessionMetrics, SessionMetricsQuery};
 use tauri::State;
 
 use crate::{DetectCodexHomeResponse, InitializeCodexHomeResponse, SessionPreview, ViewerBackend};
@@ -82,6 +83,27 @@ pub fn load_session(
 ) -> CommandResult<LoadedSession> {
     state
         .load_session(&session_ref, text_limit)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn load_session_metrics(
+    state: State<'_, ViewerBackend>,
+    session_ref: String,
+    text_limit: Option<usize>,
+) -> CommandResult<SessionMetrics> {
+    state
+        .load_session_metrics(&session_ref, text_limit)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn query_project_metrics(
+    state: State<'_, ViewerBackend>,
+    query: SessionMetricsQuery,
+) -> CommandResult<ProjectMetricsResponse> {
+    state
+        .query_project_metrics(query)
         .map_err(|err| err.to_string())
 }
 

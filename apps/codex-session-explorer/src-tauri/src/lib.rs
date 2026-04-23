@@ -57,6 +57,8 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
             commands::load_session_preview,
             commands::load_session_preview_by_id,
             commands::load_session,
+            commands::load_session_metrics,
+            commands::query_project_metrics,
             commands::tail_session
         ])
         .plugin(

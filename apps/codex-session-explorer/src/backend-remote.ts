@@ -2,6 +2,9 @@ import type {
   IndexedSessionCatalogPage,
   ListSessionsArgs,
   LoadedSession,
+  ProjectMetricsResponse,
+  SessionMetrics,
+  SessionMetricsQuery,
   SessionPreview,
   TailCursor,
   TailResult,
@@ -111,6 +114,19 @@ export class RemoteViewerBackendClient implements ViewerBackendClient {
     return this.postJson<LoadedSession>("/api/viewer/load_session", {
       session_ref: sessionRef,
       text_limit: 120,
+    });
+  }
+
+  public loadSessionMetrics(sessionRef: string) {
+    return this.postJson<SessionMetrics>("/api/viewer/load_session_metrics", {
+      session_ref: sessionRef,
+      text_limit: 120,
+    });
+  }
+
+  public queryProjectMetrics(query: SessionMetricsQuery) {
+    return this.postJson<ProjectMetricsResponse>("/api/viewer/query_project_metrics", {
+      query,
     });
   }
 

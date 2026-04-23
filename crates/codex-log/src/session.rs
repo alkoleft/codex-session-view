@@ -14,6 +14,7 @@ use crate::events::readers::{
     imported_subagent_session_meta, JsonOutputEventReader, RunEventContext,
 };
 use crate::events::record::EventRecord;
+use crate::session_metrics::SessionMetrics;
 use crate::tree::{
     build_event_tree_with_standalone_startup_metadata, load_records_from_standalone_rollout,
     validate_standalone_rollout_root, EventTree,
@@ -871,6 +872,8 @@ pub struct LoadedSession {
     pub session_id: String,
     pub tree: EventTree,
     pub tail_cursor: TailCursor,
+    #[serde(default)]
+    pub metrics: Option<SessionMetrics>,
 }
 
 pub struct SessionReader;
@@ -972,6 +975,7 @@ impl SessionLoader {
             session_id,
             tree,
             tail_cursor: read_result.tail_cursor,
+            metrics: None,
         })
     }
 }

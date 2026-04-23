@@ -8,5 +8,7 @@ permissions = [
   "allow-load-session",
   "allow-load-session-preview",
   "allow-load-session-preview-by-id",
+  "allow-load-session-metrics",
+  "allow-query-project-metrics",
   "allow-tail-session",
 ]

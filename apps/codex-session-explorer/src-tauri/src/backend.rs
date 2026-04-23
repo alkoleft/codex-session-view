@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -9,12 +10,21 @@ use codex_log::session::{
     SessionCatalog, SessionCatalogPage, SessionLoader, SessionReadContext, SessionReader,
     TailCursor, TailResult,
 };
-use codex_log::tree::validate_standalone_rollout_root;
+use codex_log::session_metrics::{
+    compute_session_metrics, extract_project_identity, ProjectMetricsResponse, SessionMetrics,
+    SessionMetricsQuery, SessionMetricsStore, METRICS_PROJECTION_VERSION,
+    METRICS_SCHEMA_VERSION,
+};
+use codex_log::tree::{
+    build_event_tree_with_standalone_startup_metadata, load_records_from_standalone_rollout,
+    validate_standalone_rollout_root,
+};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_TEXT_LIMIT: usize = 120;
 const DEFAULT_PREVIEW_LIMIT: usize = 80;
 const MAX_PREVIEW_LIMIT: usize = 200;
+const PROJECT_INDEX_PAGE_LIMIT: usize = 500;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetectCodexHomeResponse {
@@ -101,7 +111,58 @@ impl ViewerBackend {
         text_limit: Option<usize>,
     ) -> AppResult<LoadedSession> {
         let loader = SessionLoader::new(self.require_home()?);
-        loader.load_session(session_ref, text_limit.unwrap_or(DEFAULT_TEXT_LIMIT))
+        let mut loaded =
+            loader.load_session(session_ref, text_limit.unwrap_or(DEFAULT_TEXT_LIMIT))?;
+        loaded.metrics = Some(self.load_session_metrics(session_ref, text_limit)?);
+        Ok(loaded)
+    }
+
+    pub fn load_session_metrics(
+        &self,
+        session_ref: &str,
+        text_limit: Option<usize>,
+    ) -> AppResult<SessionMetrics> {
+        let home = self.require_home()?;
+        let path = home.resolve_session_ref(session_ref)?;
+        let session_id = validate_standalone_rollout_root(&path)?;
+        let store = SessionMetricsStore::open(&metrics_storage_path(&home))?;
+        if !store.is_stale(
+            &session_id,
+            METRICS_SCHEMA_VERSION,
+            METRICS_PROJECTION_VERSION,
+        )? {
+            if let Some(metrics) = store.get_session_metrics(&session_id)? {
+                return Ok(metrics);
+            }
+        }
+
+        let catalog = SessionCatalog::new(home.clone());
+        let indexed_summary = catalog.find_indexed_session(&session_id)?;
+        let standalone = load_records_from_standalone_rollout(&path, &session_id)?;
+        let tree = build_event_tree_with_standalone_startup_metadata(
+            &path,
+            &standalone.events,
+            Some(standalone.startup_metadata),
+            text_limit.unwrap_or(DEFAULT_TEXT_LIMIT),
+        );
+        let metrics = compute_session_metrics(
+            &session_id,
+            &standalone.events,
+            Some(&tree),
+            indexed_summary.as_ref(),
+        );
+        store.upsert_session_metrics(&metrics)?;
+        Ok(metrics)
+    }
+
+    pub fn query_project_metrics(
+        &self,
+        query: SessionMetricsQuery,
+    ) -> AppResult<ProjectMetricsResponse> {
+        let home = self.require_home()?;
+        self.materialize_project_metrics(&home, &query.project_key)?;
+        let store = SessionMetricsStore::open(&metrics_storage_path(&home))?;
+        store.list_project_sessions(&query)
     }
 
     pub fn load_session_preview(
@@ -222,6 +283,52 @@ impl ViewerBackend {
                 .unwrap_or_else(|| "standalone-root".to_string()),
         })
     }
+
+    fn materialize_project_metrics(
+        &self,
+        home: &ResolvedCodexHome,
+        project_key: &str,
+    ) -> AppResult<()> {
+        let catalog = SessionCatalog::new(home.clone());
+        let mut cursor: Option<String> = None;
+        let mut session_refs = BTreeSet::new();
+
+        loop {
+            let page = catalog.list_indexed_sessions(
+                Some(PROJECT_INDEX_PAGE_LIMIT),
+                cursor.as_deref(),
+                None,
+                None,
+            )?;
+
+            for summary in page.items {
+                if extract_project_identity(Some(&summary)).project_key != project_key {
+                    continue;
+                }
+
+                if let Some(session_ref) = catalog.resolve_session_ref_by_id(&summary.session_id)? {
+                    session_refs.insert(session_ref);
+                }
+            }
+
+            match page.next_cursor {
+                Some(next_cursor) => cursor = Some(next_cursor),
+                None => break,
+            }
+        }
+
+        for session_ref in session_refs {
+            self.load_session_metrics(&session_ref, Some(DEFAULT_TEXT_LIMIT))?;
+        }
+
+        Ok(())
+    }
+}
+
+fn metrics_storage_path(home: &ResolvedCodexHome) -> PathBuf {
+    home.root
+        .join("codex-session-explorer")
+        .join("session-metrics.sqlite")
 }
 
 fn preview_event(event: &EventRecord) -> SessionPreviewEvent {
@@ -248,6 +355,8 @@ mod tests {
     use super::ViewerBackend;
     use std::path::PathBuf;
 
+    use codex_log::session_metrics::{extract_project_identity, SessionMetricsQuery};
+    use rusqlite::Connection;
     use tempfile::tempdir;
 
     #[cfg(unix)]
@@ -290,6 +399,78 @@ mod tests {
             .to_string_lossy()
             .replace('\\', "/");
         (tmp, home, session_ref)
+    }
+
+    struct StateThreadRow<'a> {
+        session_id: &'a str,
+        rollout_path: &'a std::path::Path,
+        updated_at: i64,
+        cwd: &'a str,
+        title: &'a str,
+        first_user_message: &'a str,
+        agent_nickname: Option<&'a str>,
+        tokens_used: i64,
+    }
+
+    fn write_state_threads_db(home: &std::path::Path, rows: &[StateThreadRow<'_>]) {
+        let path = home.join("state_5.sqlite");
+        let connection = Connection::open(&path).expect("state db should open");
+        connection
+            .execute_batch(
+                "create table threads (
+                    id text primary key,
+                    rollout_path text not null,
+                    created_at integer not null,
+                    updated_at integer not null,
+                    source text not null,
+                    model_provider text not null,
+                    cwd text not null,
+                    title text not null,
+                    sandbox_policy text not null,
+                    approval_mode text not null,
+                    tokens_used integer not null default 0,
+                    has_user_event integer not null default 0,
+                    archived integer not null default 0,
+                    archived_at integer,
+                    git_sha text,
+                    git_branch text,
+                    git_origin_url text,
+                    cli_version text not null default '',
+                    first_user_message text not null default '',
+                    agent_nickname text,
+                    agent_role text,
+                    memory_mode text not null default 'enabled',
+                    model text,
+                    reasoning_effort text,
+                    agent_path text
+                );",
+            )
+            .expect("threads table should be created");
+
+        let mut statement = connection
+            .prepare(
+                "insert into threads (
+                    id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
+                    sandbox_policy, approval_mode, tokens_used, has_user_event, archived,
+                    cli_version, first_user_message, agent_nickname, memory_mode
+                ) values (?1, ?2, ?3, ?4, 'cli', 'openai', ?5, ?6, '{\"type\":\"danger-full-access\"}', 'never', ?7, 0, 0, '0.118.0', ?8, ?9, 'enabled')",
+            )
+            .expect("insert statement should prepare");
+        for row in rows {
+            statement
+                .execute((
+                    row.session_id,
+                    row.rollout_path.display().to_string(),
+                    row.updated_at - 60,
+                    row.updated_at,
+                    row.cwd,
+                    row.title,
+                    row.tokens_used,
+                    row.first_user_message,
+                    row.agent_nickname,
+                ))
+                .expect("thread row should insert");
+        }
     }
 
     #[test]
@@ -394,6 +575,70 @@ mod tests {
         assert!(!tailed.reset);
         assert_eq!(tailed.events.len(), 1);
         assert_eq!(tailed.events[0].payload["text"], "tail update");
+    }
+
+    #[test]
+    fn query_project_metrics_materializes_missing_sessions_from_catalog() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let first_path = write_rollout_file(
+            &home,
+            "session-a",
+            &[r#"{"timestamp":"2026-04-07T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":5}}}}"#],
+        );
+        let second_path = write_rollout_file(
+            &home,
+            "session-b",
+            &[r#"{"timestamp":"2026-04-07T10:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"output_tokens":10}}}}"#],
+        );
+        write_state_threads_db(
+            &home,
+            &[
+                StateThreadRow {
+                    session_id: "session-a",
+                    rollout_path: &first_path,
+                    updated_at: 1_744_021_000,
+                    cwd: "/repo/project-alpha",
+                    title: "Alpha",
+                    first_user_message: "one",
+                    agent_nickname: Some("codex"),
+                    tokens_used: 15,
+                },
+                StateThreadRow {
+                    session_id: "session-b",
+                    rollout_path: &second_path,
+                    updated_at: 1_744_021_100,
+                    cwd: "/repo/project-alpha",
+                    title: "Alpha",
+                    first_user_message: "two",
+                    agent_nickname: Some("codex"),
+                    tokens_used: 30,
+                },
+            ],
+        );
+
+        let backend = ViewerBackend::default();
+        backend
+            .initialize_codex_home(Some(home.display().to_string()))
+            .expect("home should initialize");
+
+        let indexed_page = backend
+            .list_indexed_sessions(Some(10), None, None, None)
+            .expect("indexed sessions should list");
+        assert_eq!(indexed_page.items.len(), 2);
+        let project_key = extract_project_identity(Some(&indexed_page.items[0])).project_key;
+
+        let project = backend
+            .query_project_metrics(SessionMetricsQuery {
+                project_key,
+                start_ts: None,
+                end_ts: None,
+                include_spawn_agents: true,
+            })
+            .expect("project metrics should load");
+
+        assert_eq!(project.session_count, 2);
+        assert_eq!(project.contributing_session_ids, vec!["session-a", "session-b"]);
     }
 
     #[test]

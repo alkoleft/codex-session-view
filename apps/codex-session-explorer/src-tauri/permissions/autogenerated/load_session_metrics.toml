@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-load-session-metrics"
+description = "Разрешает читать materialized metrics для выбранной Codex-сессии."
+commands.allow = ["load_session_metrics"]

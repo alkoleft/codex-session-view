@@ -2,6 +2,7 @@ import type {
   EventEntry,
   IndexedSessionSummary,
   LoadedSession,
+  SessionMetrics,
   SessionPreview,
   TimelineItem,
 } from "@/backend";
@@ -42,14 +43,21 @@ type LoadedSessionAggregates = {
 };
 
 export function buildSessionMetricsViewModel({
+  includeSpawnAgents = true,
   selectedPreview,
   selectedIndexedSummary,
   selectedLoadedSession,
 }: {
+  includeSpawnAgents?: boolean;
   selectedPreview: SessionPreview | null;
   selectedIndexedSummary: IndexedSessionSummary | null;
   selectedLoadedSession: LoadedSession | null;
 }): SessionMetricsViewModel {
+  const backendMetrics = selectedLoadedSession?.metrics ?? null;
+  if (backendMetrics) {
+    return buildBackendMetricsViewModel(backendMetrics, includeSpawnAgents);
+  }
+
   const duration = formatDurationBetween(
     selectedPreview?.first_ts ?? null,
     selectedPreview?.last_ts ?? null,
@@ -116,6 +124,73 @@ export function buildSessionMetricsViewModel({
   };
 }
 
+function buildBackendMetricsViewModel(
+  metrics: SessionMetrics,
+  includeSpawnAgents: boolean,
+): SessionMetricsViewModel {
+  const totalTokens = includeSpawnAgents
+    ? metrics.token_ledger.total
+    : subtractCovered(metrics.token_ledger.total, metrics.token_ledger.spawn_agent);
+  const totalDuration = includeSpawnAgents
+    ? metrics.duration.total_ms
+    : subtractCovered(metrics.duration.total_ms, metrics.duration.spawn_agent_ms);
+  const reviewFindingsPer1k =
+    metrics.derived_efficiency.review_findings_per_1k_tokens;
+
+  return {
+    items: [
+      { label: "Time worked", value: formatCoveredDuration(totalDuration), tone: "accent" },
+      { label: "Tool calls", value: formatCoveredNumber(metrics.operations.tool_calls) },
+      {
+        label: "Errors",
+        value: formatCoveredNumber(metrics.error_count),
+        tone: (metrics.error_count.value ?? 0) > 0 ? "danger" : "default",
+      },
+      {
+        label: "Failed ops",
+        value: formatCoveredNumber(metrics.operations.failed_operations),
+        tone: (metrics.operations.failed_operations.value ?? 0) > 0 ? "danger" : "default",
+      },
+      { label: "Events", value: formatCoveredNumber(metrics.event_count) },
+      { label: "Threads", value: formatCoveredNumber(metrics.thread_count) },
+      { label: "Messages", value: formatCoveredNumber(metrics.message_count) },
+      { label: "Tokens", value: formatCoveredNumber(totalTokens) },
+      { label: "Input tokens", value: formatCoveredNumber(metrics.token_ledger.input) },
+      { label: "Output tokens", value: formatCoveredNumber(metrics.token_ledger.output) },
+      { label: "Cached input", value: formatCoveredNumber(metrics.token_ledger.cached_input) },
+      { label: "Reasoning tokens", value: formatCoveredNumber(metrics.token_ledger.reasoning_output) },
+      { label: "Start context", value: formatCoveredNumber(metrics.context.start_context_size) },
+      { label: "Spawn agent", value: formatCoveredNumber(metrics.operations.spawn_agent_calls) },
+      { label: "Shell time", value: formatCoveredDuration(metrics.duration.shell_ms) },
+      { label: "MCP calls", value: formatCoveredNumber(metrics.operations.mcp_calls) },
+      { label: "Outcome", value: formatOutcome(metrics.outcome.outcome) },
+      { label: "Model", value: metrics.factors.model ?? "unknown" },
+      { label: "Reasoning", value: metrics.factors.reasoning_effort ?? "unknown" },
+      { label: "CLI", value: metrics.factors.cli_version ?? "unknown" },
+      { label: "Sandbox", value: metrics.factors.sandbox_policy_kind ?? "unknown" },
+      { label: "Approval", value: metrics.factors.approval_mode ?? "unknown" },
+      { label: "Agent role", value: metrics.factors.agent_role ?? "unknown" },
+      { label: "Skills", value: formatCoveredNumber(metrics.factors.skills_count) },
+      { label: "MCP servers", value: formatCoveredNumber(metrics.factors.mcp_server_count) },
+      { label: "Tasks", value: formatCoveredNumber(metrics.task_metrics.task_count) },
+      { label: "Turns", value: formatCoveredNumber(metrics.task_metrics.turn_count) },
+      { label: "Context compression", value: formatCoveredNumber(metrics.context.context_compression) },
+      { label: "Compactions", value: formatCoveredNumber(metrics.context.compaction_events) },
+      { label: "Review cycles", value: formatCoveredNumber(metrics.business_review.review_cycles) },
+      { label: "Review findings", value: formatCoveredNumber(metrics.business_review.review_findings) },
+      { label: "Quality", value: coverageLabel(metrics.quality.feedback_score.coverage) },
+      { label: "Baseline", value: coverageLabel(metrics.baseline.coverage) },
+      { label: "Tokens/success", value: formatCoveredFloat(metrics.derived_efficiency.tokens_per_successful_session) },
+      { label: "Review/1k tok", value: formatCoveredFloat(reviewFindingsPer1k) },
+      ...metrics.tool_breakdown.map((item) => ({
+        label: `Tool ${formatToolCategory(item.category)}`,
+        value: `${formatMetricNumber(item.count)} / ${formatMetricNumber(item.failures)} failed`,
+        tone: item.failures > 0 ? "danger" as const : "default" as const,
+      })),
+    ],
+  };
+}
+
 export function formatDurationBetween(
   firstTs: string | null,
   lastTs: string | null,
@@ -165,6 +240,66 @@ export function formatMetricPercent(value: number | null): string {
   return `${new Intl.NumberFormat("ru-RU", {
     maximumFractionDigits: 1,
   }).format(value * 100)}%`;
+}
+
+function formatCoveredNumber(metric: { value: number | null; coverage: string }): string {
+  if (metric.value == null) {
+    return coverageLabel(metric.coverage);
+  }
+  const value = formatMetricNumber(metric.value);
+  return metric.coverage === "known" ? value : `${value} (${metric.coverage})`;
+}
+
+function formatCoveredFloat(metric: { value: number | null; coverage: string }): string {
+  if (metric.value == null) {
+    return coverageLabel(metric.coverage);
+  }
+  const value = new Intl.NumberFormat("ru-RU", {
+    maximumFractionDigits: 2,
+  }).format(metric.value);
+  return metric.coverage === "known" ? value : `${value} (${metric.coverage})`;
+}
+
+function formatCoveredDuration(metric: { value: number | null; coverage: string }): string {
+  if (metric.value == null) {
+    return coverageLabel(metric.coverage);
+  }
+  const seconds = Math.floor(metric.value / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  const value = hours > 0
+    ? `${hours}h ${String(minutes).padStart(2, "0")}m`
+    : minutes > 0
+      ? `${minutes}m ${String(rest).padStart(2, "0")}s`
+      : `${rest}s`;
+  return metric.coverage === "known" ? value : `${value} (${metric.coverage})`;
+}
+
+function subtractCovered(
+  total: { value: number | null; coverage: string; source: string },
+  excluded: { value: number | null; coverage: string; source: string },
+) {
+  if (total.value == null || excluded.value == null) {
+    return total;
+  }
+  return {
+    value: Math.max(0, total.value - excluded.value),
+    coverage: total.coverage === "known" && excluded.coverage === "known" ? "known" : "partial",
+    source: total.source,
+  };
+}
+
+function coverageLabel(coverage: string) {
+  return coverage === "unknown" ? "unknown" : coverage;
+}
+
+function formatOutcome(outcome: string) {
+  return outcome.replaceAll("_", " ");
+}
+
+function formatToolCategory(category: string) {
+  return category.replaceAll("_", " ");
 }
 
 function buildLoadedSessionAggregates(session: LoadedSession): LoadedSessionAggregates {

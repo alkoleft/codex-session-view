@@ -4,6 +4,7 @@ import type {
   EventEntry,
   IndexedSessionSummary,
   LoadedSession,
+  SessionMetrics,
   ThreadNode,
   TimelineItem,
   SessionPreview,
@@ -215,6 +216,129 @@ function makeSummary(overrides: Partial<IndexedSessionSummary> = {}): IndexedSes
 
 function metricValue(label: string, metrics: ReturnType<typeof buildSessionMetricsViewModel>) {
   return metrics.items.find((item) => item.label === label)?.value;
+}
+
+function covered(value: number | null, coverage = value == null ? "unknown" : "known") {
+  return {
+    value,
+    coverage,
+    source: coverage === "unknown" ? "unavailable" : "normalized_events",
+  };
+}
+
+function makeBackendMetrics(overrides: Partial<SessionMetrics> = {}): SessionMetrics {
+  return {
+    session_id: "root",
+    metrics_schema_version: 1,
+    source_projection_version: 1,
+    computed_at: "2026-04-08T12:09:00Z",
+    started_at: "2026-04-08T12:00:00Z",
+    ended_at: "2026-04-08T12:08:05Z",
+    project: {
+      project_key: "project:test",
+      state: "normal",
+      cwd: "/repo",
+      normalized_cwd: "/repo",
+      git_origin_url: null,
+      git_branch: null,
+      git_sha: null,
+    },
+    factors: {
+      model: "gpt-5.4",
+      reasoning_effort: "medium",
+      cli_version: "codex 1.0",
+      sandbox_policy_kind: "workspace-write",
+      approval_mode: "never",
+      agent_role: "default",
+      skills_count: covered(null),
+      mcp_server_count: covered(null),
+      mcp_call_count: covered(0),
+      start_context_size: covered(null),
+    },
+    outcome: {
+      outcome: "completed",
+      coverage: "known",
+      error_type: null,
+    },
+    event_count: covered(8),
+    thread_count: covered(2),
+    message_count: covered(1),
+    error_count: covered(0),
+    abort_count: covered(0),
+    failure_count: covered(0),
+    operations: {
+      operation_count: covered(0),
+      successful_operations: covered(0),
+      failed_operations: covered(0),
+      tool_calls: covered(0),
+      shell_calls: covered(0),
+      mcp_calls: covered(0),
+      collaboration_calls: covered(0),
+      spawn_agent_calls: covered(1),
+    },
+    duration: {
+      total_ms: covered(1000),
+      generation_ms: covered(null),
+      tool_ms: covered(null),
+      shell_ms: covered(0, "partial"),
+      mcp_ms: covered(0, "partial"),
+      spawn_agent_ms: covered(400),
+      idle_unknown_ms: covered(600, "partial"),
+    },
+    token_ledger: {
+      total: covered(200),
+      input: covered(null),
+      output: covered(0),
+      cached_input: covered(null),
+      reasoning_output: covered(12),
+      tool_call: covered(null),
+      task: covered(null),
+      spawn_agent: covered(50),
+    },
+    tool_breakdown: [
+      {
+        category: "test",
+        count: 1,
+        failures: 0,
+        duration_ms: covered(0, "partial"),
+        token_contribution: covered(null),
+      },
+    ],
+    task_metrics: {
+      task_count: covered(null),
+      turn_count: covered(null),
+      agent_work_item_count: covered(2),
+    },
+    business_review: {
+      review_cycles: covered(null),
+      review_findings: covered(null),
+    },
+    context: {
+      start_context_size: covered(80),
+      context_growth: covered(null),
+      compaction_events: covered(0),
+      context_compression: covered(0),
+    },
+    quality: {
+      feedback_score: covered(null),
+      evaluator_result_count: covered(null),
+      guardrail_trigger_count: covered(null),
+      handoff_count: covered(null),
+    },
+    baseline: {
+      coverage: "unknown",
+      token_usage_delta: covered(null),
+      duration_delta_ms: covered(null),
+      error_rate_delta: covered(null),
+      outcome_rate_delta: covered(null),
+    },
+    derived_efficiency: {
+      tokens_per_successful_session: covered(200),
+      tokens_per_accepted_task: covered(null),
+      review_findings_per_1k_tokens: covered(null),
+    },
+    ...overrides,
+  } as SessionMetrics;
 }
 
 describe("formatDurationBetween", () => {
@@ -801,5 +925,40 @@ describe("buildSessionMetricsViewModel", () => {
     expect(metricValue("Errors", metrics)).toBe("1");
     expect(metricValue("Failed ops", metrics)).toBe("0");
     expect(metricValue("Success rate", metrics)).toBe("100%");
+  });
+
+  it("uses backend metrics when available and keeps unknown distinct from zero", () => {
+    const metrics = buildSessionMetricsViewModel({
+      selectedPreview: makePreview({ event_count: 99 }),
+      selectedIndexedSummary: makeSummary({ tokens_used: 999 }),
+      selectedLoadedSession: {
+        ...makeLoadedSession([]),
+        metrics: makeBackendMetrics(),
+      },
+    });
+
+    expect(metricValue("Tool calls", metrics)).toBe("0");
+    expect(metricValue("Input tokens", metrics)).toBe("unknown");
+    expect(metricValue("Output tokens", metrics)).toBe("0");
+    expect(metricValue("Reasoning tokens", metrics)).toBe("12");
+    expect(metricValue("Start context", metrics)).toBe("80");
+    expect(metricValue("Tokens", metrics)).toBe("200");
+    expect(metricValue("Context compression", metrics)).toBe("0");
+    expect(metricValue("Tool test", metrics)).toBe("1 / 0 failed");
+  });
+
+  it("applies spawn-agent exclusion to backend token and duration totals", () => {
+    const metrics = buildSessionMetricsViewModel({
+      includeSpawnAgents: false,
+      selectedPreview: makePreview(),
+      selectedIndexedSummary: makeSummary(),
+      selectedLoadedSession: {
+        ...makeLoadedSession([]),
+        metrics: makeBackendMetrics(),
+      },
+    });
+
+    expect(metricValue("Tokens", metrics)).toBe("150");
+    expect(metricValue("Time worked", metrics)).toBe("0s");
   });
 });

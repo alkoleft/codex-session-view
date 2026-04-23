@@ -895,6 +895,9 @@ payload на стороне UI:
 - `message.plan` существует только как производная tree/view-проекция.
 - `agent.meta` тоже относится скорее к compatibility/view-слою; текущие readers чаще эмитят более конкретные `task.*`, `runtime.context`, `context.compacted`, `message.*`.
 - `raw.unparsed` не означает ошибку парсинга всегда: это ещё и контейнер для поддержанного, но пока не нормализованного upstream-формата.
+- `session_metrics` не меняет нормализацию событий: слой читает существующие `EventRecord`,
+  `EventTree`, operation projection и indexed metadata. Отсутствующие источники метрик
+  отражаются через coverage `unknown`/`partial`, а не через новые synthetic `event_type`.
 
 ## 10. Краткое резюме
 
