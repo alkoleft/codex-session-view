@@ -22,6 +22,7 @@ import {
   type LoadedSession,
   type ProjectMetricsResponse,
   type ResolvedCodexHome,
+  type SessionScopeFilter,
   type SessionDiagnostic,
   type SessionPreview,
   type TailCursor,
@@ -54,7 +55,6 @@ import { AgentsPanel } from "@/components/agents-panel";
 import { ProjectMetricsScreen } from "@/components/project-metrics-screen";
 import {
   aggregateProjectMetricsResponses,
-  buildProjectSelectorOptions,
   createInitialProjectMetricsRange,
   resolveProjectMetricsRange,
   type ProjectMetricsRangeSelection,
@@ -480,6 +480,8 @@ export default function App() {
   const [projectMetricsRange, setProjectMetricsRange] = useState<ProjectMetricsRangeSelection>(
     () => createInitialProjectMetricsRange(),
   );
+  const [projectMetricsScopeFilter, setProjectMetricsScopeFilter] =
+    useState<SessionScopeFilter>("all");
   const [projectMetricsIncludeSpawnAgents, setProjectMetricsIncludeSpawnAgents] = useState(true);
   const [projectMetricsLoading, setProjectMetricsLoading] = useState(false);
   const [projectMetricsError, setProjectMetricsError] = useState<string | null>(null);
@@ -1003,14 +1005,28 @@ export default function App() {
   }, [backendCapabilities.supportsViewerCommands, bootState, clearSelectedSession, openSession]);
 
   useEffect(() => {
+    if (bootState !== "ready") {
+      return;
+    }
+
     let cancelled = false;
 
-    void buildProjectSelectorOptions(catalogSessions)
-      .then((options) => {
+    void viewerBackendClient
+      .listProjectMetricsCatalog()
+      .then((entries) => {
         if (cancelled) {
           return;
         }
 
+        const options: ProjectSelectorOption[] = entries.map((entry) => ({
+          projectKey: entry.project_key,
+          backendProjectKeys: entry.backend_project_keys,
+          label: entry.label,
+          description: entry.description,
+          state: entry.state,
+          sessionCount: entry.session_count,
+          availableScopeCounts: entry.available_scope_counts,
+        }));
         setProjectOptions(options);
         setSelectedProjectKey((current) => {
           if (current && options.some((option) => option.projectKey === current)) {
@@ -1039,7 +1055,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [catalogSessions, selectedLoadedSession?.metrics?.project.project_key]);
+  }, [bootState, selectedLoadedSession?.metrics?.project.project_key]);
 
   useEffect(() => {
     if (!selectedProjectOption) {
@@ -1061,6 +1077,7 @@ export default function App() {
           start_ts,
           end_ts,
           include_spawn_agents: projectMetricsIncludeSpawnAgents,
+          session_scope_filter: projectMetricsScopeFilter,
         }),
       ),
     )
@@ -1094,6 +1111,7 @@ export default function App() {
     projectMetricsIncludeSpawnAgents,
     projectMetricsRange,
     projectMetricsRefreshToken,
+    projectMetricsScopeFilter,
     selectedProjectOption,
   ]);
 
@@ -1440,12 +1458,14 @@ export default function App() {
                 }}
                 onProjectChange={setSelectedProjectKey}
                 onRangeChange={setProjectMetricsRange}
+                onScopeFilterChange={setProjectMetricsScopeFilter}
                 onRefresh={() => {
                   setProjectMetricsRefreshToken((current) => current + 1);
                 }}
                 projectOptions={projectOptions}
                 range={projectMetricsRange}
                 selectedProjectKey={selectedProjectKey}
+                scopeFilter={projectMetricsScopeFilter}
               />
             ) : (
               <section className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(360px,0.9fr)]">

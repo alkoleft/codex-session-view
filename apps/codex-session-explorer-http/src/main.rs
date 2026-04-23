@@ -93,6 +93,10 @@ fn build_router(state: AppState) -> Router {
             post(list_indexed_sessions),
         )
         .route(
+            "/api/viewer/list_project_metrics_catalog",
+            post(list_project_metrics_catalog),
+        )
+        .route(
             "/api/viewer/load_session_preview",
             post(load_session_preview),
         )
@@ -127,6 +131,16 @@ async fn list_indexed_sessions(
             request.query.as_deref(),
             request.exact_session_id.as_deref(),
         )
+        .map(Json)
+        .map_err(ApiError::from)
+}
+
+async fn list_project_metrics_catalog(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<codex_session_explorer_backend::ProjectMetricsCatalogEntry>>, ApiError> {
+    state
+        .backend
+        .list_project_metrics_catalog()
         .map(Json)
         .map_err(ApiError::from)
 }

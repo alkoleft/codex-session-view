@@ -5,6 +5,7 @@ permissions = [
   "allow-initialize-codex-home",
   "allow-list-sessions",
   "allow-list-indexed-sessions",
+  "allow-list-project-metrics-catalog",
   "allow-load-session",
   "allow-load-session-preview",
   "allow-load-session-preview-by-id",

@@ -1,9 +1,10 @@
 import type {
   CoveredMetric,
-  IndexedSessionSummary,
   MetricCoverage,
   ProjectIdentity,
   ProjectMetricsResponse,
+  SessionScope,
+  SessionScopeCounts,
   SessionMetrics,
 } from "@/backend";
 
@@ -22,6 +23,7 @@ export type ProjectSelectorOption = {
   description: string;
   state: ProjectIdentity["state"];
   sessionCount: number;
+  availableScopeCounts: SessionScopeCounts;
 };
 
 export type ProjectSummaryCard = {
@@ -80,6 +82,7 @@ export type ContributingSessionItem = {
   sessionId: string;
   startedAt: string | null;
   outcome: SessionMetrics["outcome"]["outcome"];
+  sessionScope: SessionScope;
   coverage: MetricCoverage;
   duration: string;
   tokens: string;
@@ -96,18 +99,7 @@ export type ProjectMetricsViewModel = {
   initialZoomWindow: ProjectMetricsZoomWindow;
   sessions: ContributingSessionItem[];
   degraded: boolean;
-};
-
-type DedupedProject = {
-  projectKey: string;
-  normalizedCwd: string | null;
-  state: ProjectIdentity["state"];
-  cwd: string | null;
-  gitOriginUrl: string | null;
-  gitBranch: string | null;
-  newestUpdatedAt: string | null;
-  sessionIds: Set<string>;
-  backendProjectKeys: Set<string>;
+  hasUnknownScope: boolean;
 };
 
 type ProjectMetricSeriesDefinition = {
@@ -241,57 +233,6 @@ export function resolveProjectMetricsRange(
   };
 }
 
-export async function buildProjectSelectorOptions(
-  sessions: IndexedSessionSummary[],
-): Promise<ProjectSelectorOption[]> {
-  const deduped = new Map<string, DedupedProject>();
-
-  for (const session of sessions) {
-    const project = await deriveProjectIdentity(session);
-    const groupKey = project.normalized_cwd ?? `degraded:${session.session_id}`;
-    const current = deduped.get(groupKey);
-    if (current) {
-      current.sessionIds.add(session.session_id);
-      current.backendProjectKeys.add(project.project_key);
-      if (isNewerTimestamp(session.updated_at, current.newestUpdatedAt)) {
-        current.cwd = project.cwd;
-        current.gitOriginUrl = project.git_origin_url;
-        current.gitBranch = project.git_branch;
-        current.newestUpdatedAt = session.updated_at;
-      }
-      continue;
-    }
-
-    deduped.set(groupKey, {
-      projectKey: groupKey,
-      normalizedCwd: project.normalized_cwd,
-      state: project.state,
-      cwd: project.cwd,
-      gitOriginUrl: project.git_origin_url,
-      gitBranch: project.git_branch,
-      newestUpdatedAt: session.updated_at,
-      sessionIds: new Set([session.session_id]),
-      backendProjectKeys: new Set([project.project_key]),
-    });
-  }
-
-  return Array.from(deduped.values())
-    .map((project) => ({
-      projectKey: project.projectKey,
-      backendProjectKeys: Array.from(project.backendProjectKeys).sort(),
-      label: formatProjectLabel(project),
-      description: formatProjectDescription(project),
-      state: project.state,
-      sessionCount: project.sessionIds.size,
-    }))
-    .sort((left, right) => {
-      if (left.state !== right.state) {
-        return left.state === "normal" ? -1 : 1;
-      }
-      return left.label.localeCompare(right.label, "ru");
-    });
-}
-
 export function aggregateProjectMetricsResponses(
   projectKey: string,
   responses: ProjectMetricsResponse[],
@@ -313,6 +254,15 @@ export function aggregateProjectMetricsResponses(
     project_key: projectKey,
     session_count: sessions.length,
     contributing_session_ids: sessions.map((session) => session.session_id),
+    scope_filter: responses[0]?.scope_filter ?? "all",
+    available_scope_counts: responses.reduce<SessionScopeCounts>(
+      (acc, response) => ({
+        main: acc.main + response.available_scope_counts.main,
+        subsession: acc.subsession + response.available_scope_counts.subsession,
+        unknown: acc.unknown + response.available_scope_counts.unknown,
+      }),
+      { main: 0, subsession: 0, unknown: 0 },
+    ),
     sessions,
     token_ledger: {
       total: totalTokens,
@@ -367,6 +317,7 @@ export function buildProjectMetricsViewModel(
 
   return {
     degraded,
+    hasUnknownScope: response.available_scope_counts.unknown > 0,
     summaryCards: [
       {
         label: "Sessions",
@@ -404,6 +355,7 @@ export function buildProjectMetricsViewModel(
       sessionId: session.session_id,
       startedAt: session.started_at,
       outcome: session.outcome.outcome,
+      sessionScope: session.session_scope,
       coverage: preferFailureMetric(session).coverage,
       duration: formatDurationMetric(
         includeSpawnAgents
@@ -427,45 +379,6 @@ export function getProjectMetricPoint(
   seriesKey: ProjectMetricSeriesKey,
 ): ProjectMetricPoint {
   return row.metrics[seriesKey];
-}
-
-export async function deriveProjectIdentity(
-  summary: IndexedSessionSummary,
-): Promise<ProjectIdentity> {
-  const cwd = cleaned(summary.cwd);
-  const normalizedCwd = normalizeProjectPath(cwd);
-  const gitOriginUrl = cleaned(summary.git_origin_url);
-  const gitBranch = cleaned(summary.git_branch);
-  const gitSha = cleaned(summary.git_sha);
-  const state = normalizedCwd ? "normal" : "degraded";
-
-  let keyMaterial: string;
-  if (normalizedCwd && gitOriginUrl && gitBranch) {
-    keyMaterial = `${gitOriginUrl}|${gitBranch}|${normalizedCwd}`;
-  } else if (normalizedCwd && gitOriginUrl) {
-    keyMaterial = `${gitOriginUrl}|${normalizedCwd}`;
-  } else if (normalizedCwd && gitBranch) {
-    keyMaterial = `${normalizedCwd}|${gitBranch}`;
-  } else if (normalizedCwd) {
-    keyMaterial = normalizedCwd;
-  } else {
-    keyMaterial = summary.session_id.trim()
-      ? `degraded-session:${summary.session_id.trim()}`
-      : "degraded-unknown";
-  }
-
-  const prefix = state === "degraded" ? "degraded" : "project";
-  const digest = await sha256Hex(keyMaterial);
-
-  return {
-    project_key: `${prefix}:${digest.slice(0, 8)}`,
-    state,
-    cwd,
-    normalized_cwd: normalizedCwd,
-    git_origin_url: gitOriginUrl,
-    git_branch: gitBranch,
-    git_sha: gitSha,
-  };
 }
 
 function buildChartRow(
@@ -599,75 +512,6 @@ function subtractCoveredMetric(
     coverage: total.coverage === "known" && excluded.coverage === "known" ? "known" : "partial",
     source: total.source,
   };
-}
-
-function formatProjectLabel(project: DedupedProject) {
-  if (project.state === "degraded") {
-    return project.cwd ?? "Degraded project";
-  }
-
-  const normalized = project.cwd ?? "";
-  const parts = normalized.split(/[\\/]/).filter(Boolean);
-  const leaf = parts.at(-1);
-  return leaf ?? project.gitBranch ?? "Project";
-}
-
-function formatProjectDescription(project: DedupedProject) {
-  const parts = [
-    project.state === "degraded" ? "degraded identity" : null,
-    project.gitBranch,
-    project.gitOriginUrl,
-    project.cwd,
-    `${project.sessionIds.size} sessions`,
-  ].filter((value): value is string => Boolean(value));
-
-  return parts.join(" · ");
-}
-
-function normalizeProjectPath(value: string | null) {
-  if (!value) {
-    return null;
-  }
-
-  const expanded = value.replaceAll("\\", "/").replace(/\/+/g, "/");
-  const parts = expanded.split("/");
-  const normalized: string[] = [];
-  for (const part of parts) {
-    if (!part || part === ".") {
-      continue;
-    }
-    if (part === "..") {
-      normalized.pop();
-      continue;
-    }
-    normalized.push(part);
-  }
-
-  const prefix = expanded.startsWith("/") ? "/" : "";
-  return `${prefix}${normalized.join("/")}` || prefix || null;
-}
-
-async function sha256Hex(value: string) {
-  const encoded = new TextEncoder().encode(value);
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", encoded);
-  return Array.from(new Uint8Array(digest))
-    .map((item) => item.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function isNewerTimestamp(left: string | null, right: string | null) {
-  if (!left) {
-    return false;
-  }
-  if (!right) {
-    return true;
-  }
-  return new Date(left).getTime() > new Date(right).getTime();
-}
-
-function cleaned(value: string | null | undefined) {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
 }
 
 function normalizeDateTimeInput(value: string) {

@@ -53,6 +53,7 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
             commands::initialize_codex_home,
             commands::list_sessions,
             commands::list_indexed_sessions,
+            commands::list_project_metrics_catalog,
             commands::load_session_preview,
             commands::load_session_preview_by_id,
             commands::load_session,

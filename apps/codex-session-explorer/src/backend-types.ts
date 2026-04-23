@@ -269,6 +269,26 @@ export type ProjectIdentity = {
   git_sha: string | null;
 };
 
+export type SessionScope = "main" | "subsession" | "unknown";
+
+export type SessionScopeFilter = "all" | "main" | "subsession";
+
+export type SessionScopeCounts = {
+  main: number;
+  subsession: number;
+  unknown: number;
+};
+
+export type ProjectMetricsCatalogEntry = {
+  project_key: string;
+  backend_project_keys: string[];
+  label: string;
+  description: string;
+  state: ProjectIdentity["state"];
+  session_count: number;
+  available_scope_counts: SessionScopeCounts;
+};
+
 export type FactorMetadata = {
   model: string | null;
   reasoning_effort: string | null;
@@ -350,6 +370,7 @@ export type SessionMetrics = {
   started_at: string | null;
   ended_at: string | null;
   project: ProjectIdentity;
+  session_scope: SessionScope;
   factors: FactorMetadata;
   outcome: OutcomeSummary;
   event_count: CoveredMetric<number>;
@@ -402,12 +423,15 @@ export type SessionMetricsQuery = {
   start_ts: string | null;
   end_ts: string | null;
   include_spawn_agents: boolean;
+  session_scope_filter: SessionScopeFilter;
 };
 
 export type ProjectMetricsResponse = {
   project_key: string;
   session_count: number;
   contributing_session_ids: string[];
+  scope_filter: SessionScopeFilter;
+  available_scope_counts: SessionScopeCounts;
   sessions: SessionMetrics[];
   token_ledger: TokenLedger;
   duration_ms: CoveredMetric<number>;

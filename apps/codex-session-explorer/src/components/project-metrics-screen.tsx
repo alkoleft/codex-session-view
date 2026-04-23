@@ -46,7 +46,7 @@ import {
   type ProjectMetricsViewModel,
   type ProjectSelectorOption,
 } from "@/components/project-metrics";
-import type { ProjectMetricsResponse } from "@/backend";
+import type { ProjectMetricsResponse, SessionScopeFilter } from "@/backend";
 
 const SURFACE_CARD_CLASS = "border-border bg-background shadow-none";
 const FILTER_CONTROL_CLASS =
@@ -67,10 +67,12 @@ export function ProjectMetricsScreen({
   onOpenSession,
   onProjectChange,
   onRangeChange,
+  onScopeFilterChange,
   onRefresh,
   projectOptions,
   range,
   selectedProjectKey,
+  scopeFilter,
 }: {
   catalogBusy: boolean;
   currentSessionId: string | null;
@@ -82,10 +84,12 @@ export function ProjectMetricsScreen({
   onOpenSession: (sessionId: string) => void;
   onProjectChange: (projectKey: string) => void;
   onRangeChange: (range: ProjectMetricsRangeSelection) => void;
+  onScopeFilterChange: (value: SessionScopeFilter) => void;
   onRefresh: () => void;
   projectOptions: ProjectSelectorOption[];
   range: ProjectMetricsRangeSelection;
   selectedProjectKey: string | null;
+  scopeFilter: SessionScopeFilter;
 }) {
   const viewModel = metrics ? buildProjectMetricsViewModel(metrics, includeSpawnAgents) : null;
   const metricsResetKey = metrics
@@ -181,8 +185,8 @@ export function ProjectMetricsScreen({
             </Button>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-[minmax(0,1.6fr)_minmax(180px,0.7fr)_minmax(220px,0.8fr)]">
-            <div className="flex flex-col gap-1.5" ref={projectMenuRef}>
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1.5fr)_minmax(180px,0.7fr)_minmax(260px,1fr)_minmax(220px,0.8fr)]">
+            <div className="relative flex flex-col gap-1.5" ref={projectMenuRef}>
               <span className={FILTER_META_CLASS}>Project</span>
               <button
                 aria-controls={projectMenuId}
@@ -205,8 +209,11 @@ export function ProjectMetricsScreen({
                   id={projectMenuId}
                   role="listbox"
                 >
-                  <ScrollArea className="max-h-80">
-                    <div className="flex flex-col p-1.5">
+                  <div
+                    className="max-h-80 overflow-y-auto overscroll-contain p-1.5"
+                    data-testid="project-selector-scroll"
+                  >
+                    <div className="flex flex-col">
                       {projectOptions.length === 0 ? (
                         <div className="px-3 py-3 text-sm text-muted-foreground">
                           Projects unavailable
@@ -233,6 +240,9 @@ export function ProjectMetricsScreen({
                               <span className="block truncate text-sm font-medium text-foreground">
                                 {option.label}
                               </span>
+                              <span className="mt-1 block text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+                                {formatScopeCountsSummary(option.availableScopeCounts)}
+                              </span>
                               <span className="mt-0.5 block break-all text-xs leading-5 text-muted-foreground">
                                 {option.description}
                               </span>
@@ -241,12 +251,12 @@ export function ProjectMetricsScreen({
                         ))
                       )}
                     </div>
-                  </ScrollArea>
+                  </div>
                 </div>
               ) : null}
             </div>
 
-            <div className="flex flex-col gap-1.5" ref={windowMenuRef}>
+            <div className="relative flex flex-col gap-1.5" ref={windowMenuRef}>
               <span className={FILTER_META_CLASS}>Window</span>
               <button
                 aria-controls={windowMenuId}
@@ -294,6 +304,27 @@ export function ProjectMetricsScreen({
               ) : null}
             </div>
 
+            <div className="flex flex-col gap-1.5">
+              <span className={FILTER_META_CLASS}>Scope</span>
+              <div className="grid grid-cols-3 gap-1.5 rounded-xl border border-border/70 bg-background p-1">
+                {(["all", "main", "subsession"] as SessionScopeFilter[]).map((value) => (
+                  <button
+                    className={cn(
+                      "rounded-lg px-3 py-2 text-sm font-medium transition",
+                      scopeFilter === value
+                        ? "bg-muted text-foreground"
+                        : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+                    )}
+                    key={value}
+                    onClick={() => onScopeFilterChange(value)}
+                    type="button"
+                  >
+                    {describeScopeFilter(value)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <label className="flex min-h-10 items-center gap-3 rounded-xl border border-border/70 bg-background px-3 text-sm text-foreground">
               <input
                 checked={includeSpawnAgents}
@@ -332,7 +363,7 @@ export function ProjectMetricsScreen({
             <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-2 text-sm text-foreground">
               <FolderGit2 className="size-4 text-muted-foreground" />
               <span className="min-w-0 flex-1 break-all leading-6 text-muted-foreground">
-                {selectedProject.description}
+                {selectedProject.description} · {selectedProject.sessionCount} sessions
               </span>
               <CoveragePill coverage={selectedProject.state === "degraded" ? "unknown" : "known"} />
               {catalogBusy ? (
@@ -372,8 +403,21 @@ export function ProjectMetricsScreen({
           {selectedProjectKey && !loading && !error && metrics && metrics.sessions.length === 0 ? (
             <Alert>
               <Gauge className="size-4" />
-              <AlertTitle>No sessions for selected range</AlertTitle>
-              <AlertDescription>Для выбранного окна данных нет. Измените range или выберите другой проект.</AlertDescription>
+              <AlertTitle>No sessions for selected filter</AlertTitle>
+              <AlertDescription>
+                Для выбранных project/range/scope данных нет. Измените окно, scope или выберите другой проект.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {selectedProjectKey && !loading && !error && metrics && scopeFilter !== "all" && metrics.available_scope_counts.unknown > 0 ? (
+            <Alert className="mb-4">
+              <AlertTriangle className="size-4" />
+              <AlertTitle>Unknown session scope remains outside narrow filters</AlertTitle>
+              <AlertDescription>
+                В выбранном окне есть {metrics.available_scope_counts.unknown} сесс.
+                с `unknown` scope. Они остаются видимыми только в режиме `all`.
+              </AlertDescription>
             </Alert>
           ) : null}
 
@@ -452,6 +496,16 @@ function ProjectMetricsContent({
               <AlertTitle>Degraded project identity</AlertTitle>
               <AlertDescription>
                 Часть project identity неполная. Метрики показаны честно, но bucket нельзя считать полным project catalog.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {viewModel.hasUnknownScope ? (
+            <Alert>
+              <AlertTriangle className="size-4" />
+              <AlertTitle>Unknown scope detected</AlertTitle>
+              <AlertDescription>
+                Часть project sessions не удалось надёжно классифицировать как `main` или `subsession`.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -795,7 +849,7 @@ function ProjectMetricsContent({
                     <CoveragePill coverage={session.coverage} />
                   </div>
                   <div className="mt-2 text-xs text-muted-foreground">
-                    {session.startedAt ?? "n/a"} · {session.outcome}
+                    {session.startedAt ?? "n/a"} · {session.outcome} · {describeScopeBadge(session.sessionScope)}
                   </div>
                   <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
                     <MetaItem label="Duration" value={session.duration} />
@@ -920,6 +974,7 @@ function ActivePointPanel({
             <MetaItem label="Tool calls" value={selectedSessionItem.toolCalls} />
             <MetaItem label="Failures" value={selectedSessionItem.failures} />
             <MetaItem label="Project state" value={selectedSessionItem.projectState} />
+            <MetaItem label="Scope" value={describeScopeBadge(selectedSessionItem.sessionScope)} />
           </dl>
         ) : (
           <p className="mt-3 text-sm text-muted-foreground">Session summary unavailable.</p>
@@ -990,6 +1045,34 @@ function describeRangePreset(preset: ProjectMetricsRangePreset) {
     default:
       return preset;
   }
+}
+
+function describeScopeFilter(value: SessionScopeFilter) {
+  switch (value) {
+    case "main":
+      return "Main";
+    case "subsession":
+      return "Subsession";
+    case "all":
+    default:
+      return "All";
+  }
+}
+
+function describeScopeBadge(value: "main" | "subsession" | "unknown") {
+  switch (value) {
+    case "main":
+      return "main";
+    case "subsession":
+      return "subsession";
+    case "unknown":
+    default:
+      return "unknown";
+  }
+}
+
+function formatScopeCountsSummary(counts: { main: number; subsession: number; unknown: number }) {
+  return [`main ${counts.main}`, `sub ${counts.subsession}`, `unknown ${counts.unknown}`].join(" · ");
 }
 
 function toggleSeries(

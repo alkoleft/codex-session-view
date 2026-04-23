@@ -53,6 +53,10 @@ export function listIndexedSessions(args = {}) {
   return defaultViewerBackendClient.listIndexedSessions(args);
 }
 
+export function listProjectMetricsCatalog() {
+  return defaultViewerBackendClient.listProjectMetricsCatalog();
+}
+
 export function loadSessionPreview(sessionRef: string) {
   return defaultViewerBackendClient.loadSessionPreview(sessionRef);
 }

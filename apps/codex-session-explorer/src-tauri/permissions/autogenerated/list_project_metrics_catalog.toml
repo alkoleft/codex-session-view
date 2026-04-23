@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-list-project-metrics-catalog"
+description = "Разрешает читать полный project catalog для экрана Project metrics."
+commands.allow = ["list_project_metrics_catalog"]

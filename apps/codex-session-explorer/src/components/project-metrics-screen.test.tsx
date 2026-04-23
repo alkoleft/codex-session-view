@@ -58,6 +58,7 @@ function makeSession(index: number): SessionMetrics {
       git_branch: "main",
       git_sha: "abc",
     },
+    session_scope: index % 2 === 0 ? "subsession" : "main",
     factors: {
       model: "gpt-5.4",
       reasoning_effort: "medium",
@@ -153,6 +154,8 @@ function makeResponse(count: number): ProjectMetricsResponse {
     project_key: "project:test",
     session_count: sessions.length,
     contributing_session_ids: sessions.map((session) => session.session_id),
+    scope_filter: "all",
+    available_scope_counts: { main: Math.ceil(sessions.length / 2), subsession: Math.floor(sessions.length / 2), unknown: 1 },
     sessions,
     token_ledger: {
       total: covered(64000),
@@ -241,6 +244,7 @@ describe("ProjectMetricsScreen", () => {
         onOpenSession={onOpenSession}
         onProjectChange={vi.fn()}
         onRangeChange={vi.fn()}
+        onScopeFilterChange={vi.fn()}
         onRefresh={vi.fn()}
         projectOptions={[
           {
@@ -250,10 +254,12 @@ describe("ProjectMetricsScreen", () => {
             description: "main · https://example.com/repo.git · /repo/project-alpha · 16 sessions",
             state: "normal",
             sessionCount: 16,
+            availableScopeCounts: { main: 8, subsession: 7, unknown: 1 },
           },
         ]}
         range={createInitialProjectMetricsRange()}
         selectedProjectKey="project-alpha"
+        scopeFilter="all"
       />,
     );
 
@@ -281,5 +287,84 @@ describe("ProjectMetricsScreen", () => {
 
     await user.click(screen.getByRole("button", { name: "Open session" }));
     expect(onOpenSession).toHaveBeenCalledWith("session-16");
+  });
+
+  it("uses a scrollable container for long project selector lists", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ProjectMetricsScreen
+        catalogBusy={false}
+        currentSessionId={null}
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={makeResponse(4)}
+        onIncludeSpawnAgentsChange={vi.fn()}
+        onOpenSession={vi.fn()}
+        onProjectChange={vi.fn()}
+        onRangeChange={vi.fn()}
+        onScopeFilterChange={vi.fn()}
+        onRefresh={vi.fn()}
+        projectOptions={Array.from({ length: 30 }, (_, index) => ({
+          projectKey: `project-${index + 1}`,
+          backendProjectKeys: [`project:test:${index + 1}`],
+          label: `project-${index + 1}`,
+          description: `/repo/project-${index + 1}`,
+          state: "normal" as const,
+          sessionCount: index + 1,
+          availableScopeCounts: { main: index + 1, subsession: 0, unknown: 0 },
+        }))}
+        range={createInitialProjectMetricsRange()}
+        selectedProjectKey="project-1"
+        scopeFilter="all"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "project-1" }));
+
+    const scrollContainer = screen.getByTestId("project-selector-scroll");
+    expect(scrollContainer.className).toContain("max-h-80");
+    expect(scrollContainer.className).toContain("overflow-y-auto");
+    expect(screen.getByRole("option", { name: /project-30/i })).toBeTruthy();
+  });
+
+  it("renders scope filter controls and unknown-scope hint for narrow filters", () => {
+    render(
+      <ProjectMetricsScreen
+        catalogBusy={false}
+        currentSessionId={null}
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={makeResponse(4)}
+        onIncludeSpawnAgentsChange={vi.fn()}
+        onOpenSession={vi.fn()}
+        onProjectChange={vi.fn()}
+        onRangeChange={vi.fn()}
+        onScopeFilterChange={vi.fn()}
+        onRefresh={vi.fn()}
+        projectOptions={[
+          {
+            projectKey: "project-alpha",
+            backendProjectKeys: ["project:test"],
+            label: "project-alpha",
+            description: "https://example.com/repo.git · /repo/project-alpha",
+            state: "normal",
+            sessionCount: 4,
+            availableScopeCounts: { main: 2, subsession: 1, unknown: 1 },
+          },
+        ]}
+        range={createInitialProjectMetricsRange()}
+        selectedProjectKey="project-alpha"
+        scopeFilter="main"
+      />,
+    );
+
+    expect(screen.getAllByRole("button", { name: "All" }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Main" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Subsession" })).toBeTruthy();
+    expect(screen.getByText(/Unknown session scope remains outside narrow filters/i)).toBeTruthy();
+    expect(screen.getByText(/unknown scope/i)).toBeTruthy();
   });
 });

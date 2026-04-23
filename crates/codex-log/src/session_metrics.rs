@@ -20,7 +20,7 @@ use crate::session::IndexedSessionSummary;
 use crate::tree::{EventTree, TimelineItem};
 use crate::util::{hash8, normalize_path, utc_now_iso};
 
-pub const METRICS_SCHEMA_VERSION: u32 = 1;
+pub const METRICS_SCHEMA_VERSION: u32 = 2;
 pub const METRICS_PROJECTION_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -81,6 +81,51 @@ pub enum MetricSource {
 pub enum ProjectIdentityState {
     Normal,
     Degraded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionScope {
+    #[default]
+    Unknown,
+    Main,
+    Subsession,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionScopeFilter {
+    #[default]
+    All,
+    Main,
+    Subsession,
+}
+
+impl SessionScopeFilter {
+    fn matches(self, scope: SessionScope) -> bool {
+        match self {
+            Self::All => true,
+            Self::Main => scope == SessionScope::Main,
+            Self::Subsession => scope == SessionScope::Subsession,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct SessionScopeCounts {
+    pub main: u64,
+    pub subsession: u64,
+    pub unknown: u64,
+}
+
+impl SessionScopeCounts {
+    pub fn record(&mut self, scope: SessionScope) {
+        match scope {
+            SessionScope::Main => self.main += 1,
+            SessionScope::Subsession => self.subsession += 1,
+            SessionScope::Unknown => self.unknown += 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -240,6 +285,8 @@ pub struct SessionMetrics {
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
     pub project: ProjectIdentity,
+    #[serde(default)]
+    pub session_scope: SessionScope,
     pub factors: FactorMetadata,
     pub outcome: OutcomeSummary,
     pub event_count: CoveredMetric<u64>,
@@ -273,6 +320,8 @@ pub struct SessionMetricsQuery {
     pub start_ts: Option<String>,
     pub end_ts: Option<String>,
     pub include_spawn_agents: bool,
+    #[serde(default)]
+    pub session_scope_filter: SessionScopeFilter,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -280,6 +329,10 @@ pub struct ProjectMetricsResponse {
     pub project_key: String,
     pub session_count: u64,
     pub contributing_session_ids: Vec<String>,
+    #[serde(default)]
+    pub scope_filter: SessionScopeFilter,
+    #[serde(default)]
+    pub available_scope_counts: SessionScopeCounts,
     pub sessions: Vec<SessionMetrics>,
     pub token_ledger: TokenLedger,
     pub duration_ms: CoveredMetric<u64>,
@@ -328,6 +381,41 @@ pub fn extract_project_identity(summary: Option<&IndexedSessionSummary>) -> Proj
         git_origin_url,
         git_branch,
         git_sha,
+    }
+}
+
+pub fn classify_session_scope(summary: Option<&IndexedSessionSummary>) -> SessionScope {
+    let Some(source) = summary.and_then(|value| cleaned(value.source.as_deref())) else {
+        return SessionScope::Main;
+    };
+    let trimmed = source.trim();
+    if trimmed.is_empty() || !trimmed.starts_with('{') {
+        return SessionScope::Main;
+    }
+
+    let parsed: Value = match serde_json::from_str(trimmed) {
+        Ok(value) => value,
+        Err(_) => return SessionScope::Unknown,
+    };
+
+    let Some(subagent) = parsed.get("subagent") else {
+        return SessionScope::Main;
+    };
+    let Some(thread_spawn) = subagent.get("thread_spawn") else {
+        return SessionScope::Unknown;
+    };
+    let Some(thread_spawn) = thread_spawn.as_object() else {
+        return SessionScope::Unknown;
+    };
+
+    match thread_spawn
+        .get("parent_thread_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(_) => SessionScope::Subsession,
+        None => SessionScope::Unknown,
     }
 }
 
@@ -423,6 +511,7 @@ pub fn compute_session_metrics(
         started_at: first_ts,
         ended_at: last_ts,
         project: extract_project_identity(indexed_summary),
+        session_scope: classify_session_scope(indexed_summary),
         factors,
         outcome,
         event_count: CoveredMetric::known(events.len() as u64, MetricSource::NormalizedEvents),
@@ -626,17 +715,23 @@ impl SessionMetricsStore {
             SpawnAgentAggregation::Exclude
         };
         let mut sessions = Vec::new();
+        let mut available_scope_counts = SessionScopeCounts::default();
         for row in rows {
             let payload =
                 row.map_err(|err| AppError::Runner(format!("metrics row failed: {err}")))?;
             let metrics = serde_json::from_str::<SessionMetrics>(&payload).map_err(|err| {
                 AppError::Runner(format!("metrics deserialization failed: {err}"))
             })?;
-            sessions.push(apply_spawn_agent_mode(&metrics, mode));
+            available_scope_counts.record(metrics.session_scope);
+            if query.session_scope_filter.matches(metrics.session_scope) {
+                sessions.push(apply_spawn_agent_mode(&metrics, mode));
+            }
         }
         Ok(aggregate_project_metrics(
             query.project_key.clone(),
             sessions,
+            query.session_scope_filter,
+            available_scope_counts,
         ))
     }
 }
@@ -644,6 +739,8 @@ impl SessionMetricsStore {
 pub fn aggregate_project_metrics(
     project_key: String,
     sessions: Vec<SessionMetrics>,
+    scope_filter: SessionScopeFilter,
+    available_scope_counts: SessionScopeCounts,
 ) -> ProjectMetricsResponse {
     let mut total_tokens = 0u64;
     let mut total_tokens_coverage: Option<MetricCoverage> = None;
@@ -671,6 +768,8 @@ pub fn aggregate_project_metrics(
         project_key,
         session_count: sessions.len() as u64,
         contributing_session_ids,
+        scope_filter,
+        available_scope_counts,
         sessions,
         token_ledger: TokenLedger {
             total: covered_sum(total_tokens, total_tokens_coverage, MetricSource::Derived),
@@ -1417,6 +1516,27 @@ mod tests {
     }
 
     #[test]
+    fn classifies_session_scope_from_indexed_metadata() {
+        let main = classify_session_scope(Some(&summary()));
+        assert_eq!(main, SessionScope::Main);
+
+        let mut subsession = summary();
+        subsession.source =
+            Some(r#"{"subagent":{"thread_spawn":{"parent_thread_id":"root-thread"}}}"#.to_string());
+        assert_eq!(
+            classify_session_scope(Some(&subsession)),
+            SessionScope::Subsession
+        );
+
+        let mut unknown = summary();
+        unknown.source = Some(r#"{"subagent":{"thread_spawn":{}}}"#.to_string());
+        assert_eq!(
+            classify_session_scope(Some(&unknown)),
+            SessionScope::Unknown
+        );
+    }
+
+    #[test]
     fn computes_session_metrics_from_normalized_events_and_operation_projection() {
         let events = vec![
             event(
@@ -1586,12 +1706,14 @@ mod tests {
                 start_ts: None,
                 end_ts: None,
                 include_spawn_agents: true,
+                session_scope_filter: SessionScopeFilter::All,
             })
             .expect("project query");
         assert_eq!(
             project.contributing_session_ids,
             vec!["session-2", "session-1"]
         );
+        assert_eq!(project.scope_filter, SessionScopeFilter::All);
     }
 
     #[test]

@@ -2,6 +2,7 @@ import type {
   IndexedSessionCatalogPage,
   ListSessionsArgs,
   LoadedSession,
+  ProjectMetricsCatalogEntry,
   ProjectMetricsResponse,
   SessionMetrics,
   SessionMetricsQuery,
@@ -106,6 +107,10 @@ export class RemoteViewerBackendClient implements ViewerBackendClient {
       exact_session_id: args.exactSessionId?.trim() || null,
       cursor: args.cursor ?? null,
     });
+  }
+
+  public listProjectMetricsCatalog() {
+    return this.postJson<ProjectMetricsCatalogEntry[]>("/api/viewer/list_project_metrics_catalog", {});
   }
 
   public loadSessionPreview(sessionRef: string) {

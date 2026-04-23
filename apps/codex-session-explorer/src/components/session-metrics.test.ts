@@ -243,6 +243,7 @@ function makeBackendMetrics(overrides: Partial<SessionMetrics> = {}): SessionMet
       git_branch: null,
       git_sha: null,
     },
+    session_scope: "main",
     factors: {
       model: "gpt-5.4",
       reasoning_effort: "medium",

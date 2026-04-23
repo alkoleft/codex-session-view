@@ -11,8 +11,9 @@ use codex_log::session::{
     TailCursor, TailResult,
 };
 use codex_log::session_metrics::{
-    compute_session_metrics, extract_project_identity, ProjectMetricsResponse, SessionMetrics,
-    SessionMetricsQuery, SessionMetricsStore, METRICS_PROJECTION_VERSION, METRICS_SCHEMA_VERSION,
+    classify_session_scope, compute_session_metrics, extract_project_identity,
+    ProjectIdentityState, ProjectMetricsResponse, SessionMetrics, SessionMetricsQuery,
+    SessionMetricsStore, SessionScopeCounts, METRICS_PROJECTION_VERSION, METRICS_SCHEMA_VERSION,
 };
 use codex_log::tree::{
     build_event_tree_with_standalone_startup_metadata, load_records_from_standalone_rollout,
@@ -56,6 +57,30 @@ pub struct SessionPreview {
     pub indexed_summary: Option<IndexedSessionSummary>,
     pub tail_cursor: TailCursor,
     pub recent_events: Vec<SessionPreviewEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectMetricsCatalogEntry {
+    pub project_key: String,
+    pub backend_project_keys: Vec<String>,
+    pub label: String,
+    pub description: String,
+    pub state: ProjectIdentityState,
+    pub session_count: u64,
+    pub available_scope_counts: SessionScopeCounts,
+}
+
+#[derive(Debug)]
+struct ProjectMetricsCatalogAccumulator {
+    project_key: String,
+    state: ProjectIdentityState,
+    cwd: Option<String>,
+    git_origin_url: Option<String>,
+    git_branch: Option<String>,
+    newest_updated_at: Option<String>,
+    session_ids: BTreeSet<String>,
+    backend_project_keys: BTreeSet<String>,
+    available_scope_counts: SessionScopeCounts,
 }
 
 #[derive(Debug, Default)]
@@ -109,6 +134,12 @@ impl ViewerBackend {
     ) -> AppResult<IndexedSessionCatalogPage> {
         let catalog = SessionCatalog::new(self.require_home()?);
         catalog.list_indexed_sessions(limit, cursor, query, exact_session_id)
+    }
+
+    pub fn list_project_metrics_catalog(&self) -> AppResult<Vec<ProjectMetricsCatalogEntry>> {
+        let home = self.require_home()?;
+        let catalog = SessionCatalog::new(home);
+        build_project_metrics_catalog(&catalog)
     }
 
     pub fn load_session(
@@ -337,6 +368,167 @@ fn metrics_storage_path(home: &ResolvedCodexHome) -> PathBuf {
         .join("session-metrics.sqlite")
 }
 
+fn build_project_metrics_catalog(
+    catalog: &SessionCatalog,
+) -> AppResult<Vec<ProjectMetricsCatalogEntry>> {
+    let mut cursor: Option<String> = None;
+    let mut deduped = std::collections::BTreeMap::<String, ProjectMetricsCatalogAccumulator>::new();
+
+    loop {
+        let page = catalog.list_indexed_sessions(
+            Some(PROJECT_INDEX_PAGE_LIMIT),
+            cursor.as_deref(),
+            None,
+            None,
+        )?;
+
+        for summary in page.items {
+            let project = extract_project_identity(Some(&summary));
+            let group_key = project
+                .normalized_cwd
+                .as_ref()
+                .map(|cwd| format!("cwd:{cwd}"))
+                .unwrap_or_else(|| project.project_key.clone());
+            let scope = classify_session_scope(Some(&summary));
+
+            match deduped.get_mut(&group_key) {
+                Some(current) => {
+                    current.session_ids.insert(summary.session_id.clone());
+                    current
+                        .backend_project_keys
+                        .insert(project.project_key.clone());
+                    current.available_scope_counts.record(scope);
+                    if is_newer_timestamp(&summary.updated_at, current.newest_updated_at.as_deref())
+                    {
+                        current.cwd = project.cwd.clone();
+                        current.git_origin_url = project.git_origin_url.clone();
+                        current.git_branch = project.git_branch.clone();
+                        current.newest_updated_at = Some(summary.updated_at.clone());
+                    }
+                }
+                None => {
+                    let mut session_ids = BTreeSet::new();
+                    session_ids.insert(summary.session_id.clone());
+                    let mut backend_project_keys = BTreeSet::new();
+                    backend_project_keys.insert(project.project_key.clone());
+                    let mut available_scope_counts = SessionScopeCounts::default();
+                    available_scope_counts.record(scope);
+                    deduped.insert(
+                        group_key,
+                        ProjectMetricsCatalogAccumulator {
+                            project_key: project
+                                .normalized_cwd
+                                .as_ref()
+                                .map(|cwd| format!("cwd:{cwd}"))
+                                .unwrap_or_else(|| project.project_key.clone()),
+                            state: project.state.clone(),
+                            cwd: project.cwd.clone(),
+                            git_origin_url: project.git_origin_url.clone(),
+                            git_branch: project.git_branch.clone(),
+                            newest_updated_at: Some(summary.updated_at.clone()),
+                            session_ids,
+                            backend_project_keys,
+                            available_scope_counts,
+                        },
+                    );
+                }
+            }
+        }
+
+        match page.next_cursor {
+            Some(next_cursor) => cursor = Some(next_cursor),
+            None => break,
+        }
+    }
+
+    let mut entries = deduped
+        .into_values()
+        .map(|project| {
+            let label = format_project_catalog_label(&project);
+            let description = format_project_catalog_description(&project);
+            ProjectMetricsCatalogEntry {
+                project_key: project.project_key,
+                backend_project_keys: project.backend_project_keys.into_iter().collect(),
+                label,
+                description,
+                state: project.state,
+                session_count: project.session_ids.len() as u64,
+                available_scope_counts: project.available_scope_counts,
+            }
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        if left.state != right.state {
+            return if left.state == ProjectIdentityState::Normal {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
+        }
+        left.label.cmp(&right.label)
+    });
+    Ok(entries)
+}
+
+fn format_project_catalog_label(project: &ProjectMetricsCatalogAccumulator) -> String {
+    if project.state == ProjectIdentityState::Degraded {
+        return project
+            .cwd
+            .clone()
+            .unwrap_or_else(|| "Degraded project".to_string());
+    }
+
+    let normalized = project.cwd.as_deref().unwrap_or_default();
+    let parts = normalized
+        .split(['/', '\\'])
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    parts
+        .last()
+        .map(|value| (*value).to_string())
+        .or_else(|| project.git_branch.clone())
+        .unwrap_or_else(|| "Project".to_string())
+}
+
+fn format_project_catalog_description(project: &ProjectMetricsCatalogAccumulator) -> String {
+    let mut parts = Vec::new();
+    if project.state == ProjectIdentityState::Degraded {
+        parts.push("degraded identity".to_string());
+    }
+    if project.available_scope_counts.main > 0 {
+        parts.push(format!("main {}", project.available_scope_counts.main));
+    }
+    if project.available_scope_counts.subsession > 0 {
+        parts.push(format!(
+            "subsession {}",
+            project.available_scope_counts.subsession
+        ));
+    }
+    if project.available_scope_counts.unknown > 0 {
+        parts.push(format!(
+            "unknown {}",
+            project.available_scope_counts.unknown
+        ));
+    }
+    if let Some(branch) = project.git_branch.as_ref() {
+        parts.push(branch.clone());
+    }
+    if let Some(origin) = project.git_origin_url.as_ref() {
+        parts.push(origin.clone());
+    }
+    if let Some(cwd) = project.cwd.as_ref() {
+        parts.push(cwd.clone());
+    }
+    parts.join(" · ")
+}
+
+fn is_newer_timestamp(candidate: &str, current: Option<&str>) -> bool {
+    match current {
+        Some(existing) => candidate > existing,
+        None => true,
+    }
+}
+
 fn preview_event(event: &EventRecord) -> SessionPreviewEvent {
     SessionPreviewEvent {
         seq: event.seq,
@@ -361,7 +553,9 @@ mod tests {
     use super::ViewerBackend;
     use std::path::PathBuf;
 
-    use codex_log::session_metrics::{extract_project_identity, SessionMetricsQuery};
+    use codex_log::session_metrics::{
+        extract_project_identity, SessionMetricsQuery, SessionScopeFilter,
+    };
     use rusqlite::Connection;
     use tempfile::tempdir;
 
@@ -412,9 +606,12 @@ mod tests {
         rollout_path: &'a std::path::Path,
         updated_at: i64,
         cwd: &'a str,
+        source: &'a str,
         title: &'a str,
         first_user_message: &'a str,
         agent_nickname: Option<&'a str>,
+        git_branch: Option<&'a str>,
+        git_origin_url: Option<&'a str>,
         tokens_used: i64,
     }
 
@@ -458,8 +655,8 @@ mod tests {
                 "insert into threads (
                     id, rollout_path, created_at, updated_at, source, model_provider, cwd, title,
                     sandbox_policy, approval_mode, tokens_used, has_user_event, archived,
-                    cli_version, first_user_message, agent_nickname, memory_mode
-                ) values (?1, ?2, ?3, ?4, 'cli', 'openai', ?5, ?6, '{\"type\":\"danger-full-access\"}', 'never', ?7, 0, 0, '0.118.0', ?8, ?9, 'enabled')",
+                    git_branch, git_origin_url, cli_version, first_user_message, agent_nickname, memory_mode
+                ) values (?1, ?2, ?3, ?4, ?5, 'openai', ?6, ?7, '{\"type\":\"danger-full-access\"}', 'never', ?8, 0, 0, ?9, ?10, '0.118.0', ?11, ?12, 'enabled')",
             )
             .expect("insert statement should prepare");
         for row in rows {
@@ -469,9 +666,12 @@ mod tests {
                     row.rollout_path.display().to_string(),
                     row.updated_at - 60,
                     row.updated_at,
+                    row.source,
                     row.cwd,
                     row.title,
                     row.tokens_used,
+                    row.git_branch,
+                    row.git_origin_url,
                     row.first_user_message,
                     row.agent_nickname,
                 ))
@@ -609,9 +809,12 @@ mod tests {
                     rollout_path: &first_path,
                     updated_at: 1_744_021_000,
                     cwd: "/repo/project-alpha",
+                    source: "cli",
                     title: "Alpha",
                     first_user_message: "one",
                     agent_nickname: Some("codex"),
+                    git_branch: Some("main"),
+                    git_origin_url: Some("https://example.test/repo.git"),
                     tokens_used: 15,
                 },
                 StateThreadRow {
@@ -619,9 +822,12 @@ mod tests {
                     rollout_path: &second_path,
                     updated_at: 1_744_021_100,
                     cwd: "/repo/project-alpha",
+                    source: "cli",
                     title: "Alpha",
                     first_user_message: "two",
                     agent_nickname: Some("codex"),
+                    git_branch: Some("main"),
+                    git_origin_url: Some("https://example.test/repo.git"),
                     tokens_used: 30,
                 },
             ],
@@ -644,6 +850,7 @@ mod tests {
                 start_ts: None,
                 end_ts: None,
                 include_spawn_agents: true,
+                session_scope_filter: codex_log::session_metrics::SessionScopeFilter::All,
             })
             .expect("project metrics should load");
 
@@ -652,6 +859,197 @@ mod tests {
             project.contributing_session_ids,
             vec!["session-a", "session-b"]
         );
+    }
+
+    #[test]
+    fn project_metrics_catalog_dedupes_rows_and_tracks_scope_counts() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let first_path = write_rollout_file(&home, "session-main", &[]);
+        let second_path = write_rollout_file(&home, "session-sub", &[]);
+        let third_path = write_rollout_file(&home, "session-unknown", &[]);
+        write_state_threads_db(
+            &home,
+            &[
+                StateThreadRow {
+                    session_id: "session-main",
+                    rollout_path: &first_path,
+                    updated_at: 1_744_021_000,
+                    cwd: "/repo/project-alpha",
+                    source: "cli",
+                    title: "Alpha",
+                    first_user_message: "one",
+                    agent_nickname: Some("codex"),
+                    git_branch: Some("main"),
+                    git_origin_url: Some("https://example.test/repo.git"),
+                    tokens_used: 10,
+                },
+                StateThreadRow {
+                    session_id: "session-sub",
+                    rollout_path: &second_path,
+                    updated_at: 1_744_021_100,
+                    cwd: "/repo/project-alpha",
+                    source: r#"{"subagent":{"thread_spawn":{"parent_thread_id":"root-thread"}}}"#,
+                    title: "Alpha",
+                    first_user_message: "two",
+                    agent_nickname: Some("codex"),
+                    git_branch: Some("feature/x"),
+                    git_origin_url: Some("https://example.test/other.git"),
+                    tokens_used: 20,
+                },
+                StateThreadRow {
+                    session_id: "session-unknown",
+                    rollout_path: &third_path,
+                    updated_at: 1_744_021_200,
+                    cwd: "",
+                    source: "{invalid-json",
+                    title: "Degraded",
+                    first_user_message: "three",
+                    agent_nickname: Some("codex"),
+                    git_branch: None,
+                    git_origin_url: None,
+                    tokens_used: 5,
+                },
+            ],
+        );
+
+        let backend = ViewerBackend::default();
+        backend
+            .initialize_codex_home(Some(home.display().to_string()))
+            .expect("home should initialize");
+
+        let catalog = backend
+            .list_project_metrics_catalog()
+            .expect("catalog should load");
+
+        assert_eq!(catalog.len(), 2);
+        assert_eq!(catalog[0].label, "project-alpha");
+        assert_eq!(catalog[0].session_count, 2);
+        assert_eq!(catalog[0].available_scope_counts.main, 1);
+        assert_eq!(catalog[0].available_scope_counts.subsession, 1);
+        assert_eq!(catalog[0].backend_project_keys.len(), 2);
+        assert_eq!(
+            catalog[1].state,
+            codex_log::session_metrics::ProjectIdentityState::Degraded
+        );
+        assert_eq!(catalog[1].available_scope_counts.unknown, 1);
+    }
+
+    #[test]
+    fn query_project_metrics_filters_by_scope_and_reports_unknown_counts() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let main_path = write_rollout_file(
+            &home,
+            "session-main",
+            &[
+                r#"{"timestamp":"2026-04-07T10:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"output_tokens":5}}}}"#,
+            ],
+        );
+        let sub_path = write_rollout_file(
+            &home,
+            "session-sub",
+            &[
+                r#"{"timestamp":"2026-04-07T10:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"output_tokens":10}}}}"#,
+            ],
+        );
+        let unknown_path = write_rollout_file(
+            &home,
+            "session-unknown",
+            &[
+                r#"{"timestamp":"2026-04-07T10:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":5,"output_tokens":5}}}}"#,
+            ],
+        );
+        write_state_threads_db(
+            &home,
+            &[
+                StateThreadRow {
+                    session_id: "session-main",
+                    rollout_path: &main_path,
+                    updated_at: 1_744_021_000,
+                    cwd: "/repo/project-alpha",
+                    source: "cli",
+                    title: "Alpha",
+                    first_user_message: "one",
+                    agent_nickname: Some("codex"),
+                    git_branch: Some("main"),
+                    git_origin_url: Some("https://example.test/repo.git"),
+                    tokens_used: 15,
+                },
+                StateThreadRow {
+                    session_id: "session-sub",
+                    rollout_path: &sub_path,
+                    updated_at: 1_744_021_100,
+                    cwd: "/repo/project-alpha",
+                    source: r#"{"subagent":{"thread_spawn":{"parent_thread_id":"root-thread"}}}"#,
+                    title: "Alpha",
+                    first_user_message: "two",
+                    agent_nickname: Some("codex"),
+                    git_branch: Some("main"),
+                    git_origin_url: Some("https://example.test/repo.git"),
+                    tokens_used: 30,
+                },
+                StateThreadRow {
+                    session_id: "session-unknown",
+                    rollout_path: &unknown_path,
+                    updated_at: 1_744_021_200,
+                    cwd: "/repo/project-alpha",
+                    source: r#"{"subagent":{"thread_spawn":{}}}"#,
+                    title: "Alpha",
+                    first_user_message: "three",
+                    agent_nickname: Some("codex"),
+                    git_branch: Some("main"),
+                    git_origin_url: Some("https://example.test/repo.git"),
+                    tokens_used: 10,
+                },
+            ],
+        );
+
+        let backend = ViewerBackend::default();
+        backend
+            .initialize_codex_home(Some(home.display().to_string()))
+            .expect("home should initialize");
+
+        let indexed_page = backend
+            .list_indexed_sessions(Some(10), None, None, None)
+            .expect("indexed sessions should list");
+        let project_key = extract_project_identity(Some(&indexed_page.items[0])).project_key;
+
+        let main_only = backend
+            .query_project_metrics(SessionMetricsQuery {
+                project_key,
+                start_ts: None,
+                end_ts: None,
+                include_spawn_agents: true,
+                session_scope_filter: SessionScopeFilter::Main,
+            })
+            .expect("main project metrics should load");
+
+        assert_eq!(main_only.session_count, 1);
+        assert_eq!(
+            main_only.sessions[0].session_scope,
+            codex_log::session_metrics::SessionScope::Main
+        );
+        assert_eq!(main_only.available_scope_counts.main, 1);
+        assert_eq!(main_only.available_scope_counts.subsession, 1);
+        assert_eq!(main_only.available_scope_counts.unknown, 1);
+
+        let subsessions = backend
+            .query_project_metrics(SessionMetricsQuery {
+                project_key: main_only.project_key.clone(),
+                start_ts: None,
+                end_ts: None,
+                include_spawn_agents: true,
+                session_scope_filter: SessionScopeFilter::Subsession,
+            })
+            .expect("subsession project metrics should load");
+
+        assert_eq!(subsessions.session_count, 1);
+        assert_eq!(
+            subsessions.sessions[0].session_scope,
+            codex_log::session_metrics::SessionScope::Subsession
+        );
+        assert_eq!(subsessions.available_scope_counts.unknown, 1);
     }
 
     #[test]

@@ -3,7 +3,8 @@ use codex_log::session::{
 };
 use codex_log::session_metrics::{ProjectMetricsResponse, SessionMetrics, SessionMetricsQuery};
 use codex_session_explorer_backend::{
-    DetectCodexHomeResponse, InitializeCodexHomeResponse, SessionPreview, ViewerBackend,
+    DetectCodexHomeResponse, InitializeCodexHomeResponse, ProjectMetricsCatalogEntry,
+    SessionPreview, ViewerBackend,
 };
 use tauri::State;
 
@@ -51,6 +52,15 @@ pub fn list_indexed_sessions(
             query.as_deref(),
             exact_session_id.as_deref(),
         )
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn list_project_metrics_catalog(
+    state: State<'_, ViewerBackend>,
+) -> CommandResult<Vec<ProjectMetricsCatalogEntry>> {
+    state
+        .list_project_metrics_catalog()
         .map_err(|err| err.to_string())
 }
 

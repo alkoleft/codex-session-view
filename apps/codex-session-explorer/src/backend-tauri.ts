@@ -4,6 +4,7 @@ import type {
   InitializeCodexHomeResponse,
   ListSessionsArgs,
   LoadedSession,
+  ProjectMetricsCatalogEntry,
   ProjectMetricsResponse,
   SessionMetrics,
   SessionMetricsQuery,
@@ -110,6 +111,10 @@ export class TauriViewerBackendClient implements ViewerBackendClient {
       exactSessionId,
       cursor: args.cursor ?? null,
     });
+  }
+
+  public listProjectMetricsCatalog() {
+    return invokeBackend<ProjectMetricsCatalogEntry[]>("list_project_metrics_catalog");
   }
 
   public loadSessionPreview(sessionRef: string) {

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import type {
   CoveredMetric,
-  IndexedSessionSummary,
   MetricCoverage,
   ProjectMetricsResponse,
   SessionMetrics,
@@ -10,41 +9,10 @@ import type {
 import {
   aggregateProjectMetricsResponses,
   buildProjectMetricsViewModel,
-  buildProjectSelectorOptions,
   createInitialProjectMetricsRange,
   getProjectMetricPoint,
   resolveProjectMetricsRange,
 } from "@/components/project-metrics";
-
-function makeSummary(overrides: Partial<IndexedSessionSummary> = {}): IndexedSessionSummary {
-  return {
-    session_id: "session-1",
-    updated_at: "2026-04-23T10:00:00Z",
-    thread_name: "Metrics work",
-    thread_name_source: "summary",
-    cwd: "/repo/project-alpha",
-    agent_name: "codex",
-    tokens_used: 100,
-    created_at: "2026-04-23T09:00:00Z",
-    source: null,
-    model_provider: "openai",
-    sandbox_policy_kind: "workspace-write",
-    approval_mode: "never",
-    has_user_event: true,
-    archived: false,
-    archived_at: null,
-    git_sha: "abc",
-    git_branch: "main",
-    git_origin_url: "https://example.com/repo.git",
-    cli_version: null,
-    agent_role: null,
-    memory_mode: null,
-    model: "gpt-5.4",
-    reasoning_effort: "medium",
-    agent_path: null,
-    ...overrides,
-  };
-}
 
 function covered(
   value: number | null,
@@ -74,6 +42,7 @@ function makeSession(overrides: Partial<SessionMetrics> = {}): SessionMetrics {
       git_branch: "main",
       git_sha: "abc",
     },
+    session_scope: "main",
     factors: {
       model: "gpt-5.4",
       reasoning_effort: "medium",
@@ -169,6 +138,8 @@ function makeResponse(sessions: SessionMetrics[]): ProjectMetricsResponse {
     project_key: "project:test",
     session_count: sessions.length,
     contributing_session_ids: sessions.map((session) => session.session_id),
+    scope_filter: "all",
+    available_scope_counts: { main: sessions.length, subsession: 0, unknown: 0 },
     sessions,
     token_ledger: {
       total: covered(8000),
@@ -195,39 +166,6 @@ function makeResponse(sessions: SessionMetrics[]): ProjectMetricsResponse {
     },
   };
 }
-
-describe("buildProjectSelectorOptions", () => {
-  it("deduplicates cwd groups even when git metadata differs and keeps degraded buckets visible", async () => {
-    const options = await buildProjectSelectorOptions([
-      makeSummary({
-        session_id: "session-1",
-        updated_at: "2026-04-23T10:00:00Z",
-      }),
-      makeSummary({
-        session_id: "session-2",
-        updated_at: "2026-04-23T11:00:00Z",
-        git_branch: "feature/other",
-        git_origin_url: "https://example.com/other.git",
-      }),
-      makeSummary({
-        session_id: "session-3",
-        cwd: null,
-        git_branch: null,
-        git_origin_url: null,
-      }),
-    ]);
-
-    expect(options).toHaveLength(2);
-    expect(options[0]).toMatchObject({
-      label: "project-alpha",
-      sessionCount: 2,
-      state: "normal",
-    });
-    expect(options[0].backendProjectKeys).toHaveLength(2);
-    expect(options[1].state).toBe("degraded");
-    expect(options[1].description).toContain("degraded identity");
-  });
-});
 
 describe("resolveProjectMetricsRange", () => {
   it("builds preset and custom query windows", () => {
@@ -262,6 +200,7 @@ describe("buildProjectMetricsViewModel", () => {
       makeSession({
         session_id: "session-2",
         started_at: "2026-04-23T10:00:00Z",
+        session_scope: "unknown",
         project: {
           project_key: "project:test",
           state: "degraded",
@@ -298,6 +237,7 @@ describe("buildProjectMetricsViewModel", () => {
     const viewModel = buildProjectMetricsViewModel(response, false);
 
     expect(viewModel.degraded).toBe(true);
+    expect(viewModel.hasUnknownScope).toBe(false);
     expect(viewModel.summaryCards.find((card) => card.label === "Total tokens")?.value).toBe("6 000");
     expect(getProjectMetricPoint(viewModel.chartRows[1], "tokens")).toMatchObject({
       coverage: "unknown",
@@ -310,6 +250,7 @@ describe("buildProjectMetricsViewModel", () => {
     expect(viewModel.defaultVisibleSeriesKeys).toEqual(["duration", "tokens", "failures", "toolCalls"]);
     expect(viewModel.initialZoomWindow).toEqual({ startIndex: 0, endIndex: 1 });
     expect(viewModel.sessions[0].tokens).toBe("3 000");
+    expect(viewModel.sessions[1].sessionScope).toBe("unknown");
     expect(viewModel.sessions[1].failures).toContain("partial");
   });
 });
@@ -334,6 +275,7 @@ describe("aggregateProjectMetricsResponses", () => {
     expect(merged.project_key).toBe("cwd:/repo/project-alpha");
     expect(merged.session_count).toBe(2);
     expect(merged.contributing_session_ids).toEqual(["session-1", "session-2"]);
+    expect(merged.scope_filter).toBe("all");
     expect(merged.token_ledger.total.value).toBe(8000);
     expect(merged.duration_ms.value).toBe(1200000);
   });
