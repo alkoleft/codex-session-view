@@ -11,5 +11,6 @@ permissions = [
   "allow-load-session-preview-by-id",
   "allow-load-session-metrics",
   "allow-query-project-metrics",
+  "allow-recompute-metrics",
   "allow-tail-session",
 ]

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -286,6 +286,67 @@ fn codex_mcp_server(tool_name: &str) -> Option<&'static str> {
 
 fn is_shell_tool(tool_name: &str) -> bool {
     matches!(tool_name, "command_execution" | "exec_command")
+}
+
+fn enrich_skill_usage_payload(payload: &mut Value) {
+    let Some(payload_obj) = payload.as_object_mut() else {
+        return;
+    };
+    let identifiers = extract_skill_identifiers_from_value(&Value::Object(payload_obj.clone()));
+    if identifiers.is_empty() {
+        return;
+    }
+    payload_obj.insert(
+        "skill_identifiers".to_string(),
+        Value::Array(identifiers.into_iter().map(Value::from).collect()),
+    );
+}
+
+fn extract_skill_identifiers_from_value(value: &Value) -> Vec<String> {
+    fn walk(value: &Value, out: &mut BTreeSet<String>) {
+        match value {
+            Value::String(text) => {
+                for token in text.split(|ch: char| {
+                    ch.is_whitespace() || matches!(ch, '"' | '\'' | ',' | ';' | '(' | ')')
+                }) {
+                    if let Some(identifier) = skill_identifier_from_candidate(token) {
+                        out.insert(identifier);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, out);
+                }
+            }
+            Value::Object(obj) => {
+                for item in obj.values() {
+                    walk(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut out = BTreeSet::new();
+    walk(value, &mut out);
+    out.into_iter().collect()
+}
+
+fn skill_identifier_from_candidate(candidate: &str) -> Option<String> {
+    let trimmed = candidate
+        .trim_matches(|ch: char| matches!(ch, '"' | '\'' | '[' | ']' | '{' | '}'))
+        .trim();
+    if !trimmed.ends_with("SKILL.md") {
+        return None;
+    }
+    Path::new(trimmed)
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
 }
 
 fn collab_event_type(tool_name: &str) -> Option<&'static str> {

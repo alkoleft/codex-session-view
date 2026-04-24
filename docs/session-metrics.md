@@ -11,7 +11,9 @@
 
 - `metrics_schema_version` описывает публичную форму metrics payload.
 - `source_projection_version` описывает версию логики расчёта.
-- Materialized storage считает запись stale, если одна из этих версий отличается от текущей.
+- Версии сохраняются в materialized payload для диагностики и миграций storage-формы.
+- Изменение правил `task_class` не приводит к version negotiation в read path: уже сохранённые
+  materialized metrics остаются источником истины до явного recompute.
 
 ## Project identity
 
@@ -102,6 +104,43 @@ projection. Неатрибутируемый остаток сохраняетс
 
 Ambiguous shell-команды попадают в `other`.
 
+## Task classification
+
+Task-level facts (`task_facts[]`) теперь дополнительно хранят:
+
+- `task_class`;
+- `task_class_source`;
+- `task_class_confidence`.
+
+Стабильные semantic classes:
+
+- `implementation`;
+- `review`;
+- `analysis`;
+- `planning`;
+- `approval`;
+- `unknown`.
+
+Текущие materialized mappings поверх raw task signals:
+
+- `collaboration_mode_kind=planning|plan` -> `planning`;
+- `collaboration_mode_kind=review|review_loop` -> `review`;
+- `collaboration_mode_kind=approval` -> `approval`;
+- `agent_role|requested_agent_type|receiver_role=worker|implementation|implementer` -> `implementation`;
+- `agent_role|requested_agent_type|receiver_role=reviewer|review` -> `review`;
+- `agent_role|requested_agent_type|receiver_role=explorer|docs_researcher|analysis|research|researcher` -> `analysis`;
+- `agent_role|requested_agent_type|receiver_role=planner|planning|plan` -> `planning`;
+- `agent_role|requested_agent_type|receiver_role=approver|approval` -> `approval`.
+
+Confidence semantics:
+
+- `confident` для однозначного materialized mapping;
+- `partial` для конфликтующих сигналов, когда система сохраняет `task_class=unknown`;
+- `unknown` когда пригодных сигналов нет.
+
+Амбивалентные кейсы не получают synthetic уверенную classification. Если raw signals ведут к разным
+semantic classes, система оставляет `task_class=unknown` и фиксирует `task_class_source=ambiguous_signals`.
+
 ## Business, context и quality groups
 
 Business review metrics содержат `review_cycles` и `review_findings`. Значения считаются только
@@ -134,8 +173,8 @@ CODEX_HOME/codex-session-explorer/session-metrics.sqlite
 ```
 
 Таблица хранит одну актуальную запись на `session_id`, project key, timestamps, версии схемы и
-полный JSON payload метрик. Upsert пересчитывает запись при изменении версии схемы или projection
-logic.
+полный JSON payload метрик. Upsert обновляет запись только при явной materialization/recompute
+операции.
 
 ## Consumer API
 
@@ -144,6 +183,16 @@ Backend/Tauri contract предоставляет:
 - session metrics при загрузке полной сессии;
 - отдельную команду чтения metrics выбранной сессии;
 - project metrics query по `project_key`, временному окну и `include_spawn_agents`.
+- явную команду `recompute_metrics` для полного или project-scoped пересчёта materialized metrics.
+
+Operational expectations:
+
+- read path использует уже materialized payload и не пересчитывает существующие session metrics
+  только из-за обновления task-classification rules;
+- если запись для сессии отсутствует, она материализуется при первом чтении;
+- после изменения правил classification нужно один раз запустить `recompute_metrics`, прежде чем
+  полагаться на project/task analytics;
+- `recompute_metrics` можно ограничить конкретным `project_key`, если полный rebuild не нужен.
 
 Frontend показывает backend-provided metrics, если они есть. Локальная агрегация в React
 сохраняется только как compatibility path для сессий без backend metrics.

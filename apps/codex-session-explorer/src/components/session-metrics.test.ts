@@ -310,6 +310,11 @@ function makeBackendMetrics(overrides: Partial<SessionMetrics> = {}): SessionMet
       turn_count: covered(null),
       agent_work_item_count: covered(2),
     },
+    used_skills: {
+      identifiers: [],
+      coverage: "unknown",
+      source: "unavailable",
+    },
     business_review: {
       review_cycles: covered(null),
       review_findings: covered(null),

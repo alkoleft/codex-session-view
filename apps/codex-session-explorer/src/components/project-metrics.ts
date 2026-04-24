@@ -35,12 +35,23 @@ export type ProjectSummaryCard = {
 export type ProjectMetricSeriesKey =
   | "duration"
   | "tokens"
+  | "tokenInput"
+  | "tokenOutput"
+  | "tokenCachedInput"
+  | "tokenReasoningOutput"
+  | "tokenTask"
+  | "tokenSpawnAgent"
   | "failures"
   | "toolCalls"
+  | "startContext"
+  | "skillsCount"
+  | "mcpServerCount"
+  | "taskCount"
+  | "spawnAgentCalls"
   | "tokensPerSuccess"
   | "reviewFindingsPer1k";
 
-export type ProjectMetricSeriesCategory = "operational" | "derived";
+export type ProjectMetricSeriesCategory = "operational" | "tokens" | "factors" | "derived";
 
 export type ProjectMetricPoint = {
   sessionId: string;
@@ -91,6 +102,13 @@ export type ContributingSessionItem = {
   projectState: SessionMetrics["project"]["state"];
 };
 
+export type UsedSkillSummaryItem = {
+  identifier: string;
+  usageCount: number;
+  sessionCount: number;
+  coverage: MetricCoverage;
+};
+
 export type ProjectMetricsViewModel = {
   summaryCards: ProjectSummaryCard[];
   chartRows: ProjectMetricsChartRow[];
@@ -98,6 +116,8 @@ export type ProjectMetricsViewModel = {
   defaultVisibleSeriesKeys: ProjectMetricSeriesKey[];
   initialZoomWindow: ProjectMetricsZoomWindow;
   sessions: ContributingSessionItem[];
+  usedSkills: UsedSkillSummaryItem[];
+  usedSkillsCoverage: MetricCoverage;
   degraded: boolean;
   hasUnknownScope: boolean;
 };
@@ -147,6 +167,78 @@ const PROJECT_METRIC_SERIES_DEFINITIONS: readonly ProjectMetricSeriesDefinition[
     formatValue: formatCoveredNumber,
   },
   {
+    key: "tokenInput",
+    label: "Input tokens",
+    shortLabel: "Input",
+    valueLabel: "Input tokens",
+    description: "Input tokens по последнему накопительному snapshot.",
+    category: "tokens",
+    defaultVisible: false,
+    color: "#1d4ed8",
+    selectMetric: (session) => session.token_ledger.input,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "tokenOutput",
+    label: "Output tokens",
+    shortLabel: "Output",
+    valueLabel: "Output tokens",
+    description: "Output tokens по последнему накопительному snapshot.",
+    category: "tokens",
+    defaultVisible: false,
+    color: "#0f766e",
+    selectMetric: (session) => session.token_ledger.output,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "tokenCachedInput",
+    label: "Cached input",
+    shortLabel: "Cached",
+    valueLabel: "Cached input tokens",
+    description: "Cached input tokens без подмены unknown нулями.",
+    category: "tokens",
+    defaultVisible: false,
+    color: "#0891b2",
+    selectMetric: (session) => session.token_ledger.cached_input,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "tokenReasoningOutput",
+    label: "Reasoning output",
+    shortLabel: "Reasoning",
+    valueLabel: "Reasoning output tokens",
+    description: "Reasoning-output slice отдельной series.",
+    category: "tokens",
+    defaultVisible: false,
+    color: "#7c3aed",
+    selectMetric: (session) => session.token_ledger.reasoning_output,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "tokenTask",
+    label: "Task tokens",
+    shortLabel: "Task tok",
+    valueLabel: "Task tokens",
+    description: "Task-scoped token contribution, если источник её даёт.",
+    category: "tokens",
+    defaultVisible: false,
+    color: "#ea580c",
+    selectMetric: (session) => session.token_ledger.task,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "tokenSpawnAgent",
+    label: "Spawn-agent tokens",
+    shortLabel: "Spawn tok",
+    valueLabel: "Spawn-agent tokens",
+    description: "Вклад дочерних spawn agents в token ledger.",
+    category: "tokens",
+    defaultVisible: false,
+    color: "#be123c",
+    selectMetric: (session) => session.token_ledger.spawn_agent,
+    formatValue: formatCoveredNumber,
+  },
+  {
     key: "failures",
     label: "Errors / failed ops",
     shortLabel: "Failures",
@@ -168,6 +260,66 @@ const PROJECT_METRIC_SERIES_DEFINITIONS: readonly ProjectMetricSeriesDefinition[
     defaultVisible: true,
     color: "#059669",
     selectMetric: (session) => session.operations.tool_calls,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "startContext",
+    label: "Start context",
+    shortLabel: "Context",
+    valueLabel: "Start context",
+    description: "Стартовый размер контекста по зафиксированной source precedence.",
+    category: "factors",
+    defaultVisible: false,
+    color: "#9333ea",
+    selectMetric: (session) => session.context.start_context_size,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "skillsCount",
+    label: "Enabled skills",
+    shortLabel: "Skills",
+    valueLabel: "Enabled skills",
+    description: "Количество skills из runtime context без synthetic zeros.",
+    category: "factors",
+    defaultVisible: false,
+    color: "#475569",
+    selectMetric: (session) => session.factors.skills_count,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "mcpServerCount",
+    label: "MCP servers",
+    shortLabel: "MCP",
+    valueLabel: "MCP servers",
+    description: "Количество MCP servers из runtime context.",
+    category: "factors",
+    defaultVisible: false,
+    color: "#0f766e",
+    selectMetric: (session) => session.factors.mcp_server_count,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "taskCount",
+    label: "Tasks",
+    shortLabel: "Tasks",
+    valueLabel: "Tasks",
+    description: "Session-level task count для сравнения orchestration complexity.",
+    category: "factors",
+    defaultVisible: false,
+    color: "#b45309",
+    selectMetric: (session) => session.task_metrics.task_count,
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "spawnAgentCalls",
+    label: "Spawn calls",
+    shortLabel: "Spawn",
+    valueLabel: "Spawn-agent calls",
+    description: "Количество spawn_agent calls по сессии.",
+    category: "factors",
+    defaultVisible: false,
+    color: "#dc2626",
+    selectMetric: (session) => session.operations.spawn_agent_calls,
     formatValue: formatCoveredNumber,
   },
   {
@@ -246,9 +398,17 @@ export function aggregateProjectMetricsResponses(
     });
 
   const tokenMetrics = sessions.map((session) => session.token_ledger.total);
-  const durationMetrics = sessions.map((session) => session.duration.total_ms);
   const totalTokens = sumCoveredMetrics(tokenMetrics);
-  const totalDuration = sumCoveredMetrics(durationMetrics);
+  const totalDuration = sumCoveredMetrics(sessions.map((session) => session.duration.total_ms));
+  const taskFacts = responses
+    .flatMap((response) => response.task_facts)
+    .sort((left, right) => {
+      return (
+        left.started_at.localeCompare(right.started_at)
+        || left.session_id.localeCompare(right.session_id)
+        || left.analytic_key.localeCompare(right.analytic_key)
+      );
+    });
 
   return {
     project_key: projectKey,
@@ -266,15 +426,34 @@ export function aggregateProjectMetricsResponses(
     sessions,
     token_ledger: {
       total: totalTokens,
-      input: unknownCoveredMetric(),
-      output: unknownCoveredMetric(),
-      cached_input: unknownCoveredMetric(),
-      reasoning_output: unknownCoveredMetric(),
-      tool_call: unknownCoveredMetric(),
-      task: unknownCoveredMetric(),
-      spawn_agent: unknownCoveredMetric(),
+      input: sumCoveredMetrics(sessions.map((session) => session.token_ledger.input)),
+      output: sumCoveredMetrics(sessions.map((session) => session.token_ledger.output)),
+      cached_input: sumCoveredMetrics(sessions.map((session) => session.token_ledger.cached_input)),
+      reasoning_output: sumCoveredMetrics(sessions.map((session) => session.token_ledger.reasoning_output)),
+      tool_call: sumCoveredMetrics(sessions.map((session) => session.token_ledger.tool_call)),
+      task: sumCoveredMetrics(sessions.map((session) => session.token_ledger.task)),
+      spawn_agent: sumCoveredMetrics(sessions.map((session) => session.token_ledger.spawn_agent)),
     },
     duration_ms: totalDuration,
+    factors: {
+      start_context_size: sumCoveredMetrics(
+        sessions.map((session) => session.context.start_context_size),
+      ),
+      skills_count: sumCoveredMetrics(sessions.map((session) => session.factors.skills_count)),
+      mcp_server_count: sumCoveredMetrics(
+        sessions.map((session) => session.factors.mcp_server_count),
+      ),
+    },
+    operations: {
+      spawn_agent_calls: sumCoveredMetrics(
+        sessions.map((session) => session.operations.spawn_agent_calls),
+      ),
+    },
+    task_metrics: {
+      task_count: sumCoveredMetrics(sessions.map((session) => session.task_metrics.task_count)),
+    },
+    task_facts: taskFacts,
+    used_skills: aggregateUsedSkills(sessions),
     baseline: {
       coverage: "unknown",
       token_usage_delta: unknownCoveredMetric(),
@@ -314,6 +493,12 @@ export function buildProjectMetricsViewModel(
   const chartSeries = PROJECT_METRIC_SERIES_DEFINITIONS.map((series) =>
     buildChartSeriesMeta(series, chartRows),
   );
+  const usedSkills = response.used_skills.skills.map((skill) => ({
+    identifier: skill.identifier,
+    usageCount: skill.usage_count,
+    sessionCount: skill.session_count,
+    coverage: response.used_skills.coverage,
+  }));
 
   return {
     degraded,
@@ -371,6 +556,8 @@ export function buildProjectMetricsViewModel(
       failures: formatCoveredNumber(preferFailureMetric(session)),
       projectState: session.project.state,
     })),
+    usedSkills,
+    usedSkillsCoverage: response.used_skills.coverage,
   };
 }
 
@@ -508,7 +695,50 @@ function sumCoveredMetrics(metrics: CoveredMetric<number>[]): CoveredMetric<numb
   return {
     value: values.reduce((sum, value) => sum + value, 0),
     coverage,
-    source: metrics[0]?.source ?? "derived",
+    source: "derived",
+  };
+}
+
+function aggregateUsedSkills(sessions: SessionMetrics[]): ProjectMetricsResponse["used_skills"] {
+  const byIdentifier = new Map<string, { usage_count: number; session_count: number }>();
+  let hasKnown = false;
+  let allKnown = sessions.length > 0;
+
+  for (const session of sessions) {
+    if (session.used_skills.coverage === "unknown") {
+      allKnown = false;
+      continue;
+    }
+    hasKnown = true;
+    if (session.used_skills.coverage !== "known") {
+      allKnown = false;
+    }
+    for (const identifier of session.used_skills.identifiers) {
+      const entry = byIdentifier.get(identifier) ?? { usage_count: 0, session_count: 0 };
+      entry.usage_count += 1;
+      entry.session_count += 1;
+      byIdentifier.set(identifier, entry);
+    }
+  }
+
+  if (!hasKnown) {
+    return {
+      skills: [],
+      coverage: "unknown",
+      source: "unavailable",
+    };
+  }
+
+  return {
+    skills: Array.from(byIdentifier.entries())
+      .map(([identifier, counts]) => ({
+        identifier,
+        usage_count: counts.usage_count,
+        session_count: counts.session_count,
+      }))
+      .sort((left, right) => right.usage_count - left.usage_count || left.identifier.localeCompare(right.identifier)),
+    coverage: allKnown ? "known" : "partial",
+    source: "derived",
   };
 }
 

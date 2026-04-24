@@ -259,7 +259,7 @@
 | `agent_message` | `message.agent` | `item_id`, `text`, `text_links`, `thread_id` |
 | `reasoning` | `agent.reasoning` | `text`, `text_links`, `thread_id` |
 | `error` | `error` | `item_id`, `status`, `phase`, `message`, `error_type` |
-| `command_execution` | `shell.call` или `shell.result` | `tool_name=command_execution`, `tool_use_id`, `input.command`, `output`, `stderr`, `exit_code`; для root stdout reader `shell.result.output` берётся из `aggregated_output` с fallback на `stdout`. Дополнительные tool-args вроде `workdir`, `yield_time_ms`, `max_output_tokens`, `login`, `tty`, `shell` здесь обычно отсутствуют и характерны прежде всего для subagent `exec_command`. |
+| `command_execution` | `shell.call` или `shell.result` | `tool_name=command_execution`, `tool_use_id`, `input.command`, `output`, `stderr`, `exit_code`; для root stdout reader `shell.result.output` берётся из `aggregated_output` с fallback на `stdout`. Дополнительные tool-args вроде `workdir`, `yield_time_ms`, `max_output_tokens`, `login`, `tty`, `shell` здесь обычно отсутствуют и характерны прежде всего для subagent `exec_command`. Если structured shell payload явно ссылается на `.../SKILL.md`, reader дополнительно пишет `skill_identifiers[]` с identifier каталога skill. |
 | `mcp_tool_call` | `mcp.call` или `mcp.result` | `tool_use_id`, `arguments`, `result`, `error`, `server`, `tool` |
 | `web_search` | `web.search` или `web.open` | `tool_name=web_search`, `query`, `action`; `open_page` уходит в `web.open` |
 | `todo_list` | `todo.update` | `items[]`, `completed_count`, `total_count`, `status`, `phase` |
@@ -288,8 +288,8 @@
 
 | `payload.type` | Канонический `event_type` | Нормализованный payload |
 | --- | --- | --- |
-| `function_call` | `mcp.call`, `shell.call`, `tool.call`, `todo.update`, `user.input.request`, `stdin.write`, `collab.*` | `call_id` -> `tool_use_id`, `arguments` -> `input`, `session_path`, subagent metadata. Для `exec_command` в `input` могут приходить `cmd`, `workdir`, `yield_time_ms`, `max_output_tokens`, `login`, `tty`, `shell`. Для `update_plan` тот же `todo.update` несёт tool-shaped payload. |
-| `function_call_output` | `mcp.result`, `shell.result`, `tool.result`, `todo.update`, `user.input.request`, `stdin.write`, `collab.*` | `output`, `status=completed`, `phase=completed`; если `output` строка с JSON, сначала пробуется parse JSON. Для subagent `exec_command` formatted output дополнительно разбирается на предмет строк `Process exited with code N` и `Original token count: N`, чтобы восстановить `exit_code` и `original_token_count`; исходный wrapper-текст сохраняется в `formatted_output`. Для `update_plan` canonical `event_type` теперь тоже `todo.update`. |
+| `function_call` | `mcp.call`, `shell.call`, `tool.call`, `todo.update`, `user.input.request`, `stdin.write`, `collab.*` | `call_id` -> `tool_use_id`, `arguments` -> `input`, `session_path`, subagent metadata. Для `exec_command` в `input` могут приходить `cmd`, `workdir`, `yield_time_ms`, `max_output_tokens`, `login`, `tty`, `shell`; если эти аргументы явно указывают на чтение `.../SKILL.md`, reader добавляет `skill_identifiers[]`. Для `update_plan` тот же `todo.update` несёт tool-shaped payload. |
+| `function_call_output` | `mcp.result`, `shell.result`, `tool.result`, `todo.update`, `user.input.request`, `stdin.write`, `collab.*` | `output`, `status=completed`, `phase=completed`; если `output` строка с JSON, сначала пробуется parse JSON. Для subagent `exec_command` formatted output дополнительно разбирается на предмет строк `Process exited with code N` и `Original token count: N`, чтобы восстановить `exit_code` и `original_token_count`; исходный wrapper-текст сохраняется в `formatted_output`. Для shell-family здесь тоже может появляться `skill_identifiers[]`, если команда явно открывала `.../SKILL.md`. Для `update_plan` canonical `event_type` теперь тоже `todo.update`. |
 | `custom_tool_call` | `patch.apply` или `tool.call` | для `apply_patch` старт тоже хранится как `ToolResultPayload` с `phase=started` |
 | `custom_tool_call_output` | `patch.apply`, `patch.apply.duplicate` или `tool.result` | для `apply_patch` возможен duplicate-режим, см. раздел 7 |
 | `web_search_call` | `web.search` или `web.open` | `query`, `action`, `phase`, `status`, `session_path` |
@@ -321,7 +321,7 @@
 | `context_compacted` | `context.compacted` или `context.compacted.duplicate` | зависит от pending-флага, см. раздел 7 |
 | `turn_aborted` | `agent.aborted` | `turn_id`, `reason`, `session_path` |
 | `patch_apply_end` | `patch.apply` | `tool_name=apply_patch`, `success`, `changes`, `stdout`, `stderr`, `phase=completed` |
-| `exec_command_end` | `shell.result` | legacy форма завершения команды, помечается `duplicate_of=response_item.function_call_output`; дополнительно сохраняет `cwd`, `process_id`, `source`, `duration`, `parsed_cmd`, `formatted_output` |
+| `exec_command_end` | `shell.result` | legacy форма завершения команды, помечается `duplicate_of=response_item.function_call_output`; дополнительно сохраняет `cwd`, `process_id`, `source`, `duration`, `parsed_cmd`, `formatted_output`. Если `command` или `parsed_cmd` явно ссылаются на `.../SKILL.md`, reader добавляет `skill_identifiers[]`. |
 | `web_search_end` | `web.search` или `web.open` | legacy форма web search, помечается `duplicate_of=response_item.web_search_call` |
 | `collab_agent_spawn_end` | `collab.spawn_agent` | legacy завершение spawn, с enrichment по `new_thread_id`, `new_agent_*`, `model`, `reasoning_effort`, `agents_states` |
 | `collab_waiting_end` | `collab.wait` | legacy wait result, `receiver_thread_ids`, `agents_states`, `duplicate_of=response_item.function_call_output` |

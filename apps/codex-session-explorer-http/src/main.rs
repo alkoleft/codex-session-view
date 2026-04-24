@@ -10,7 +10,9 @@ use axum::{Json, Router};
 use clap::Parser;
 use codex_log::session::TailCursor;
 use codex_log::session_metrics::SessionMetricsQuery;
-use codex_session_explorer_backend::ViewerBackend;
+use codex_session_explorer_backend::{
+    RecomputeMetricsRequest, RecomputeMetricsResponse, ViewerBackend,
+};
 use include_dir::{include_dir, Dir};
 use mime_guess::from_path;
 use serde::Deserialize;
@@ -113,6 +115,7 @@ fn build_router(state: AppState) -> Router {
             "/api/viewer/query_project_metrics",
             post(query_project_metrics),
         )
+        .route("/api/viewer/recompute_metrics", post(recompute_metrics))
         .route("/api/viewer/tail_session", post(tail_session))
         .route("/", get(serve_index))
         .route("/{*asset_path}", get(serve_asset))
@@ -196,6 +199,17 @@ async fn query_project_metrics(
     state
         .backend
         .query_project_metrics(request.query)
+        .map(Json)
+        .map_err(ApiError::from)
+}
+
+async fn recompute_metrics(
+    State(state): State<AppState>,
+    Json(request): Json<RecomputeMetricsRequest>,
+) -> Result<Json<RecomputeMetricsResponse>, ApiError> {
+    state
+        .backend
+        .recompute_metrics(request)
         .map(Json)
         .map_err(ApiError::from)
 }

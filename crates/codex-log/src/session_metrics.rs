@@ -13,22 +13,23 @@ use crate::events::operation_stream::{
 use crate::events::record::EventRecord;
 use crate::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_REASONING, CONTEXT_COMPACTED, ERROR,
-    INFO_TOKENS, MCP_CALL, MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, TASK_COMPLETED,
-    TASK_STARTED,
+    INFO_TOKENS, MCP_CALL, MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, RUNTIME_CONTEXT,
+    TASK_COMPLETED, TASK_STARTED,
 };
 use crate::session::IndexedSessionSummary;
 use crate::tree::{EventTree, TimelineItem};
 use crate::util::{hash8, normalize_path, utc_now_iso};
 
-pub const METRICS_SCHEMA_VERSION: u32 = 2;
-pub const METRICS_PROJECTION_VERSION: u32 = 2;
+pub const METRICS_SCHEMA_VERSION: u32 = 5;
+pub const METRICS_PROJECTION_VERSION: u32 = 5;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricCoverage {
+    #[default]
+    Unknown,
     Known,
     Partial,
-    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,7 +65,13 @@ impl<T> CoveredMetric<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+impl<T> Default for CoveredMetric<T> {
+    fn default() -> Self {
+        Self::unknown()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricSource {
     NormalizedEvents,
@@ -73,6 +80,7 @@ pub enum MetricSource {
     IndexedSessionMetadata,
     SessionMetadata,
     Derived,
+    #[default]
     Unavailable,
 }
 
@@ -237,6 +245,127 @@ pub struct TaskMetrics {
     pub agent_work_item_count: CoveredMetric<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskClass {
+    Implementation,
+    Review,
+    Analysis,
+    Planning,
+    Approval,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskClassSource {
+    CollaborationMode,
+    AgentRole,
+    RequestedAgentType,
+    ReceiverRole,
+    AmbiguousSignals,
+    #[default]
+    Unclassified,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskClassConfidence {
+    Confident,
+    Partial,
+    #[default]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct UsedSkillsMetrics {
+    #[serde(default)]
+    pub identifiers: Vec<String>,
+    #[serde(default)]
+    pub coverage: MetricCoverage,
+    #[serde(default)]
+    pub source: MetricSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct UsedSkillRollupEntry {
+    pub identifier: String,
+    pub usage_count: u64,
+    pub session_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct UsedSkillsRollup {
+    #[serde(default)]
+    pub skills: Vec<UsedSkillRollupEntry>,
+    #[serde(default)]
+    pub coverage: MetricCoverage,
+    #[serde(default)]
+    pub source: MetricSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ProjectFactorRollups {
+    #[serde(default = "unknown_u64_metric")]
+    pub start_context_size: CoveredMetric<u64>,
+    #[serde(default = "unknown_u64_metric")]
+    pub skills_count: CoveredMetric<u64>,
+    #[serde(default = "unknown_u64_metric")]
+    pub mcp_server_count: CoveredMetric<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ProjectOperationRollups {
+    #[serde(default = "unknown_u64_metric")]
+    pub spawn_agent_calls: CoveredMetric<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ProjectTaskRollups {
+    #[serde(default = "unknown_u64_metric")]
+    pub task_count: CoveredMetric<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TaskFactRawSignals {
+    pub agent_role: Option<String>,
+    pub requested_agent_type: Option<String>,
+    pub receiver_role: Option<String>,
+    pub collaboration_mode_kind: Option<String>,
+    pub model_context_window: Option<String>,
+    pub actor_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskMetricsFact {
+    pub analytic_key: String,
+    pub session_id: String,
+    pub project_key: String,
+    #[serde(default)]
+    pub session_scope: SessionScope,
+    pub run_task_id: String,
+    pub turn_id: String,
+    pub thread_id: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub started_seq: u64,
+    pub ended_seq: Option<u64>,
+    pub outcome: OutcomeSummary,
+    pub token_ledger: TokenLedger,
+    pub duration: DurationBreakdown,
+    pub operations: OperationMetrics,
+    #[serde(default)]
+    pub task_class: TaskClass,
+    #[serde(default)]
+    pub task_class_source: TaskClassSource,
+    #[serde(default)]
+    pub task_class_confidence: TaskClassConfidence,
+    #[serde(default)]
+    pub raw_signals: TaskFactRawSignals,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BusinessReviewMetrics {
     pub review_cycles: CoveredMetric<u64>,
@@ -300,6 +429,10 @@ pub struct SessionMetrics {
     pub token_ledger: TokenLedger,
     pub tool_breakdown: Vec<ToolCategoryMetrics>,
     pub task_metrics: TaskMetrics,
+    #[serde(default)]
+    pub task_facts: Vec<TaskMetricsFact>,
+    #[serde(default)]
+    pub used_skills: UsedSkillsMetrics,
     pub business_review: BusinessReviewMetrics,
     pub context: ContextMetrics,
     pub quality: QualityMetrics,
@@ -336,8 +469,46 @@ pub struct ProjectMetricsResponse {
     pub sessions: Vec<SessionMetrics>,
     pub token_ledger: TokenLedger,
     pub duration_ms: CoveredMetric<u64>,
+    #[serde(default)]
+    pub factors: ProjectFactorRollups,
+    #[serde(default)]
+    pub operations: ProjectOperationRollups,
+    #[serde(default)]
+    pub task_metrics: ProjectTaskRollups,
+    #[serde(default)]
+    pub task_facts: Vec<TaskMetricsFact>,
+    #[serde(default)]
+    pub used_skills: UsedSkillsRollup,
     pub baseline: BaselineComparison,
     pub derived_efficiency: DerivedEfficiencyMetrics,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetricsRebuildVersion {
+    pub metrics_schema_version: u32,
+    pub source_projection_version: u32,
+}
+
+impl MetricsRebuildVersion {
+    pub fn current() -> Self {
+        Self {
+            metrics_schema_version: METRICS_SCHEMA_VERSION,
+            source_projection_version: METRICS_PROJECTION_VERSION,
+        }
+    }
+}
+
+pub trait MaterializedMetricsStore {
+    fn store_session_metrics(&self, metrics: &SessionMetrics) -> AppResult<()>;
+
+    fn load_session_metrics(&self, session_id: &str) -> AppResult<Option<SessionMetrics>>;
+
+    fn needs_rebuild(&self, session_id: &str, version: MetricsRebuildVersion) -> AppResult<bool>;
+
+    fn query_project_metrics(
+        &self,
+        query: &SessionMetricsQuery,
+    ) -> AppResult<ProjectMetricsResponse>;
 }
 
 pub fn extract_project_identity(summary: Option<&IndexedSessionSummary>) -> ProjectIdentity {
@@ -426,6 +597,7 @@ pub fn compute_session_metrics(
     indexed_summary: Option<&IndexedSessionSummary>,
 ) -> SessionMetrics {
     let operation_projection = project_operation_stream(events);
+    let op_durations = operation_durations(events, &operation_projection);
     let first_ts = events
         .first()
         .and_then(|event| cleaned(Some(event.ts.as_str())));
@@ -433,7 +605,6 @@ pub fn compute_session_metrics(
         .last()
         .and_then(|event| cleaned(Some(event.ts.as_str())));
     let total_duration = duration_between(first_ts.as_deref(), last_ts.as_deref());
-    let op_durations = operation_durations(events, &operation_projection);
     let token_ledger = build_token_ledger(events, indexed_summary);
     let task_count = events
         .iter()
@@ -469,6 +640,15 @@ pub fn compute_session_metrics(
     let operations = build_operation_metrics(&operation_projection);
     let tool_breakdown = build_tool_breakdown(events, &operation_projection, &op_durations);
     let duration = build_duration_breakdown(total_duration, &op_durations);
+    let task_facts = extract_task_metrics_facts(
+        session_id,
+        &extract_project_identity(indexed_summary),
+        classify_session_scope(indexed_summary),
+        events,
+        &operation_projection,
+        &op_durations,
+        indexed_summary.and_then(|value| cleaned(value.agent_role.as_deref())),
+    );
     let review_cycles = count_review_cycles(events, tree);
     let review_findings = count_review_findings(events);
     let thread_count = tree
@@ -491,6 +671,7 @@ pub fn compute_session_metrics(
             .unwrap_or_else(CoveredMetric::unknown),
         agent_work_item_count: count_agent_work_items(events, tree),
     };
+    let used_skills = extract_used_skills(events);
     let business_review = BusinessReviewMetrics {
         review_cycles,
         review_findings,
@@ -525,6 +706,8 @@ pub fn compute_session_metrics(
         token_ledger,
         tool_breakdown,
         task_metrics,
+        task_facts,
+        used_skills,
         business_review,
         context,
         quality,
@@ -563,11 +746,13 @@ pub fn apply_spawn_agent_mode(
     adjusted
 }
 
-pub struct SessionMetricsStore {
+pub struct SqliteSessionMetricsStore {
     conn: Connection,
 }
 
-impl SessionMetricsStore {
+pub type SessionMetricsStore = SqliteSessionMetricsStore;
+
+impl SqliteSessionMetricsStore {
     pub fn open(path: &Path) -> AppResult<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -610,6 +795,38 @@ impl SessionMetricsStore {
     }
 
     pub fn upsert_session_metrics(&self, metrics: &SessionMetrics) -> AppResult<()> {
+        self.store_session_metrics(metrics)
+    }
+
+    pub fn get_session_metrics(&self, session_id: &str) -> AppResult<Option<SessionMetrics>> {
+        self.load_session_metrics(session_id)
+    }
+
+    pub fn is_stale(
+        &self,
+        session_id: &str,
+        metrics_schema_version: u32,
+        source_projection_version: u32,
+    ) -> AppResult<bool> {
+        self.needs_rebuild(
+            session_id,
+            MetricsRebuildVersion {
+                metrics_schema_version,
+                source_projection_version,
+            },
+        )
+    }
+
+    pub fn list_project_sessions(
+        &self,
+        query: &SessionMetricsQuery,
+    ) -> AppResult<ProjectMetricsResponse> {
+        self.query_project_metrics(query)
+    }
+}
+
+impl MaterializedMetricsStore for SqliteSessionMetricsStore {
+    fn store_session_metrics(&self, metrics: &SessionMetrics) -> AppResult<()> {
         let payload = serde_json::to_string(metrics)
             .map_err(|err| AppError::Runner(format!("metrics serialization failed: {err}")))?;
         self.conn
@@ -645,7 +862,7 @@ impl SessionMetricsStore {
         Ok(())
     }
 
-    pub fn get_session_metrics(&self, session_id: &str) -> AppResult<Option<SessionMetrics>> {
+    fn load_session_metrics(&self, session_id: &str) -> AppResult<Option<SessionMetrics>> {
         let mut stmt = self
             .conn
             .prepare("select payload_json from session_metrics where session_id = ?1")
@@ -660,12 +877,7 @@ impl SessionMetricsStore {
         }
     }
 
-    pub fn is_stale(
-        &self,
-        session_id: &str,
-        metrics_schema_version: u32,
-        source_projection_version: u32,
-    ) -> AppResult<bool> {
+    fn needs_rebuild(&self, session_id: &str, version: MetricsRebuildVersion) -> AppResult<bool> {
         let mut stmt = self
             .conn
             .prepare(
@@ -676,9 +888,8 @@ impl SessionMetricsStore {
             Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
         });
         match result {
-            Ok((schema, projection)) => {
-                Ok(schema != metrics_schema_version || projection != source_projection_version)
-            }
+            Ok((schema, projection)) => Ok(schema != version.metrics_schema_version
+                || projection != version.source_projection_version),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(true),
             Err(err) => Err(AppError::Runner(format!(
                 "metrics stale query failed: {err}"
@@ -686,7 +897,7 @@ impl SessionMetricsStore {
         }
     }
 
-    pub fn list_project_sessions(
+    fn query_project_metrics(
         &self,
         query: &SessionMetricsQuery,
     ) -> AppResult<ProjectMetricsResponse> {
@@ -742,28 +953,75 @@ pub fn aggregate_project_metrics(
     scope_filter: SessionScopeFilter,
     available_scope_counts: SessionScopeCounts,
 ) -> ProjectMetricsResponse {
-    let mut total_tokens = 0u64;
-    let mut total_tokens_coverage: Option<MetricCoverage> = None;
-    let mut duration_ms = 0u64;
-    let mut duration_coverage: Option<MetricCoverage> = None;
     let mut contributing_session_ids = Vec::new();
     for session in &sessions {
         contributing_session_ids.push(session.session_id.clone());
-        if let Some(value) = session.token_ledger.total.value {
-            total_tokens += value;
-            total_tokens_coverage = Some(match total_tokens_coverage {
-                Some(current) => current.max(session.token_ledger.total.coverage),
-                None => session.token_ledger.total.coverage,
-            });
-        }
-        if let Some(value) = session.duration.total_ms.value {
-            duration_ms += value;
-            duration_coverage = Some(match duration_coverage {
-                Some(current) => current.max(session.duration.total_ms.coverage),
-                None => session.duration.total_ms.coverage,
-            });
-        }
     }
+    let token_ledger = TokenLedger {
+        total: sum_u64_metrics(sessions.iter().map(|session| &session.token_ledger.total)),
+        input: sum_u64_metrics(sessions.iter().map(|session| &session.token_ledger.input)),
+        output: sum_u64_metrics(sessions.iter().map(|session| &session.token_ledger.output)),
+        cached_input: sum_u64_metrics(
+            sessions
+                .iter()
+                .map(|session| &session.token_ledger.cached_input),
+        ),
+        reasoning_output: sum_u64_metrics(
+            sessions
+                .iter()
+                .map(|session| &session.token_ledger.reasoning_output),
+        ),
+        tool_call: sum_u64_metrics(
+            sessions
+                .iter()
+                .map(|session| &session.token_ledger.tool_call),
+        ),
+        task: sum_u64_metrics(sessions.iter().map(|session| &session.token_ledger.task)),
+        spawn_agent: sum_u64_metrics(
+            sessions
+                .iter()
+                .map(|session| &session.token_ledger.spawn_agent),
+        ),
+    };
+    let duration_ms = sum_u64_metrics(sessions.iter().map(|session| &session.duration.total_ms));
+    let factors = ProjectFactorRollups {
+        start_context_size: sum_u64_metrics(
+            sessions
+                .iter()
+                .map(|session| &session.factors.start_context_size),
+        ),
+        skills_count: sum_u64_metrics(sessions.iter().map(|session| &session.factors.skills_count)),
+        mcp_server_count: sum_u64_metrics(
+            sessions
+                .iter()
+                .map(|session| &session.factors.mcp_server_count),
+        ),
+    };
+    let operations = ProjectOperationRollups {
+        spawn_agent_calls: sum_u64_metrics(
+            sessions
+                .iter()
+                .map(|session| &session.operations.spawn_agent_calls),
+        ),
+    };
+    let task_metrics = ProjectTaskRollups {
+        task_count: sum_u64_metrics(
+            sessions
+                .iter()
+                .map(|session| &session.task_metrics.task_count),
+        ),
+    };
+    let mut task_facts = sessions
+        .iter()
+        .flat_map(|session| session.task_facts.iter().cloned())
+        .collect::<Vec<_>>();
+    task_facts.sort_by(|left, right| {
+        left.started_at
+            .cmp(&right.started_at)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+            .then_with(|| left.analytic_key.cmp(&right.analytic_key))
+    });
+    let used_skills = aggregate_used_skills(&sessions);
     ProjectMetricsResponse {
         project_key,
         session_count: sessions.len() as u64,
@@ -771,17 +1029,13 @@ pub fn aggregate_project_metrics(
         scope_filter,
         available_scope_counts,
         sessions,
-        token_ledger: TokenLedger {
-            total: covered_sum(total_tokens, total_tokens_coverage, MetricSource::Derived),
-            input: CoveredMetric::unknown(),
-            output: CoveredMetric::unknown(),
-            cached_input: CoveredMetric::unknown(),
-            reasoning_output: CoveredMetric::unknown(),
-            tool_call: CoveredMetric::unknown(),
-            task: CoveredMetric::unknown(),
-            spawn_agent: CoveredMetric::unknown(),
-        },
-        duration_ms: covered_sum(duration_ms, duration_coverage, MetricSource::Derived),
+        token_ledger,
+        duration_ms,
+        factors,
+        operations,
+        task_metrics,
+        task_facts,
+        used_skills,
         baseline: BaselineComparison {
             coverage: MetricCoverage::Unknown,
             token_usage_delta: CoveredMetric::unknown(),
@@ -797,15 +1051,40 @@ pub fn aggregate_project_metrics(
     }
 }
 
-fn covered_sum(
+fn sum_u64_metrics<'a>(
+    metrics: impl IntoIterator<Item = &'a CoveredMetric<u64>>,
+) -> CoveredMetric<u64> {
+    let mut sum = 0u64;
+    let mut has_value = false;
+    let mut all_known = true;
+    for metric in metrics {
+        if let Some(value) = metric.value {
+            has_value = true;
+            sum = sum.saturating_add(value);
+        }
+        if metric.coverage != MetricCoverage::Known {
+            all_known = false;
+        }
+    }
+    if !has_value {
+        return CoveredMetric::unknown();
+    }
+    if all_known {
+        CoveredMetric::known(sum, MetricSource::Derived)
+    } else {
+        CoveredMetric::partial(sum, MetricSource::Derived)
+    }
+}
+
+fn covered_u64_metric(
     value: u64,
-    coverage: Option<MetricCoverage>,
+    coverage: MetricCoverage,
     source: MetricSource,
 ) -> CoveredMetric<u64> {
     match coverage {
-        Some(MetricCoverage::Known) => CoveredMetric::known(value, source),
-        Some(MetricCoverage::Partial) => CoveredMetric::partial(value, source),
-        Some(MetricCoverage::Unknown) | None => CoveredMetric::unknown(),
+        MetricCoverage::Known => CoveredMetric::known(value, source),
+        MetricCoverage::Partial => CoveredMetric::partial(value, source),
+        MetricCoverage::Unknown => CoveredMetric::unknown(),
     }
 }
 
@@ -813,11 +1092,6 @@ fn build_factor_metadata(
     events: &[EventRecord],
     indexed_summary: Option<&IndexedSessionSummary>,
 ) -> FactorMetadata {
-    let runtime_context = events
-        .iter()
-        .find_map(|event| event.payload.as_object())
-        .and_then(|payload| payload.get("context"))
-        .and_then(Value::as_object);
     FactorMetadata {
         model: indexed_summary.and_then(|value| cleaned(value.model.as_deref())),
         reasoning_effort: indexed_summary
@@ -836,13 +1110,7 @@ fn build_factor_metadata(
                 .count() as u64,
             MetricSource::NormalizedEvents,
         ),
-        start_context_size: runtime_context
-            .and_then(|payload| payload.get("start_context_size"))
-            .and_then(Value::as_u64)
-            .or_else(|| first_nonempty_tokens_start_context(events))
-            .or_else(|| events.iter().find_map(start_context_size_from_event))
-            .map(|value| CoveredMetric::known(value, MetricSource::NormalizedEvents))
-            .unwrap_or_else(CoveredMetric::unknown),
+        start_context_size: resolve_start_context_size(events),
     }
 }
 
@@ -1217,12 +1485,862 @@ fn operation_durations(
 }
 
 fn count_runtime_array(events: &[EventRecord], key: &str) -> CoveredMetric<u64> {
-    events
-        .iter()
-        .filter_map(|event| event.payload.as_object())
-        .find_map(|payload| payload.get(key).and_then(Value::as_array))
+    runtime_context_values(events, key)
+        .into_iter()
+        .find_map(|value| value.as_array())
         .map(|items| CoveredMetric::known(items.len() as u64, MetricSource::NormalizedEvents))
         .unwrap_or_else(CoveredMetric::unknown)
+}
+
+fn runtime_context_values<'a>(events: &'a [EventRecord], key: &str) -> Vec<&'a Value> {
+    let mut values = Vec::new();
+    for event in events
+        .iter()
+        .filter(|event| event.event_type == RUNTIME_CONTEXT)
+    {
+        let Some(payload) = event.payload.as_object() else {
+            continue;
+        };
+        if let Some(value) = payload.get(key) {
+            values.push(value);
+        }
+        if let Some(value) = payload
+            .get("context")
+            .and_then(Value::as_object)
+            .and_then(|context| context.get(key))
+        {
+            values.push(value);
+        }
+    }
+    values
+}
+
+fn resolve_start_context_size(events: &[EventRecord]) -> CoveredMetric<u64> {
+    runtime_context_values(events, "start_context_size")
+        .into_iter()
+        .find_map(Value::as_u64)
+        .or_else(|| first_nonempty_tokens_start_context(events))
+        .or_else(|| events.iter().find_map(start_context_size_from_event))
+        .map(|value| CoveredMetric::known(value, MetricSource::NormalizedEvents))
+        .unwrap_or_else(CoveredMetric::unknown)
+}
+
+fn extract_used_skills(events: &[EventRecord]) -> UsedSkillsMetrics {
+    let identifiers = events
+        .iter()
+        .filter_map(|event| event.payload.as_object())
+        .filter_map(|payload| payload.get("skill_identifiers"))
+        .filter_map(Value::as_array)
+        .flat_map(|items| items.iter())
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if identifiers.is_empty() {
+        UsedSkillsMetrics::default()
+    } else {
+        UsedSkillsMetrics {
+            identifiers,
+            coverage: MetricCoverage::Known,
+            source: MetricSource::NormalizedEvents,
+        }
+    }
+}
+
+fn aggregate_used_skills(sessions: &[SessionMetrics]) -> UsedSkillsRollup {
+    let mut skills = BTreeMap::<String, (u64, u64)>::new();
+    let mut has_known = false;
+    let mut all_known = !sessions.is_empty();
+    for session in sessions {
+        if session.used_skills.coverage == MetricCoverage::Unknown {
+            all_known = false;
+            continue;
+        }
+        has_known = true;
+        if session.used_skills.coverage != MetricCoverage::Known {
+            all_known = false;
+        }
+        for identifier in &session.used_skills.identifiers {
+            let entry = skills.entry(identifier.clone()).or_default();
+            entry.0 += 1;
+            entry.1 += 1;
+        }
+    }
+    if !has_known {
+        return UsedSkillsRollup::default();
+    }
+    UsedSkillsRollup {
+        skills: skills
+            .into_iter()
+            .map(
+                |(identifier, (usage_count, session_count))| UsedSkillRollupEntry {
+                    identifier,
+                    usage_count,
+                    session_count,
+                },
+            )
+            .collect(),
+        coverage: if all_known {
+            MetricCoverage::Known
+        } else {
+            MetricCoverage::Partial
+        },
+        source: MetricSource::Derived,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TaskGroupingCandidate {
+    fact: TaskMetricsFact,
+    activity_end_seq: u64,
+    interval_coverage: MetricCoverage,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TaskClassSignal {
+    class: TaskClass,
+    source: TaskClassSource,
+}
+
+fn extract_task_metrics_facts(
+    session_id: &str,
+    project: &ProjectIdentity,
+    session_scope: SessionScope,
+    events: &[EventRecord],
+    projection: &OperationProjection,
+    op_durations: &BTreeMap<String, OperationDuration>,
+    fallback_agent_role: Option<String>,
+) -> Vec<TaskMetricsFact> {
+    let Some(last_seq) = events.last().map(|event| event.seq) else {
+        return Vec::new();
+    };
+
+    let mut candidates =
+        task_grouping_candidates(session_id, project, session_scope, events, last_seq);
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+
+    let token_points = token_points_by_thread(events);
+    for candidate in &mut candidates {
+        candidate.fact.raw_signals =
+            collect_task_raw_signals(events, candidate, fallback_agent_role.as_deref());
+        let classification = classify_task_from_raw_signals(&candidate.fact.raw_signals);
+        candidate.fact.task_class = classification.class;
+        candidate.fact.task_class_source = classification.source;
+        candidate.fact.task_class_confidence = classification.confidence;
+
+        let task_coverage = candidate.interval_coverage;
+        let local_token_ledger = build_task_token_ledger(
+            &token_points,
+            candidate.fact.thread_id.as_deref(),
+            candidate.fact.started_seq,
+            candidate.activity_end_seq,
+            task_coverage,
+        );
+        let snapshots = task_operation_snapshots(
+            projection,
+            candidate.fact.thread_id.as_deref(),
+            candidate.fact.started_seq,
+            candidate.activity_end_seq,
+        );
+
+        candidate.fact.operations = snapshots
+            .as_deref()
+            .map(|items| build_task_operation_metrics(items, task_coverage))
+            .unwrap_or_else(unknown_operation_metrics);
+        candidate.fact.duration =
+            build_task_duration_metrics(candidate, snapshots.as_deref(), op_durations);
+        candidate.fact.token_ledger = local_token_ledger;
+    }
+
+    let child_map = direct_task_children(&candidates);
+    let mut facts = candidates
+        .into_iter()
+        .map(|candidate| candidate.fact)
+        .collect::<Vec<_>>();
+    for index in (0..facts.len()).rev() {
+        let child_indices = child_map.get(&index).cloned().unwrap_or_default();
+        let child_total_metric = sum_u64_metrics(
+            child_indices
+                .iter()
+                .map(|child| &facts[*child].token_ledger.total),
+        );
+        let child_input_metric = sum_u64_metrics(
+            child_indices
+                .iter()
+                .map(|child| &facts[*child].token_ledger.input),
+        );
+        let child_output_metric = sum_u64_metrics(
+            child_indices
+                .iter()
+                .map(|child| &facts[*child].token_ledger.output),
+        );
+        let child_cached_input_metric = sum_u64_metrics(
+            child_indices
+                .iter()
+                .map(|child| &facts[*child].token_ledger.cached_input),
+        );
+        let child_reasoning_metric = sum_u64_metrics(
+            child_indices
+                .iter()
+                .map(|child| &facts[*child].token_ledger.reasoning_output),
+        );
+        let child_duration_metric = sum_u64_metrics(
+            child_indices
+                .iter()
+                .map(|child| &facts[*child].duration.total_ms),
+        );
+
+        let spawn_token_metric = child_total_metric.clone();
+        let spawn_duration_metric = child_duration_metric;
+
+        let local_total = facts[index].token_ledger.total.clone();
+        let local_input = facts[index].token_ledger.input.clone();
+        let local_output = facts[index].token_ledger.output.clone();
+        let local_cached_input = facts[index].token_ledger.cached_input.clone();
+        let local_reasoning = facts[index].token_ledger.reasoning_output.clone();
+
+        facts[index].token_ledger.total = sum_u64_metrics([&local_total, &child_total_metric]);
+        facts[index].token_ledger.input = sum_u64_metrics([&local_input, &child_input_metric]);
+        facts[index].token_ledger.output = sum_u64_metrics([&local_output, &child_output_metric]);
+        facts[index].token_ledger.cached_input =
+            sum_u64_metrics([&local_cached_input, &child_cached_input_metric]);
+        facts[index].token_ledger.reasoning_output =
+            sum_u64_metrics([&local_reasoning, &child_reasoning_metric]);
+        facts[index].token_ledger.task = local_total;
+        facts[index].token_ledger.spawn_agent = spawn_token_metric;
+        facts[index].duration.spawn_agent_ms = spawn_duration_metric;
+    }
+
+    facts.sort_by(|left, right| {
+        left.started_at
+            .cmp(&right.started_at)
+            .then_with(|| left.started_seq.cmp(&right.started_seq))
+            .then_with(|| left.analytic_key.cmp(&right.analytic_key))
+    });
+    facts
+}
+
+fn task_grouping_candidates(
+    session_id: &str,
+    project: &ProjectIdentity,
+    session_scope: SessionScope,
+    events: &[EventRecord],
+    last_seq: u64,
+) -> Vec<TaskGroupingCandidate> {
+    let start_indices = events
+        .iter()
+        .enumerate()
+        .filter(|(_, event)| event.event_type == TASK_STARTED)
+        .collect::<Vec<_>>();
+    let mut candidates = Vec::new();
+    for (position, (_, start_event)) in start_indices.iter().enumerate() {
+        let Some(turn_id): Option<String> =
+            payload_string(start_event.payload.as_object(), "turn_id")
+        else {
+            continue;
+        };
+        let thread_id = event_thread_id(start_event);
+        let parent_thread_id = payload_string(start_event.payload.as_object(), "parent_thread_id");
+        let analytic_key = canonical_task_analytic_key(
+            session_id,
+            start_event.task_id.as_str(),
+            turn_id.as_str(),
+            thread_id.as_deref(),
+        );
+        let terminal = events
+            .iter()
+            .skip_while(|event| event.seq <= start_event.seq)
+            .find(|event| is_task_terminal_for(event, turn_id.as_str(), thread_id.as_deref()));
+        let next_same_thread_start = start_indices
+            .iter()
+            .skip(position + 1)
+            .map(|(_, event)| *event)
+            .find(|event| {
+                payload_string(event.payload.as_object(), "turn_id").as_deref()
+                    != Some(turn_id.as_str())
+                    && event_thread_id(event) == thread_id
+            });
+        let activity_end_seq = terminal
+            .map(|event| event.seq)
+            .or_else(|| next_same_thread_start.map(|event| event.seq.saturating_sub(1)))
+            .unwrap_or(last_seq);
+        let interval_coverage = if terminal.is_some() {
+            MetricCoverage::Known
+        } else if activity_end_seq > start_event.seq {
+            MetricCoverage::Partial
+        } else {
+            MetricCoverage::Unknown
+        };
+        let outcome = terminal
+            .map(classify_task_terminal_outcome)
+            .unwrap_or(OutcomeSummary {
+                outcome: SessionOutcome::Unknown,
+                coverage: MetricCoverage::Unknown,
+                error_type: None,
+            });
+        let started_at = start_event.ts.clone();
+        let ended_at = terminal.map(|event| event.ts.clone());
+        let ended_seq = terminal.map(|event| event.seq);
+
+        candidates.push(TaskGroupingCandidate {
+            fact: TaskMetricsFact {
+                analytic_key,
+                session_id: session_id.to_string(),
+                project_key: project.project_key.clone(),
+                session_scope,
+                run_task_id: start_event.task_id.clone(),
+                turn_id,
+                thread_id,
+                parent_thread_id,
+                started_at,
+                ended_at,
+                started_seq: start_event.seq,
+                ended_seq,
+                outcome,
+                token_ledger: unknown_token_ledger(),
+                duration: unknown_duration_breakdown(),
+                operations: unknown_operation_metrics(),
+                task_class: TaskClass::Unknown,
+                task_class_source: TaskClassSource::Unclassified,
+                task_class_confidence: TaskClassConfidence::Unknown,
+                raw_signals: extract_raw_signals_from_payload(start_event.payload.as_object()),
+            },
+            activity_end_seq,
+            interval_coverage,
+        });
+    }
+    candidates
+}
+
+fn direct_task_children(candidates: &[TaskGroupingCandidate]) -> BTreeMap<usize, Vec<usize>> {
+    let mut children = BTreeMap::<usize, Vec<usize>>::new();
+    for (parent_index, parent) in candidates.iter().enumerate() {
+        let Some(parent_thread_id) = parent.fact.thread_id.as_deref() else {
+            continue;
+        };
+        for (child_index, child) in candidates.iter().enumerate() {
+            if parent_index == child_index {
+                continue;
+            }
+            if child.fact.parent_thread_id.as_deref() != Some(parent_thread_id) {
+                continue;
+            }
+            if child.fact.started_seq < parent.fact.started_seq
+                || child.fact.started_seq > parent.activity_end_seq
+            {
+                continue;
+            }
+            children.entry(parent_index).or_default().push(child_index);
+        }
+    }
+    children
+}
+
+fn canonical_task_analytic_key(
+    session_id: &str,
+    run_task_id: &str,
+    turn_id: &str,
+    thread_id: Option<&str>,
+) -> String {
+    format!(
+        "task:{}|{}|{}|{}",
+        session_id.trim(),
+        run_task_id.trim(),
+        turn_id.trim(),
+        thread_id.unwrap_or("unknown")
+    )
+}
+
+fn event_thread_id(event: &EventRecord) -> Option<String> {
+    payload_string(event.payload.as_object(), "thread_id")
+        .or_else(|| payload_string(event.payload.as_object(), "sender_thread_id"))
+}
+
+fn is_task_terminal_for(event: &EventRecord, turn_id: &str, thread_id: Option<&str>) -> bool {
+    if !matches!(
+        event.event_type.as_str(),
+        TASK_COMPLETED | AGENT_ABORTED | AGENT_FAILED
+    ) {
+        return false;
+    }
+    if payload_string(event.payload.as_object(), "turn_id").as_deref() != Some(turn_id) {
+        return false;
+    }
+    let event_thread_id = event_thread_id(event);
+    match thread_id {
+        Some(expected) => event_thread_id.as_deref() == Some(expected),
+        None => true,
+    }
+}
+
+fn classify_task_terminal_outcome(event: &EventRecord) -> OutcomeSummary {
+    match event.event_type.as_str() {
+        TASK_COMPLETED => OutcomeSummary {
+            outcome: SessionOutcome::Completed,
+            coverage: MetricCoverage::Known,
+            error_type: None,
+        },
+        AGENT_ABORTED => OutcomeSummary {
+            outcome: if error_text(event).as_deref() == Some("interrupted") {
+                SessionOutcome::Interrupted
+            } else {
+                SessionOutcome::Aborted
+            },
+            coverage: MetricCoverage::Known,
+            error_type: error_text(event),
+        },
+        AGENT_FAILED => OutcomeSummary {
+            outcome: SessionOutcome::Failed,
+            coverage: MetricCoverage::Known,
+            error_type: error_text(event),
+        },
+        _ => OutcomeSummary {
+            outcome: SessionOutcome::Unknown,
+            coverage: MetricCoverage::Unknown,
+            error_type: None,
+        },
+    }
+}
+
+fn collect_task_raw_signals(
+    events: &[EventRecord],
+    candidate: &TaskGroupingCandidate,
+    fallback_agent_role: Option<&str>,
+) -> TaskFactRawSignals {
+    let mut signals = candidate.fact.raw_signals.clone();
+    for event in events.iter().filter(|event| {
+        event.seq >= candidate.fact.started_seq
+            && event.seq <= candidate.activity_end_seq
+            && task_event_matches_thread(event, candidate.fact.thread_id.as_deref())
+    }) {
+        merge_task_raw_signals(&mut signals, event.payload.as_object());
+    }
+    if signals.agent_role.is_none() && candidate.fact.parent_thread_id.is_none() {
+        signals.agent_role = fallback_agent_role.map(str::to_string);
+    }
+    signals
+}
+
+fn task_event_matches_thread(event: &EventRecord, thread_id: Option<&str>) -> bool {
+    match thread_id {
+        Some(expected) => event_thread_id(event).as_deref() == Some(expected),
+        None => true,
+    }
+}
+
+fn extract_raw_signals_from_payload(
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> TaskFactRawSignals {
+    let mut signals = TaskFactRawSignals::default();
+    merge_task_raw_signals(&mut signals, payload);
+    signals
+}
+
+fn merge_task_raw_signals(
+    signals: &mut TaskFactRawSignals,
+    payload: Option<&serde_json::Map<String, Value>>,
+) {
+    if signals.agent_role.is_none() {
+        signals.agent_role = payload_string(payload, "agent_role");
+    }
+    if signals.requested_agent_type.is_none() {
+        signals.requested_agent_type = payload_string(payload, "requested_agent_type");
+    }
+    if signals.receiver_role.is_none() {
+        signals.receiver_role = payload_string(payload, "receiver_role")
+            .or_else(|| payload_string(payload, "new_agent_role"))
+            .or_else(|| payload_string(payload, "receiver_agent_role"));
+    }
+    if signals.collaboration_mode_kind.is_none() {
+        signals.collaboration_mode_kind = payload_string(payload, "collaboration_mode_kind");
+    }
+    if signals.model_context_window.is_none() {
+        signals.model_context_window = payload_string(payload, "model_context_window");
+    }
+    if signals.actor_type.is_none() {
+        signals.actor_type = payload_string(payload, "actor_type");
+    }
+}
+
+fn build_task_token_ledger(
+    token_points: &BTreeMap<String, Vec<(u64, TokenSnapshot)>>,
+    thread_id: Option<&str>,
+    start_seq: u64,
+    end_seq: u64,
+    coverage: MetricCoverage,
+) -> TokenLedger {
+    let Some(thread_id) = thread_id else {
+        return unknown_token_ledger();
+    };
+    let Some(points) = token_points.get(thread_id) else {
+        return unknown_token_ledger();
+    };
+    let before_point = points.iter().rev().find(|(seq, _)| *seq < start_seq);
+    let end_point = points.iter().rev().find(|(seq, _)| *seq <= end_seq);
+    let Some((_, end_snapshot)) = end_point else {
+        return unknown_token_ledger();
+    };
+    let before_snapshot = before_point.map(|(_, snapshot)| *snapshot);
+    let before_exists = before_point.is_some();
+
+    let total = token_snapshot_delta_metric(
+        end_snapshot.total,
+        before_snapshot.and_then(|snapshot| snapshot.total),
+        before_exists,
+        coverage,
+    );
+    TokenLedger {
+        total: total.clone(),
+        input: token_snapshot_delta_metric(
+            end_snapshot.input,
+            before_snapshot.and_then(|snapshot| snapshot.input),
+            before_exists,
+            coverage,
+        ),
+        output: token_snapshot_delta_metric(
+            end_snapshot.output,
+            before_snapshot.and_then(|snapshot| snapshot.output),
+            before_exists,
+            coverage,
+        ),
+        cached_input: token_snapshot_delta_metric(
+            end_snapshot.cached_input,
+            before_snapshot.and_then(|snapshot| snapshot.cached_input),
+            before_exists,
+            coverage,
+        ),
+        reasoning_output: token_snapshot_delta_metric(
+            end_snapshot.reasoning_output,
+            before_snapshot.and_then(|snapshot| snapshot.reasoning_output),
+            before_exists,
+            coverage,
+        ),
+        tool_call: CoveredMetric::unknown(),
+        task: total,
+        spawn_agent: CoveredMetric::unknown(),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ClassifiedTask {
+    class: TaskClass,
+    source: TaskClassSource,
+    confidence: TaskClassConfidence,
+}
+
+fn classify_task_from_raw_signals(signals: &TaskFactRawSignals) -> ClassifiedTask {
+    let ordered = [
+        classify_task_signal(
+            signals.collaboration_mode_kind.as_deref(),
+            TaskClassSource::CollaborationMode,
+        ),
+        classify_task_signal(signals.agent_role.as_deref(), TaskClassSource::AgentRole),
+        classify_task_signal(
+            signals.requested_agent_type.as_deref(),
+            TaskClassSource::RequestedAgentType,
+        ),
+        classify_task_signal(
+            signals.receiver_role.as_deref(),
+            TaskClassSource::ReceiverRole,
+        ),
+    ];
+
+    let mut resolved = Vec::new();
+    for signal in ordered.into_iter().flatten() {
+        if !resolved
+            .iter()
+            .any(|known: &TaskClassSignal| known.class == signal.class)
+        {
+            resolved.push(signal);
+        }
+    }
+
+    match resolved.as_slice() {
+        [] => ClassifiedTask {
+            class: TaskClass::Unknown,
+            source: TaskClassSource::Unclassified,
+            confidence: TaskClassConfidence::Unknown,
+        },
+        [single] => ClassifiedTask {
+            class: single.class,
+            source: single.source,
+            confidence: TaskClassConfidence::Confident,
+        },
+        _ => ClassifiedTask {
+            class: TaskClass::Unknown,
+            source: TaskClassSource::AmbiguousSignals,
+            confidence: TaskClassConfidence::Partial,
+        },
+    }
+}
+
+fn classify_task_signal(value: Option<&str>, source: TaskClassSource) -> Option<TaskClassSignal> {
+    let normalized = value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())?;
+    let class = match normalized.as_str() {
+        "implementation" | "implementer" | "worker" => TaskClass::Implementation,
+        "review" | "review_loop" | "reviewer" => TaskClass::Review,
+        "analysis" | "docs_researcher" | "explorer" | "research" | "researcher" => {
+            TaskClass::Analysis
+        }
+        "plan" | "planner" | "planning" => TaskClass::Planning,
+        "approval" | "approver" => TaskClass::Approval,
+        _ => return None,
+    };
+    Some(TaskClassSignal { class, source })
+}
+
+fn token_points_by_thread(events: &[EventRecord]) -> BTreeMap<String, Vec<(u64, TokenSnapshot)>> {
+    let mut points = BTreeMap::<String, Vec<(u64, TokenSnapshot)>>::new();
+    for event in events
+        .iter()
+        .filter(|event| event.event_type == INFO_TOKENS)
+    {
+        let Some(thread_id) = event_thread_id(event) else {
+            continue;
+        };
+        let Some(snapshot) = token_snapshot_from_payload(event.payload.as_object()) else {
+            continue;
+        };
+        points
+            .entry(thread_id)
+            .or_default()
+            .push((event.seq, snapshot));
+    }
+    points
+}
+
+fn token_snapshot_from_payload(
+    payload: Option<&serde_json::Map<String, Value>>,
+) -> Option<TokenSnapshot> {
+    let payload = payload?;
+    let snapshot = TokenSnapshot {
+        input: payload.get("input_tokens").and_then(Value::as_u64),
+        cached_input: payload.get("cached_input_tokens").and_then(Value::as_u64),
+        output: payload.get("output_tokens").and_then(Value::as_u64),
+        reasoning_output: payload
+            .get("reasoning_output_tokens")
+            .and_then(Value::as_u64),
+        total: payload.get("total_tokens").and_then(Value::as_u64),
+    };
+    (snapshot.input.is_some()
+        || snapshot.cached_input.is_some()
+        || snapshot.output.is_some()
+        || snapshot.reasoning_output.is_some()
+        || snapshot.total.is_some())
+    .then_some(snapshot)
+}
+
+fn token_snapshot_delta_metric(
+    end_value: Option<u64>,
+    before_value: Option<u64>,
+    before_exists: bool,
+    coverage: MetricCoverage,
+) -> CoveredMetric<u64> {
+    let Some(end_value) = end_value else {
+        return CoveredMetric::unknown();
+    };
+    let baseline = if before_exists {
+        let Some(before_value) = before_value else {
+            return CoveredMetric::unknown();
+        };
+        before_value
+    } else {
+        0
+    };
+    if end_value < baseline {
+        return CoveredMetric::unknown();
+    }
+    covered_u64_metric(
+        end_value.saturating_sub(baseline),
+        coverage,
+        MetricSource::NormalizedEvents,
+    )
+}
+
+fn task_operation_snapshots<'a>(
+    projection: &'a OperationProjection,
+    thread_id: Option<&str>,
+    start_seq: u64,
+    end_seq: u64,
+) -> Option<Vec<&'a OperationSnapshot>> {
+    let thread_id = thread_id?;
+    Some(
+        projection
+            .snapshots
+            .iter()
+            .filter(|snapshot| snapshot.key.scope.thread_id.as_deref() == Some(thread_id))
+            .filter(|snapshot| {
+                let anchor_seq = snapshot.started_seq.unwrap_or(snapshot.last_seq);
+                anchor_seq >= start_seq && anchor_seq <= end_seq
+            })
+            .collect(),
+    )
+}
+
+fn build_task_operation_metrics(
+    snapshots: &[&OperationSnapshot],
+    coverage: MetricCoverage,
+) -> OperationMetrics {
+    let count_kind = |kind: OperationKind| {
+        snapshots
+            .iter()
+            .filter(|snapshot| snapshot.key.kind == kind)
+            .count() as u64
+    };
+    let collaboration_calls = snapshots
+        .iter()
+        .filter(|snapshot| snapshot.key.kind.as_str().starts_with("collab."))
+        .count() as u64;
+    let failed = snapshots
+        .iter()
+        .filter(|snapshot| {
+            matches!(
+                snapshot.last_status.as_deref(),
+                Some("failed" | "error" | "cancelled")
+            )
+        })
+        .count() as u64;
+    let successful = snapshots
+        .iter()
+        .filter(|snapshot| snapshot.last_status.as_deref() == Some("completed"))
+        .count() as u64;
+
+    OperationMetrics {
+        operation_count: covered_u64_metric(
+            snapshots.len() as u64,
+            coverage,
+            MetricSource::OperationProjection,
+        ),
+        successful_operations: covered_u64_metric(
+            successful,
+            coverage,
+            MetricSource::OperationProjection,
+        ),
+        failed_operations: covered_u64_metric(failed, coverage, MetricSource::OperationProjection),
+        tool_calls: covered_u64_metric(
+            snapshots
+                .iter()
+                .filter(|snapshot| snapshot.key.kind != OperationKind::FileChange)
+                .count() as u64,
+            coverage,
+            MetricSource::OperationProjection,
+        ),
+        shell_calls: covered_u64_metric(
+            count_kind(OperationKind::Shell),
+            coverage,
+            MetricSource::OperationProjection,
+        ),
+        mcp_calls: covered_u64_metric(
+            count_kind(OperationKind::Mcp),
+            coverage,
+            MetricSource::OperationProjection,
+        ),
+        collaboration_calls: covered_u64_metric(
+            collaboration_calls,
+            coverage,
+            MetricSource::OperationProjection,
+        ),
+        spawn_agent_calls: covered_u64_metric(
+            count_kind(OperationKind::CollabSpawnAgent),
+            coverage,
+            MetricSource::OperationProjection,
+        ),
+    }
+}
+
+fn build_task_duration_metrics(
+    candidate: &TaskGroupingCandidate,
+    snapshots: Option<&[&OperationSnapshot]>,
+    op_durations: &BTreeMap<String, OperationDuration>,
+) -> DurationBreakdown {
+    let explicit_total = candidate.fact.ended_at.as_deref().and_then(|ended_at| {
+        duration_between(Some(candidate.fact.started_at.as_str()), Some(ended_at))
+    });
+    let mut tool_ms = 0u64;
+    let mut shell_ms = 0u64;
+    let mut mcp_ms = 0u64;
+    if let Some(snapshots) = snapshots {
+        for snapshot in snapshots {
+            let duration_ms = op_durations
+                .get(&operation_key(snapshot))
+                .map(|duration| duration.duration_ms)
+                .unwrap_or(0);
+            match snapshot.key.kind {
+                OperationKind::Shell => shell_ms = shell_ms.saturating_add(duration_ms),
+                OperationKind::Mcp => mcp_ms = mcp_ms.saturating_add(duration_ms),
+                _ => tool_ms = tool_ms.saturating_add(duration_ms),
+            }
+        }
+    }
+    DurationBreakdown {
+        total_ms: explicit_total
+            .map(|value| CoveredMetric::known(value, MetricSource::NormalizedEvents))
+            .unwrap_or_else(CoveredMetric::unknown),
+        generation_ms: CoveredMetric::unknown(),
+        tool_ms: covered_u64_metric(
+            tool_ms,
+            candidate.interval_coverage,
+            MetricSource::OperationProjection,
+        ),
+        shell_ms: covered_u64_metric(
+            shell_ms,
+            candidate.interval_coverage,
+            MetricSource::OperationProjection,
+        ),
+        mcp_ms: covered_u64_metric(
+            mcp_ms,
+            candidate.interval_coverage,
+            MetricSource::OperationProjection,
+        ),
+        spawn_agent_ms: CoveredMetric::unknown(),
+        idle_unknown_ms: CoveredMetric::unknown(),
+    }
+}
+
+fn unknown_operation_metrics() -> OperationMetrics {
+    OperationMetrics {
+        operation_count: CoveredMetric::unknown(),
+        successful_operations: CoveredMetric::unknown(),
+        failed_operations: CoveredMetric::unknown(),
+        tool_calls: CoveredMetric::unknown(),
+        shell_calls: CoveredMetric::unknown(),
+        mcp_calls: CoveredMetric::unknown(),
+        collaboration_calls: CoveredMetric::unknown(),
+        spawn_agent_calls: CoveredMetric::unknown(),
+    }
+}
+
+fn unknown_duration_breakdown() -> DurationBreakdown {
+    DurationBreakdown {
+        total_ms: CoveredMetric::unknown(),
+        generation_ms: CoveredMetric::unknown(),
+        tool_ms: CoveredMetric::unknown(),
+        shell_ms: CoveredMetric::unknown(),
+        mcp_ms: CoveredMetric::unknown(),
+        spawn_agent_ms: CoveredMetric::unknown(),
+        idle_unknown_ms: CoveredMetric::unknown(),
+    }
+}
+
+fn unknown_token_ledger() -> TokenLedger {
+    TokenLedger {
+        total: CoveredMetric::unknown(),
+        input: CoveredMetric::unknown(),
+        output: CoveredMetric::unknown(),
+        cached_input: CoveredMetric::unknown(),
+        reasoning_output: CoveredMetric::unknown(),
+        tool_call: CoveredMetric::unknown(),
+        task: CoveredMetric::unknown(),
+        spawn_agent: CoveredMetric::unknown(),
+    }
 }
 
 fn count_distinct_payload_field(events: &[EventRecord], key: &str) -> Option<u64> {
@@ -1446,6 +2564,13 @@ fn cleaned(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+fn payload_string(payload: Option<&serde_json::Map<String, Value>>, key: &str) -> Option<String> {
+    payload
+        .and_then(|obj| obj.get(key))
+        .and_then(Value::as_str)
+        .and_then(|value| cleaned(Some(value)))
+}
+
 fn unknown_u64_metric() -> CoveredMetric<u64> {
     CoveredMetric::unknown()
 }
@@ -1456,7 +2581,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::events::types::{SHELL_CALL, SHELL_RESULT, TOOL_CALL, TOOL_RESULT};
+    use crate::events::types::{
+        AGENT_SESSION, COLLAB_SPAWN_AGENT, SHELL_CALL, SHELL_RESULT, TOOL_CALL, TOOL_RESULT,
+    };
 
     fn event(seq: u64, event_type: &str, ts: &str, payload: Value) -> EventRecord {
         EventRecord {
@@ -1656,11 +2783,7 @@ mod tests {
         assert_eq!(metrics.context.start_context_size.value, Some(10));
     }
 
-    #[test]
-    fn storage_upserts_detects_stale_versions_and_lists_project_chronologically() {
-        let dir = tempdir().expect("tempdir should exist");
-        let store = SessionMetricsStore::open(&dir.path().join("metrics.sqlite"))
-            .expect("store should open");
+    fn assert_materialized_metrics_store_contract(store: &dyn MaterializedMetricsStore) {
         let first = compute_session_metrics(
             "session-1",
             &[event(1, AGENT_COMPLETED, "2026-04-23T10:00:00Z", json!({}))],
@@ -1675,33 +2798,33 @@ mod tests {
             None,
             Some(&second_summary),
         );
-        store.upsert_session_metrics(&first).expect("first upsert");
         store
-            .upsert_session_metrics(&second)
-            .expect("second upsert");
+            .store_session_metrics(&first)
+            .expect("first upsert should succeed");
+        store
+            .store_session_metrics(&second)
+            .expect("second upsert should succeed");
 
         assert!(!store
-            .is_stale(
-                "session-1",
-                METRICS_SCHEMA_VERSION,
-                METRICS_PROJECTION_VERSION
-            )
+            .needs_rebuild("session-1", MetricsRebuildVersion::current(),)
             .expect("stale query"));
         assert!(store
-            .is_stale(
+            .needs_rebuild(
                 "session-1",
-                METRICS_SCHEMA_VERSION + 1,
-                METRICS_PROJECTION_VERSION
+                MetricsRebuildVersion {
+                    metrics_schema_version: METRICS_SCHEMA_VERSION + 1,
+                    source_projection_version: METRICS_PROJECTION_VERSION,
+                },
             )
             .expect("stale query"));
         let loaded = store
-            .get_session_metrics("session-1")
+            .load_session_metrics("session-1")
             .expect("get should succeed")
             .expect("session should exist");
         assert_eq!(loaded.project.project_key, first.project.project_key);
 
         let project = store
-            .list_project_sessions(&SessionMetricsQuery {
+            .query_project_metrics(&SessionMetricsQuery {
                 project_key: first.project.project_key.clone(),
                 start_ts: None,
                 end_ts: None,
@@ -1714,6 +2837,15 @@ mod tests {
             vec!["session-2", "session-1"]
         );
         assert_eq!(project.scope_filter, SessionScopeFilter::All);
+    }
+
+    #[test]
+    fn sqlite_metrics_store_satisfies_materialized_metrics_store_contract() {
+        let dir = tempdir().expect("tempdir should exist");
+        let store = SessionMetricsStore::open(&dir.path().join("metrics.sqlite"))
+            .expect("store should open");
+
+        assert_materialized_metrics_store_contract(&store);
     }
 
     #[test]
@@ -1733,6 +2865,553 @@ mod tests {
         let adjusted = apply_spawn_agent_mode(&metrics, SpawnAgentAggregation::Exclude);
         assert_eq!(adjusted.token_ledger.total.value, Some(150));
         assert_eq!(adjusted.duration.total_ms.value, Some(600));
+    }
+
+    #[test]
+    fn start_context_uses_explicit_runtime_context_before_tokens_and_legacy_fields() {
+        let events = vec![
+            event(
+                1,
+                RUNTIME_CONTEXT,
+                "2026-04-23T10:00:00Z",
+                json!({"context": {"start_context_size": 321}, "skills": ["openspec-apply-change"], "mcp_servers": ["filesystem"]}),
+            ),
+            event(
+                2,
+                INFO_TOKENS,
+                "2026-04-23T10:00:01Z",
+                json!({"input_tokens": 100, "total_tokens": 150}),
+            ),
+            event(
+                3,
+                MESSAGE_USER,
+                "2026-04-23T10:00:02Z",
+                json!({"start_context_size": 80}),
+            ),
+        ];
+
+        let metrics = compute_session_metrics("session-1", &events, None, Some(&summary()));
+        assert_eq!(metrics.context.start_context_size.value, Some(321));
+        assert_eq!(metrics.factors.skills_count.value, Some(1));
+        assert_eq!(metrics.factors.mcp_server_count.value, Some(1));
+    }
+
+    #[test]
+    fn start_context_falls_back_to_first_nonempty_tokens_before_legacy_fields() {
+        let events = vec![
+            event(
+                1,
+                INFO_TOKENS,
+                "2026-04-23T10:00:00Z",
+                json!({"input_tokens": 0, "total_tokens": 0}),
+            ),
+            event(
+                2,
+                INFO_TOKENS,
+                "2026-04-23T10:00:01Z",
+                json!({"input_tokens": 42, "total_tokens": 100}),
+            ),
+            event(
+                3,
+                MESSAGE_USER,
+                "2026-04-23T10:00:02Z",
+                json!({"start_context_size": 80}),
+            ),
+        ];
+
+        let metrics = compute_session_metrics("session-1", &events, None, Some(&summary()));
+        assert_eq!(metrics.context.start_context_size.value, Some(42));
+    }
+
+    #[test]
+    fn project_rollups_aggregate_token_breakdown_counts_and_used_skills_without_zero_fill() {
+        let mut first = compute_session_metrics(
+            "session-1",
+            &[event(1, AGENT_COMPLETED, "2026-04-23T10:00:00Z", json!({}))],
+            None,
+            Some(&summary()),
+        );
+        first.token_ledger.input = CoveredMetric::known(10, MetricSource::NormalizedEvents);
+        first.token_ledger.output = CoveredMetric::known(20, MetricSource::NormalizedEvents);
+        first.token_ledger.cached_input = CoveredMetric::known(5, MetricSource::NormalizedEvents);
+        first.token_ledger.reasoning_output =
+            CoveredMetric::known(3, MetricSource::NormalizedEvents);
+        first.token_ledger.task = CoveredMetric::known(11, MetricSource::NormalizedEvents);
+        first.token_ledger.spawn_agent = CoveredMetric::known(7, MetricSource::NormalizedEvents);
+        first.factors.skills_count = CoveredMetric::known(2, MetricSource::NormalizedEvents);
+        first.factors.mcp_server_count = CoveredMetric::known(1, MetricSource::NormalizedEvents);
+        first.factors.start_context_size =
+            CoveredMetric::known(100, MetricSource::NormalizedEvents);
+        first.task_metrics.task_count = CoveredMetric::known(4, MetricSource::NormalizedEvents);
+        first.operations.spawn_agent_calls =
+            CoveredMetric::known(1, MetricSource::OperationProjection);
+        first.used_skills = UsedSkillsMetrics {
+            identifiers: vec!["openspec-apply-change".to_string()],
+            coverage: MetricCoverage::Known,
+            source: MetricSource::NormalizedEvents,
+        };
+
+        let mut second = compute_session_metrics(
+            "session-2",
+            &[event(1, AGENT_COMPLETED, "2026-04-23T11:00:00Z", json!({}))],
+            None,
+            Some(&summary()),
+        );
+        second.session_id = "session-2".to_string();
+        second.token_ledger.input = CoveredMetric::known(30, MetricSource::NormalizedEvents);
+        second.token_ledger.output = CoveredMetric::unknown();
+        second.token_ledger.cached_input = CoveredMetric::known(10, MetricSource::NormalizedEvents);
+        second.token_ledger.reasoning_output = CoveredMetric::unknown();
+        second.token_ledger.task = CoveredMetric::unknown();
+        second.token_ledger.spawn_agent = CoveredMetric::known(2, MetricSource::NormalizedEvents);
+        second.factors.skills_count = CoveredMetric::unknown();
+        second.factors.mcp_server_count = CoveredMetric::known(2, MetricSource::NormalizedEvents);
+        second.factors.start_context_size =
+            CoveredMetric::known(50, MetricSource::NormalizedEvents);
+        second.task_metrics.task_count = CoveredMetric::unknown();
+        second.operations.spawn_agent_calls =
+            CoveredMetric::known(2, MetricSource::OperationProjection);
+        second.used_skills = UsedSkillsMetrics {
+            identifiers: vec!["openspec-apply-change".to_string(), "shadcn".to_string()],
+            coverage: MetricCoverage::Known,
+            source: MetricSource::NormalizedEvents,
+        };
+
+        let project = aggregate_project_metrics(
+            "project:test".to_string(),
+            vec![first, second],
+            SessionScopeFilter::All,
+            SessionScopeCounts::default(),
+        );
+
+        assert_eq!(project.token_ledger.input.value, Some(40));
+        assert_eq!(project.token_ledger.output.value, Some(20));
+        assert_eq!(
+            project.token_ledger.output.coverage,
+            MetricCoverage::Partial
+        );
+        assert_eq!(project.token_ledger.cached_input.value, Some(15));
+        assert_eq!(project.token_ledger.reasoning_output.value, Some(3));
+        assert_eq!(
+            project.token_ledger.reasoning_output.coverage,
+            MetricCoverage::Partial
+        );
+        assert_eq!(project.token_ledger.task.value, Some(11));
+        assert_eq!(project.token_ledger.task.coverage, MetricCoverage::Partial);
+        assert_eq!(project.token_ledger.spawn_agent.value, Some(9));
+        assert_eq!(project.factors.start_context_size.value, Some(150));
+        assert_eq!(project.factors.skills_count.value, Some(2));
+        assert_eq!(
+            project.factors.skills_count.coverage,
+            MetricCoverage::Partial
+        );
+        assert_eq!(project.factors.mcp_server_count.value, Some(3));
+        assert_eq!(project.task_metrics.task_count.value, Some(4));
+        assert_eq!(
+            project.task_metrics.task_count.coverage,
+            MetricCoverage::Partial
+        );
+        assert_eq!(project.operations.spawn_agent_calls.value, Some(3));
+        assert_eq!(project.used_skills.coverage, MetricCoverage::Known);
+        assert_eq!(project.used_skills.skills.len(), 2);
+        assert_eq!(
+            project.used_skills.skills[0].identifier,
+            "openspec-apply-change"
+        );
+        assert_eq!(project.used_skills.skills[0].usage_count, 2);
+        assert_eq!(project.used_skills.skills[0].session_count, 2);
+    }
+
+    #[test]
+    fn query_project_metrics_respects_include_spawn_agents_for_session_and_project_totals() {
+        let dir = tempdir().expect("tempdir should exist");
+        let store = SessionMetricsStore::open(&dir.path().join("metrics.sqlite"))
+            .expect("store should open");
+
+        let mut metrics = compute_session_metrics(
+            "session-1",
+            &[event(1, AGENT_COMPLETED, "2026-04-23T10:00:00Z", json!({}))],
+            None,
+            Some(&summary()),
+        );
+        metrics.project.project_key = "project:test".to_string();
+        metrics.token_ledger.total = CoveredMetric::known(200, MetricSource::NormalizedEvents);
+        metrics.token_ledger.spawn_agent = CoveredMetric::known(50, MetricSource::NormalizedEvents);
+        metrics.duration.total_ms = CoveredMetric::known(1_000, MetricSource::NormalizedEvents);
+        metrics.duration.spawn_agent_ms =
+            CoveredMetric::known(400, MetricSource::OperationProjection);
+        store
+            .upsert_session_metrics(&metrics)
+            .expect("upsert should succeed");
+
+        let included = store
+            .list_project_sessions(&SessionMetricsQuery {
+                project_key: "project:test".to_string(),
+                start_ts: None,
+                end_ts: None,
+                include_spawn_agents: true,
+                session_scope_filter: SessionScopeFilter::All,
+            })
+            .expect("project query should succeed");
+        let excluded = store
+            .list_project_sessions(&SessionMetricsQuery {
+                project_key: "project:test".to_string(),
+                start_ts: None,
+                end_ts: None,
+                include_spawn_agents: false,
+                session_scope_filter: SessionScopeFilter::All,
+            })
+            .expect("project query should succeed");
+
+        assert_eq!(included.sessions[0].token_ledger.total.value, Some(200));
+        assert_eq!(excluded.sessions[0].token_ledger.total.value, Some(150));
+        assert_eq!(included.token_ledger.total.value, Some(200));
+        assert_eq!(excluded.token_ledger.total.value, Some(150));
+        assert_eq!(included.duration_ms.value, Some(1_000));
+        assert_eq!(excluded.duration_ms.value, Some(600));
+        assert_eq!(excluded.token_ledger.spawn_agent.value, Some(50));
+    }
+
+    #[test]
+    fn task_facts_require_turn_identity_for_canonical_key() {
+        let events = vec![
+            event(
+                1,
+                TASK_STARTED,
+                "2026-04-23T10:00:00Z",
+                json!({"thread_id": "root", "collaboration_mode_kind": "untracked"}),
+            ),
+            event(
+                2,
+                TASK_COMPLETED,
+                "2026-04-23T10:00:01Z",
+                json!({"thread_id": "root"}),
+            ),
+            event(
+                3,
+                TASK_STARTED,
+                "2026-04-23T10:00:02Z",
+                json!({"thread_id": "root", "turn_id": "turn-2", "collaboration_mode_kind": "review"}),
+            ),
+            event(
+                4,
+                TASK_COMPLETED,
+                "2026-04-23T10:00:03Z",
+                json!({"thread_id": "root", "turn_id": "turn-2"}),
+            ),
+        ];
+
+        let metrics = compute_session_metrics("session-1", &events, None, Some(&summary()));
+        assert_eq!(metrics.task_facts.len(), 1);
+        let fact = &metrics.task_facts[0];
+        assert_eq!(fact.analytic_key, "task:session-1|task-1|turn-2|root");
+        assert_eq!(fact.turn_id, "turn-2");
+        assert_eq!(
+            fact.raw_signals.collaboration_mode_kind.as_deref(),
+            Some("review")
+        );
+    }
+
+    #[test]
+    fn task_facts_group_by_thread_and_roll_up_spawn_contribution() {
+        let events = vec![
+            event(
+                1,
+                TASK_STARTED,
+                "2026-04-23T10:00:00Z",
+                json!({"thread_id": "root", "turn_id": "turn-root", "collaboration_mode_kind": "interactive"}),
+            ),
+            event(
+                2,
+                SHELL_CALL,
+                "2026-04-23T10:00:01Z",
+                json!({"call_id": "shell-1", "thread_id": "root", "tool_name": "exec_command", "command": "cargo test"}),
+            ),
+            event(
+                3,
+                SHELL_RESULT,
+                "2026-04-23T10:00:02Z",
+                json!({"call_id": "shell-1", "thread_id": "root", "status": "completed"}),
+            ),
+            event(
+                4,
+                COLLAB_SPAWN_AGENT,
+                "2026-04-23T10:00:03Z",
+                json!({
+                    "call_id": "spawn-1",
+                    "thread_id": "root",
+                    "sender_thread_id": "root",
+                    "phase": "started",
+                    "requested_agent_type": "reviewer"
+                }),
+            ),
+            event(
+                5,
+                COLLAB_SPAWN_AGENT,
+                "2026-04-23T10:00:04Z",
+                json!({
+                    "call_id": "spawn-1",
+                    "thread_id": "root",
+                    "sender_thread_id": "root",
+                    "phase": "completed",
+                    "status": "completed",
+                    "requested_agent_type": "reviewer",
+                    "new_thread_id": "sub-1",
+                    "new_agent_role": "reviewer"
+                }),
+            ),
+            event(
+                6,
+                TASK_STARTED,
+                "2026-04-23T10:00:05Z",
+                json!({
+                    "thread_id": "sub-1",
+                    "parent_thread_id": "root",
+                    "turn_id": "turn-sub",
+                    "collaboration_mode_kind": "review_loop"
+                }),
+            ),
+            event(
+                7,
+                AGENT_SESSION,
+                "2026-04-23T10:00:06Z",
+                json!({"thread_id": "sub-1", "parent_thread_id": "root", "agent_role": "reviewer"}),
+            ),
+            event(
+                8,
+                INFO_TOKENS,
+                "2026-04-23T10:00:07Z",
+                json!({"thread_id": "sub-1", "input_tokens": 7, "output_tokens": 5, "total_tokens": 12}),
+            ),
+            event(
+                9,
+                TASK_COMPLETED,
+                "2026-04-23T10:00:08Z",
+                json!({"thread_id": "sub-1", "parent_thread_id": "root", "turn_id": "turn-sub"}),
+            ),
+            event(
+                10,
+                INFO_TOKENS,
+                "2026-04-23T10:00:09Z",
+                json!({"thread_id": "root", "input_tokens": 10, "output_tokens": 8, "reasoning_output_tokens": 2, "total_tokens": 18}),
+            ),
+            event(
+                11,
+                TASK_COMPLETED,
+                "2026-04-23T10:00:10Z",
+                json!({"thread_id": "root", "turn_id": "turn-root"}),
+            ),
+        ];
+
+        let metrics = compute_session_metrics("session-1", &events, None, Some(&summary()));
+        assert_eq!(metrics.task_facts.len(), 2);
+
+        let parent = metrics
+            .task_facts
+            .iter()
+            .find(|fact| fact.turn_id == "turn-root")
+            .expect("parent task fact should exist");
+        assert_eq!(parent.operations.shell_calls.value, Some(1));
+        assert_eq!(parent.operations.spawn_agent_calls.value, Some(1));
+        assert_eq!(parent.duration.total_ms.value, Some(10_000));
+        assert_eq!(parent.duration.spawn_agent_ms.value, Some(3_000));
+        assert_eq!(parent.token_ledger.task.value, Some(18));
+        assert_eq!(parent.token_ledger.spawn_agent.value, Some(12));
+        assert_eq!(parent.token_ledger.total.value, Some(30));
+        assert_eq!(parent.token_ledger.input.value, Some(17));
+        assert_eq!(parent.token_ledger.output.value, Some(13));
+        assert_eq!(
+            parent.raw_signals.requested_agent_type.as_deref(),
+            Some("reviewer")
+        );
+        assert_eq!(
+            parent.raw_signals.receiver_role.as_deref(),
+            Some("reviewer")
+        );
+
+        let child = metrics
+            .task_facts
+            .iter()
+            .find(|fact| fact.turn_id == "turn-sub")
+            .expect("child task fact should exist");
+        assert_eq!(child.parent_thread_id.as_deref(), Some("root"));
+        assert_eq!(child.duration.total_ms.value, Some(3_000));
+        assert_eq!(child.token_ledger.total.value, Some(12));
+        assert_eq!(child.raw_signals.agent_role.as_deref(), Some("reviewer"));
+        assert_eq!(
+            child.raw_signals.collaboration_mode_kind.as_deref(),
+            Some("review_loop")
+        );
+    }
+
+    #[test]
+    fn task_facts_keep_unknown_metrics_when_boundaries_are_open() {
+        let events = vec![
+            event(
+                1,
+                TASK_STARTED,
+                "2026-04-23T10:00:00Z",
+                json!({"thread_id": "root", "turn_id": "turn-open", "collaboration_mode_kind": "interactive"}),
+            ),
+            event(
+                2,
+                MESSAGE_AGENT,
+                "2026-04-23T10:00:01Z",
+                json!({"thread_id": "root", "text": "still working"}),
+            ),
+        ];
+
+        let metrics = compute_session_metrics("session-1", &events, None, Some(&summary()));
+        assert_eq!(metrics.task_facts.len(), 1);
+        let fact = &metrics.task_facts[0];
+        assert_eq!(fact.outcome.outcome, SessionOutcome::Unknown);
+        assert_eq!(fact.duration.total_ms.value, None);
+        assert_eq!(fact.token_ledger.total.value, None);
+        assert_eq!(fact.token_ledger.spawn_agent.value, None);
+    }
+
+    #[test]
+    fn task_classification_maps_raw_signals_to_semantic_classes() {
+        let cases = [
+            (
+                json!({"thread_id": "root", "turn_id": "turn-implementation", "agent_role": "worker"}),
+                TaskClass::Implementation,
+                TaskClassSource::AgentRole,
+            ),
+            (
+                json!({"thread_id": "root", "turn_id": "turn-review", "requested_agent_type": "reviewer"}),
+                TaskClass::Review,
+                TaskClassSource::RequestedAgentType,
+            ),
+            (
+                json!({"thread_id": "root", "turn_id": "turn-analysis", "receiver_role": "docs_researcher"}),
+                TaskClass::Analysis,
+                TaskClassSource::ReceiverRole,
+            ),
+            (
+                json!({"thread_id": "root", "turn_id": "turn-planning", "collaboration_mode_kind": "planning"}),
+                TaskClass::Planning,
+                TaskClassSource::CollaborationMode,
+            ),
+            (
+                json!({"thread_id": "root", "turn_id": "turn-approval", "collaboration_mode_kind": "approval"}),
+                TaskClass::Approval,
+                TaskClassSource::CollaborationMode,
+            ),
+        ];
+
+        for (payload, expected_class, expected_source) in cases {
+            let turn_id = payload["turn_id"].clone();
+            let metrics = compute_session_metrics(
+                "session-1",
+                &[
+                    event(1, TASK_STARTED, "2026-04-23T10:00:00Z", payload),
+                    event(
+                        2,
+                        TASK_COMPLETED,
+                        "2026-04-23T10:00:01Z",
+                        json!({"thread_id": "root", "turn_id": turn_id}),
+                    ),
+                ],
+                None,
+                Some(&summary()),
+            );
+            let fact = metrics
+                .task_facts
+                .first()
+                .expect("task fact should be materialized");
+            assert_eq!(fact.task_class, expected_class);
+            assert_eq!(fact.task_class_source, expected_source);
+            assert_eq!(fact.task_class_confidence, TaskClassConfidence::Confident);
+        }
+    }
+
+    #[test]
+    fn task_classification_keeps_ambiguous_cases_unknown() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[
+                event(
+                    1,
+                    TASK_STARTED,
+                    "2026-04-23T10:00:00Z",
+                    json!({
+                        "thread_id": "root",
+                        "turn_id": "turn-1",
+                        "agent_role": "worker",
+                        "requested_agent_type": "reviewer"
+                    }),
+                ),
+                event(
+                    2,
+                    TASK_COMPLETED,
+                    "2026-04-23T10:00:01Z",
+                    json!({"thread_id": "root", "turn_id": "turn-1"}),
+                ),
+            ],
+            None,
+            Some(&summary()),
+        );
+        let fact = metrics
+            .task_facts
+            .first()
+            .expect("task fact should be materialized");
+        assert_eq!(fact.task_class, TaskClass::Unknown);
+        assert_eq!(fact.task_class_source, TaskClassSource::AmbiguousSignals);
+        assert_eq!(fact.task_class_confidence, TaskClassConfidence::Partial);
+    }
+
+    #[test]
+    fn task_classification_leaves_unmapped_interactive_cases_unknown() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[
+                event(
+                    1,
+                    TASK_STARTED,
+                    "2026-04-23T10:00:00Z",
+                    json!({
+                        "thread_id": "root",
+                        "turn_id": "turn-1",
+                        "collaboration_mode_kind": "interactive",
+                        "agent_role": "default"
+                    }),
+                ),
+                event(
+                    2,
+                    TASK_COMPLETED,
+                    "2026-04-23T10:00:01Z",
+                    json!({"thread_id": "root", "turn_id": "turn-1"}),
+                ),
+            ],
+            None,
+            Some(&summary()),
+        );
+        let fact = metrics
+            .task_facts
+            .first()
+            .expect("task fact should be materialized");
+        assert_eq!(fact.task_class, TaskClass::Unknown);
+        assert_eq!(fact.task_class_source, TaskClassSource::Unclassified);
+        assert_eq!(fact.task_class_confidence, TaskClassConfidence::Unknown);
+    }
+
+    #[test]
+    fn used_skills_stay_unknown_without_explicit_markers() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[event(
+                1,
+                RUNTIME_CONTEXT,
+                "2026-04-23T10:00:00Z",
+                json!({"skills": ["openspec-apply-change"]}),
+            )],
+            None,
+            Some(&summary()),
+        );
+
+        assert!(metrics.used_skills.identifiers.is_empty());
+        assert_eq!(metrics.used_skills.coverage, MetricCoverage::Unknown);
     }
 
     #[test]

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-recompute-metrics"
+description = "Разрешает явно пересчитывать materialized session/project metrics."
+commands.allow = ["recompute_metrics"]

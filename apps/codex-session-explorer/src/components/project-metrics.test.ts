@@ -101,6 +101,12 @@ function makeSession(overrides: Partial<SessionMetrics> = {}): SessionMetrics {
       turn_count: covered(1),
       agent_work_item_count: covered(1),
     },
+    task_facts: [],
+    used_skills: {
+      identifiers: [],
+      coverage: "unknown",
+      source: "unavailable",
+    },
     business_review: {
       review_cycles: covered(0),
       review_findings: covered(0),
@@ -152,6 +158,23 @@ function makeResponse(sessions: SessionMetrics[]): ProjectMetricsResponse {
       spawn_agent: covered(2000),
     },
     duration_ms: covered(1200000),
+    factors: {
+      start_context_size: covered(0),
+      skills_count: covered(0),
+      mcp_server_count: covered(0),
+    },
+    operations: {
+      spawn_agent_calls: covered(2),
+    },
+    task_metrics: {
+      task_count: covered(2),
+    },
+    task_facts: sessions.flatMap((session) => session.task_facts),
+    used_skills: {
+      skills: [],
+      coverage: "unknown",
+      source: "unavailable",
+    },
     baseline: {
       coverage: "partial",
       token_usage_delta: covered(10),
@@ -239,6 +262,12 @@ describe("buildProjectMetricsViewModel", () => {
     expect(viewModel.degraded).toBe(true);
     expect(viewModel.hasUnknownScope).toBe(false);
     expect(viewModel.summaryCards.find((card) => card.label === "Total tokens")?.value).toBe("6 000");
+    expect(viewModel.chartSeries.find((series) => series.key === "startContext")).toMatchObject({
+      category: "factors",
+    });
+    expect(viewModel.chartSeries.find((series) => series.key === "tokenInput")).toMatchObject({
+      category: "tokens",
+    });
     expect(getProjectMetricPoint(viewModel.chartRows[1], "tokens")).toMatchObject({
       coverage: "unknown",
       value: null,
@@ -252,6 +281,7 @@ describe("buildProjectMetricsViewModel", () => {
     expect(viewModel.sessions[0].tokens).toBe("3 000");
     expect(viewModel.sessions[1].sessionScope).toBe("unknown");
     expect(viewModel.sessions[1].failures).toContain("partial");
+    expect(viewModel.usedSkillsCoverage).toBe("unknown");
   });
 });
 
@@ -277,6 +307,9 @@ describe("aggregateProjectMetricsResponses", () => {
     expect(merged.contributing_session_ids).toEqual(["session-1", "session-2"]);
     expect(merged.scope_filter).toBe("all");
     expect(merged.token_ledger.total.value).toBe(8000);
+    expect(merged.token_ledger.input.value).toBe(2000);
+    expect(merged.factors.skills_count.value).toBe(0);
+    expect(merged.task_metrics.task_count.value).toBe(2);
     expect(merged.duration_ms.value).toBe(1200000);
   });
 });

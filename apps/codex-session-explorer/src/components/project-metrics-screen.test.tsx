@@ -122,6 +122,12 @@ function makeSession(index: number): SessionMetrics {
       turn_count: covered(1),
       agent_work_item_count: covered(1),
     },
+    task_facts: [],
+    used_skills: {
+      identifiers: index % 3 === 0 ? ["openspec-apply-change"] : [],
+      coverage: index % 3 === 0 ? "known" : "unknown",
+      source: index % 3 === 0 ? "normalized_events" : "unavailable",
+    },
     business_review: {
       review_cycles: covered(0),
       review_findings: covered(index),
@@ -173,6 +179,29 @@ function makeResponse(count: number): ProjectMetricsResponse {
       spawn_agent: covered(4000),
     },
     duration_ms: covered(16000000),
+    factors: {
+      start_context_size: covered(0),
+      skills_count: covered(0),
+      mcp_server_count: covered(0),
+    },
+    operations: {
+      spawn_agent_calls: covered(8),
+    },
+    task_metrics: {
+      task_count: covered(8),
+    },
+    task_facts: sessions.flatMap((session) => session.task_facts),
+    used_skills: {
+      skills: [
+        {
+          identifier: "openspec-apply-change",
+          usage_count: Math.floor(count / 3),
+          session_count: Math.floor(count / 3),
+        },
+      ],
+      coverage: "partial",
+      source: "derived",
+    },
     baseline: {
       coverage: "partial",
       token_usage_delta: covered(10),
@@ -272,7 +301,27 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByTestId("project-metrics-toolbar")).toBeTruthy();
     expect(screen.getByTestId("project-metrics-inspector")).toBeTruthy();
     expect(screen.getByTestId("project-metrics-analytics-controls")).toBeTruthy();
-    expect(screen.getByText(/Solid line = displayed values/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Trend" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Moving average" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "Moving median" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "Raw values" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Project median" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByTestId("project-metrics-mode-help").textContent).toContain("Theil-Sen");
+    expect(screen.getAllByText(/Raw values:/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("Used skills")).toBeTruthy();
+    expect(screen.getByText("openspec-apply-change")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Moving median" }));
+    expect(screen.getByRole("button", { name: "Moving median" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("project-metrics-mode-help").textContent).toContain("more resistant to spikes");
+
+    await user.click(screen.getByRole("button", { name: "Raw values" }));
+    expect(screen.getByRole("button", { name: "Raw values" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.queryByText(/Raw values:/i)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Project median" }));
+    expect(screen.getByRole("button", { name: "Project median" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getAllByText(/Project median:/i).length).toBeGreaterThan(0);
 
     expect(screen.queryByTestId("project-metrics-series-panel")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Series" }));
@@ -342,11 +391,15 @@ describe("ProjectMetricsScreen", () => {
           payload={{
             index: row!.index,
             label: row!.label,
+            modeValues: {
+              trend: {},
+              "moving-average": {},
+              "moving-median": {},
+            },
             outlierFlags: {},
             processedValues: { tokens: row!.metrics.tokens.value },
             row: row!,
             sessionId: row!.sessionId,
-            trendValues: {},
           }}
           seriesKey="tokens"
           stroke="#2563eb"
@@ -441,10 +494,11 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByText(/unknown scope/i)).toBeTruthy();
   });
 
-  it("builds clamped and excluded views for visible-window outliers", () => {
+  it("builds chart modes, project median overlays, and preserves unknown gaps", () => {
     const response = makeResponse(8);
     response.sessions[7] = makeSession(8);
     response.sessions[7].duration.total_ms = covered(9_000_000);
+    response.sessions[3].duration.total_ms = covered(null);
 
     const viewModel = buildProjectMetricsViewModel(response, true);
     const durationSeries = viewModel.chartSeries.find((item) => item.key === "duration");
@@ -455,19 +509,23 @@ describe("ProjectMetricsScreen", () => {
       outlierMode: "clamp",
       rows: viewModel.chartRows,
       series: [durationSeries!],
-      window: { startIndex: 0, endIndex: viewModel.chartRows.length - 1 },
     });
     const excluded = buildChartAnalysis({
       outlierMode: "exclude",
       rows: viewModel.chartRows,
       series: [durationSeries!],
-      window: { startIndex: 0, endIndex: viewModel.chartRows.length - 1 },
     });
 
     expect(clamped.seriesAnalytics.duration?.outlierCount).toBe(1);
+    expect(clamped.seriesAnalytics.duration?.projectMedian).not.toBeNull();
+    expect(clamped.seriesAnalytics.duration?.smoothingWindowSize).toBe(3);
     expect(clamped.chartData.at(-1)?.processedValues.duration).not.toBe(
       viewModel.chartRows.at(-1)?.metrics.duration.value,
     );
+    expect(clamped.chartData.at(3)?.modeValues.trend.duration).toBeNull();
+    expect(clamped.chartData.at(3)?.modeValues["moving-average"].duration).toBeNull();
+    expect(clamped.chartData.at(3)?.modeValues["moving-median"].duration).toBeNull();
+    expect(clamped.chartData.at(-1)?.modeValues.trend.duration).toBeLessThan(6_000_000);
     expect(excluded.chartData.at(-1)?.processedValues.duration).toBeNull();
   });
 });

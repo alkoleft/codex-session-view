@@ -183,6 +183,8 @@ pub struct ToolCallPayload {
     pub detection_confidence: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_identifiers: Option<Vec<String>>,
 }
 
 fn unknown_tool() -> String {
@@ -233,6 +235,8 @@ pub struct ToolResultPayload {
     pub detection_confidence: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub raw_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_identifiers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

@@ -52,6 +52,7 @@ cargo run -p codex-session-explorer-http -- --port 4321
 
 - Значение по умолчанию внутри Tauri runtime.
 - Использует текущие Rust-команды `detect_codex_home`, `initialize_codex_home`, `list_indexed_sessions`, `load_session_preview`, `load_session_preview_by_id`, `load_session`, `tail_session`.
+- Для materialized analytics дополнительно поддерживает `load_session_metrics`, `query_project_metrics` и явный `recompute_metrics`.
 - Требует локальный `CODEX_HOME` и показывает локальные filesystem metadata.
 
 ### `remote`
@@ -60,6 +61,7 @@ cargo run -p codex-session-explorer-http -- --port 4321
 - Не требует `CODEX_HOME` и не показывает Tauri-specific path metadata в shell.
 - В browser-based приложении обычно запускается same-origin поверх `codex-session-explorer-http`, поэтому `VITE_VIEWER_REMOTE_BASE_URL` не обязателен.
 - Поддерживает список сессий, preview, полную загрузку сессии, session metrics и project metrics.
+- Для automation/operations поддерживает отдельный endpoint явного пересчёта materialized metrics.
 - Live tail и viewer commands остаются capability-gated и в browser runtime по умолчанию недоступны.
 
 ## Конфигурация frontend
@@ -88,12 +90,15 @@ Frontend ожидает `POST` endpoint’ы:
 - `/api/viewer/load_session`
 - `/api/viewer/load_session_metrics`
 - `/api/viewer/query_project_metrics`
+- `/api/viewer/recompute_metrics`
 - `/api/viewer/tail_session`
 
 Требования к контракту:
 
 - Request body отправляется в JSON со `snake_case` полями.
 - Response body должен совпадать с текущими viewer-типами `IndexedSessionCatalogPage`, `SessionPreview`, `LoadedSession`.
+- Для `recompute_metrics` backend принимает JSON вида `{ "project_key"?: string, "text_limit"?: number }`
+  и возвращает `{ "project_key": string | null, "session_count": number }`.
 - Ошибки возвращаются как `non-2xx`; желательно JSON вида `{ "message": "..." }`, но frontend также понимает plain text body.
 
 ## Ограничения browser/remote v1

@@ -51,6 +51,17 @@ Task-level grain сам по себе хранит raw task signals, но не �
 
 Альтернатива: хранить только `task_class`. Это скрывает качество классификации.
 
+### 5. Recompute идёт отдельной командой `recompute_metrics`
+
+Решение: backend/transport contract использует явную команду `recompute_metrics` с опциональным
+`project_key`, а обычный read path читает уже materialized payload без classifier versioning.
+
+Причина: пользователю нужен предсказуемый operational step после изменения classification rules,
+а не скрытый lazy refresh на каждом чтении.
+
+Альтернатива: пересчитывать существующие записи при любом read или пытаться договориться о версии
+classifier-а в каждом query. Это усложняет контракт и делает результаты менее детерминированными.
+
 ## Risks / Trade-offs
 
 - [Risk] Classification rules со временем изменятся и потребуют полного rebuild. -> Mitigation: сделать recompute command first-class частью capability.
@@ -64,8 +75,15 @@ Task-level grain сам по себе хранит raw task signals, но не �
 3. Добавить команду явного пересчёта materialized metrics.
 4. Добавить tests для classifier и recompute workflow.
 
+## Operational Expectations
+
+- Изменение task classification rules само по себе не обновляет уже сохранённые materialized metrics.
+- `load_session_metrics` и `query_project_metrics` материализуют только отсутствующие записи.
+- После изменения mappings automation или пользователь должны вызвать `recompute_metrics` до
+  интерпретации project/task analytics.
+- Если нужен узкий rebuild, recompute можно ограничить одним `project_key`.
+
 ## Open Questions
 
-- Как назвать recompute command в CLI/backend contract?
 - Какие mappings считаются `known`, а какие только `partial`?
 - Нужен ли отдельный dry-run/report режим для recompute command?

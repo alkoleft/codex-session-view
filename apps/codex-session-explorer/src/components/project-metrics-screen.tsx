@@ -48,6 +48,19 @@ import {
   type ProjectMetricsViewModel,
   type ProjectSelectorOption,
 } from "@/components/project-metrics";
+import {
+  buildChartAnalysis,
+  getChartModeValue,
+  PROJECT_METRICS_CHART_MODE_META,
+  PROJECT_METRICS_CHART_MODES,
+  PROJECT_METRICS_CHART_OVERLAY_META,
+  PROJECT_METRICS_CHART_OVERLAYS,
+  type ChartDisplayRow,
+  type ChartOutlierMode,
+  type ChartSeriesAnalytics,
+  type ProjectMetricsChartMode,
+  type ProjectMetricsChartOverlayKey,
+} from "@/components/project-metrics-chart";
 import type { ProjectMetricsResponse, SessionScopeFilter } from "@/backend";
 
 const SURFACE_CARD_CLASS = "border-border bg-background shadow-none";
@@ -57,33 +70,6 @@ const TOOLBAR_META_CLASS = "text-[10px] font-semibold uppercase tracking-[0.16em
 const ZOOM_BUTTON_CLASS =
   "rounded-full border border-border/70 px-3 py-1.5 text-xs font-medium text-foreground transition hover:border-border hover:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-50";
 const ZOOM_BUTTON_ACTIVE_CLASS = "border-foreground/20 bg-muted/50";
-
-type ChartOutlierMode = "keep" | "clamp" | "exclude";
-
-type ChartDisplayRow = {
-  index: number;
-  label: string;
-  outlierFlags: Partial<Record<ProjectMetricSeriesKey, boolean>>;
-  processedValues: Partial<Record<ProjectMetricSeriesKey, number | null>>;
-  row: ProjectMetricsChartRow;
-  sessionId: string;
-  trendValues: Partial<Record<ProjectMetricSeriesKey, number | null>>;
-};
-
-type ChartSeriesAnalytics = {
-  availableCount: number;
-  lowerFence: number | null;
-  median: number | null;
-  outlierCount: number;
-  processedCount: number;
-  trendWindowSize: number;
-  upperFence: number | null;
-};
-
-type ChartAnalysis = {
-  chartData: ChartDisplayRow[];
-  seriesAnalytics: Partial<Record<ProjectMetricSeriesKey, ChartSeriesAnalytics>>;
-};
 
 type ChartSelection = {
   endIndex: number | null;
@@ -505,8 +491,11 @@ function ProjectMetricsContent({
 }) {
   const [secondaryPanel, setSecondaryPanel] = useState<"overview" | "series" | null>(null);
   const [outlierMode, setOutlierMode] = useState<ChartOutlierMode>("clamp");
-  const [showMedian, setShowMedian] = useState(true);
-  const [showTrend, setShowTrend] = useState(true);
+  const [chartMode, setChartMode] = useState<ProjectMetricsChartMode>("trend");
+  const [chartOverlays, setChartOverlays] = useState<Record<ProjectMetricsChartOverlayKey, boolean>>({
+    "project-median": false,
+    "raw-values": true,
+  });
   const [selection, setSelection] = useState<ChartSelection>({
     endIndex: null,
     startIndex: null,
@@ -517,8 +506,10 @@ function ProjectMetricsContent({
     outlierMode,
     rows: viewModel.chartRows,
     series: visibleSeries,
-    window: clampedWindow,
   });
+  const activeModeMeta = PROJECT_METRICS_CHART_MODE_META[chartMode];
+  const showRawValues = chartOverlays["raw-values"];
+  const showProjectMedian = chartOverlays["project-median"];
   const visibleRows = viewModel.chartRows.slice(clampedWindow.startIndex, clampedWindow.endIndex + 1);
   const selectedRow = findActiveRow({
     activeSessionId,
@@ -541,16 +532,12 @@ function ProjectMetricsContent({
   const windowLabelSummary = visibleRows.length > 0
     ? `${visibleRows[0]?.label} → ${visibleRows.at(-1)?.label}`
     : "n/a";
-  const analyticsOverlayActive = showMedian || showTrend;
-  const rawLineOpacity = analyticsOverlayActive ? 0.34 : 0.95;
-  const rawLineWidth = analyticsOverlayActive ? 1.4 : 2.2;
-  const showRawDots = !analyticsOverlayActive && visibleRows.length <= 18;
+  const showPrimaryDots = visibleRows.length <= 18;
+  const showRawDots = showRawValues && visibleRows.length <= 18;
   const hasAvailableVisibleData = hasVisibleChartData({
-    analytics: chartAnalysis.seriesAnalytics,
     chartData: chartAnalysis.chartData,
+    mode: chartMode,
     series: visibleSeries,
-    showMedian,
-    showTrend,
     window: clampedWindow,
   });
   const canSlideWindow = viewModel.chartRows.length > 1;
@@ -669,7 +656,7 @@ function ProjectMetricsContent({
               <div className="space-y-1">
                 <CardTitle className="text-sm">Summary chart</CardTitle>
                 <p className="text-xs text-muted-foreground">
-                  Главный рабочий слой: сначала тренд, затем детали выбранной точки.
+                  Active analytic mode drives the chart, tooltip, and inspector for the selected session window.
                 </p>
               </div>
 
@@ -809,7 +796,7 @@ function ProjectMetricsContent({
             </div>
 
             <div
-              className="grid gap-3 rounded-2xl border border-border/70 bg-background/70 p-3 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1.25fr)_auto]"
+              className="grid gap-3 rounded-2xl border border-border/70 bg-background/70 p-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_auto]"
               data-testid="project-metrics-analytics-controls"
             >
               <label className="flex flex-col gap-2">
@@ -871,24 +858,59 @@ function ProjectMetricsContent({
                 />
               </label>
 
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                  <span>Chart mode</span>
+                  <span className="text-foreground">{activeModeMeta.label}</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {PROJECT_METRICS_CHART_MODES.map((mode) => {
+                    const metadata = PROJECT_METRICS_CHART_MODE_META[mode];
+                    return (
+                      <button
+                        aria-pressed={chartMode === mode}
+                        className={cn(
+                          ZOOM_BUTTON_CLASS,
+                          chartMode === mode && ZOOM_BUTTON_ACTIVE_CLASS,
+                        )}
+                        key={mode}
+                        onClick={() => setChartMode(mode)}
+                        title={metadata.description}
+                        type="button"
+                      >
+                        {metadata.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="text-xs text-muted-foreground" data-testid="project-metrics-mode-help">
+                  {activeModeMeta.helpText}
+                </div>
+              </div>
+
               <div className="flex flex-col gap-3">
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    aria-pressed={showTrend}
-                    className={cn(ZOOM_BUTTON_CLASS, showTrend && ZOOM_BUTTON_ACTIVE_CLASS)}
-                    onClick={() => setShowTrend((current) => !current)}
-                    type="button"
-                  >
-                    Trend
-                  </button>
-                  <button
-                    aria-pressed={showMedian}
-                    className={cn(ZOOM_BUTTON_CLASS, showMedian && ZOOM_BUTTON_ACTIVE_CLASS)}
-                    onClick={() => setShowMedian((current) => !current)}
-                    type="button"
-                  >
-                    Median
-                  </button>
+                  {PROJECT_METRICS_CHART_OVERLAYS.map((overlayKey) => {
+                    const metadata = PROJECT_METRICS_CHART_OVERLAY_META[overlayKey];
+                    const active = chartOverlays[overlayKey];
+                    return (
+                      <button
+                        aria-pressed={active}
+                        className={cn(ZOOM_BUTTON_CLASS, active && ZOOM_BUTTON_ACTIVE_CLASS)}
+                        key={overlayKey}
+                        onClick={() => {
+                          setChartOverlays((current) => ({
+                            ...current,
+                            [overlayKey]: !current[overlayKey],
+                          }));
+                        }}
+                        title={metadata.description}
+                        type="button"
+                      >
+                        {metadata.label}
+                      </button>
+                    );
+                  })}
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {(["keep", "clamp", "exclude"] as ChartOutlierMode[]).map((value) => (
@@ -913,6 +935,8 @@ function ProjectMetricsContent({
               <span className="font-medium text-foreground">{windowSummary}</span>
               <span>·</span>
               <span>{windowLabelSummary}</span>
+              <span>·</span>
+              <span>{activeModeMeta.label}</span>
               <span>·</span>
               <span>{describeOutlierMode(outlierMode)}</span>
               <span className="ml-auto">Showing {visibleRows.length} of {viewModel.chartRows.length} sessions</span>
@@ -951,14 +975,16 @@ function ProjectMetricsContent({
                 <AlertTriangle className="size-4" />
                 <AlertTitle>Visible window has no chartable values</AlertTitle>
                 <AlertDescription>
-                  В текущем zoom-window у выбранных series только `unknown` значения. Расширьте окно или включите другие метрики.
+                  В текущем zoom-window активный режим `{activeModeMeta.label}` не даёт chartable values. Расширьте окно или включите другие метрики.
                 </AlertDescription>
               </Alert>
             ) : (
               <>
                 <div className="rounded-xl border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                  Solid line = displayed values, dashed line = trend, dotted horizontal = median.
-                  Trend and median are drawn on top with contrast halo. Drag across the chart to zoom into an interval, or use wheel to pan the visible window.
+                  Primary line = {activeModeMeta.label}. {PROJECT_METRICS_CHART_OVERLAY_META["raw-values"].label}
+                  {" and "}
+                  {PROJECT_METRICS_CHART_OVERLAY_META["project-median"].label}
+                  {" stay independent overlays. Drag across the chart to zoom into an interval, or use wheel to pan the visible window."}
                 </div>
                 {selectionPreview ? (
                   <div className="rounded-xl border border-[color:var(--accent-strong)]/35 bg-[color:var(--accent-strong)]/10 px-3 py-2 text-xs text-foreground">
@@ -1012,28 +1038,28 @@ function ProjectMetricsContent({
                         allowDataOverflow
                         domain={computeSeriesDomain({
                           analytics: chartAnalysis.seriesAnalytics,
-                          chartData: chartAnalysis.chartData,
+                          chartData: chartAnalysis.chartData.slice(clampedWindow.startIndex, clampedWindow.endIndex + 1),
+                          mode: chartMode,
+                          overlays: chartOverlays,
                           seriesKeys: visibleSeriesKeys,
-                          showMedian,
-                          showTrend,
                         })}
                         hide
                         yAxisId="preview"
                       />
-                      {showMedian
+                      {showProjectMedian
                         ? visibleSeries.map((series) => {
-                            const stats = chartAnalysis.seriesAnalytics[series.key];
-                            if (!stats || stats.median == null) {
-                              return null;
-                            }
-                            return (
-                              <Fragment key={`${series.key}:median:overlay`}>
+                          const stats = chartAnalysis.seriesAnalytics[series.key];
+                          if (!stats || stats.projectMedian == null) {
+                            return null;
+                          }
+                          return (
+                              <Fragment key={`${series.key}:project-median:overlay`}>
                                 <ReferenceLine
                                   ifOverflow="visible"
                                   stroke="var(--background)"
                                   strokeOpacity={0.96}
                                   strokeWidth={6}
-                                  y={stats.median}
+                                  y={stats.projectMedian}
                                   yAxisId={series.key}
                                 />
                                 <ReferenceLine
@@ -1043,13 +1069,13 @@ function ProjectMetricsContent({
                                     fontSize: 11,
                                     fontWeight: 700,
                                     position: "insideTopRight",
-                                    value: `${series.shortLabel} median`,
+                                    value: `${series.shortLabel} ${PROJECT_METRICS_CHART_OVERLAY_META["project-median"].seriesLabelSuffix}`,
                                   }}
                                   stroke={series.color}
                                   strokeDasharray="2 6"
                                   strokeOpacity={0.95}
                                   strokeWidth={2.2}
-                                  y={stats.median}
+                                  y={stats.projectMedian}
                                   yAxisId={series.key}
                                 />
                               </Fragment>
@@ -1061,10 +1087,10 @@ function ProjectMetricsContent({
                           allowDataOverflow
                           domain={computeSeriesDomain({
                             analytics: chartAnalysis.seriesAnalytics,
-                            chartData: chartAnalysis.chartData,
+                            chartData: chartAnalysis.chartData.slice(clampedWindow.startIndex, clampedWindow.endIndex + 1),
+                            mode: chartMode,
+                            overlays: chartOverlays,
                             seriesKeys: [series.key],
-                            showMedian,
-                            showTrend,
                           })}
                           hide
                           key={series.key}
@@ -1076,67 +1102,74 @@ function ProjectMetricsContent({
                           <SummaryChartTooltip
                             {...props}
                             analytics={chartAnalysis.seriesAnalytics}
+                            chartMode={chartMode}
+                            chartOverlays={chartOverlays}
                             outlierMode={outlierMode}
                             series={visibleSeries}
-                            showMedian={showMedian}
-                            showTrend={showTrend}
                           />
                         )}
                       />
-                      {showTrend
+                      {visibleSeries.map((series) => (
+                        <Fragment key={`${series.key}:${chartMode}:primary`}>
+                          <Line
+                            connectNulls={false}
+                            dataKey={(row: ChartDisplayRow) => getChartModeValue(row, chartMode, series.key)}
+                            dot={false}
+                            isAnimationActive={false}
+                            name={`${series.label} ${activeModeMeta.label} mask`}
+                            stroke="var(--background)"
+                            strokeOpacity={0.96}
+                            strokeWidth={7}
+                            type="monotone"
+                            yAxisId={series.key}
+                          />
+                          <Line
+                            activeDot={{ r: 6, strokeWidth: 2 }}
+                            connectNulls={false}
+                            dataKey={(row: ChartDisplayRow) => getChartModeValue(row, chartMode, series.key)}
+                            dot={showPrimaryDots ? (
+                              <SeriesDot
+                                currentSessionId={currentSessionId}
+                                onActivateSession={onActiveSessionIdChange}
+                                outlierMode={outlierMode}
+                                seriesKey={series.key}
+                              />
+                            ) : false}
+                            isAnimationActive={false}
+                            name={`${series.label} ${activeModeMeta.label}`}
+                            stroke={series.color}
+                            strokeOpacity={1}
+                            strokeWidth={3.2}
+                            type="monotone"
+                            yAxisId={series.key}
+                          />
+                        </Fragment>
+                      ))}
+                      {showRawValues
                         ? visibleSeries.map((series) => (
-                            <Fragment key={`${series.key}:trend:overlay`}>
-                              <Line
-                                connectNulls={false}
-                                dataKey={(row: ChartDisplayRow) => row.trendValues[series.key] ?? null}
-                                dot={false}
-                                isAnimationActive={false}
-                                name={`${series.label} trend mask`}
-                                stroke="var(--background)"
-                                strokeOpacity={0.96}
-                                strokeWidth={7}
-                                type="monotone"
-                                yAxisId={series.key}
-                              />
-                              <Line
-                                connectNulls={false}
-                                dataKey={(row: ChartDisplayRow) => row.trendValues[series.key] ?? null}
-                                dot={false}
-                                isAnimationActive={false}
-                                name={`${series.label} trend`}
-                                stroke={series.color}
-                                strokeDasharray="10 6"
-                                strokeOpacity={1}
-                                strokeWidth={3.2}
-                                type="monotone"
-                                yAxisId={series.key}
-                              />
-                            </Fragment>
+                            <Line
+                              activeDot={{ r: 5, strokeWidth: 2 }}
+                              connectNulls={false}
+                              dataKey={(row: ChartDisplayRow) => row.processedValues[series.key] ?? null}
+                              dot={showRawDots ? (
+                                <SeriesDot
+                                  currentSessionId={currentSessionId}
+                                  onActivateSession={onActiveSessionIdChange}
+                                  outlierMode={outlierMode}
+                                  seriesKey={series.key}
+                                />
+                              ) : false}
+                              isAnimationActive={false}
+                              key={`${series.key}:raw-values`}
+                              name={`${series.label} ${PROJECT_METRICS_CHART_OVERLAY_META["raw-values"].label}`}
+                              stroke={series.color}
+                              strokeOpacity={0.3}
+                              strokeWidth={1.4}
+                              type="monotone"
+                              yAxisId={series.key}
+                            />
                           ))
                         : null}
-                      {visibleSeries.map((series) => (
-                        <Line
-                          activeDot={{ r: 6, strokeWidth: 2 }}
-                          connectNulls={false}
-                          dataKey={(row: ChartDisplayRow) => row.processedValues[series.key] ?? null}
-                          dot={showRawDots ? (
-                            <SeriesDot
-                              currentSessionId={currentSessionId}
-                              onActivateSession={onActiveSessionIdChange}
-                              outlierMode={outlierMode}
-                              seriesKey={series.key}
-                            />
-                          ) : false}
-                          isAnimationActive={false}
-                          key={series.key}
-                          name={series.label}
-                          stroke={series.color}
-                          strokeOpacity={rawLineOpacity}
-                          strokeWidth={rawLineWidth}
-                          type="monotone"
-                          yAxisId={series.key}
-                        />
-                      ))}
                       <Brush
                         dataKey="index"
                         endIndex={clampedWindow.endIndex}
@@ -1196,8 +1229,10 @@ function ProjectMetricsContent({
         series={visibleSeries}
         seriesAnalytics={chartAnalysis.seriesAnalytics}
         sessions={viewModel.sessions}
-        showMedian={showMedian}
-        showTrend={showTrend}
+        chartMode={chartMode}
+        chartOverlays={chartOverlays}
+        usedSkills={viewModel.usedSkills}
+        usedSkillsCoverage={viewModel.usedSkillsCoverage}
       />
     </div>
   );
@@ -1267,7 +1302,7 @@ function SeriesPanel({
       </div>
 
       <div className="mt-3 grid gap-3 lg:grid-cols-2">
-        {(["operational", "derived"] as ProjectMetricSeriesCategory[]).map((category) => {
+        {(["operational", "tokens", "factors", "derived"] as ProjectMetricSeriesCategory[]).map((category) => {
           const categorySeries = series.filter((item) => item.category === category);
           if (categorySeries.length === 0) {
             return null;
@@ -1329,6 +1364,8 @@ function SeriesPanel({
 }
 
 function ProjectMetricsInspector({
+  chartMode,
+  chartOverlays,
   currentSessionId,
   onFocusSession,
   onOpenSession,
@@ -1339,9 +1376,11 @@ function ProjectMetricsInspector({
   series,
   seriesAnalytics,
   sessions,
-  showMedian,
-  showTrend,
+  usedSkills,
+  usedSkillsCoverage,
 }: {
+  chartMode: ProjectMetricsChartMode;
+  chartOverlays: Record<ProjectMetricsChartOverlayKey, boolean>;
   currentSessionId: string | null;
   onFocusSession: (sessionId: string) => void;
   onOpenSession: (sessionId: string) => void;
@@ -1352,9 +1391,13 @@ function ProjectMetricsInspector({
   series: ProjectMetricSeries[];
   seriesAnalytics: Partial<Record<ProjectMetricSeriesKey, ChartSeriesAnalytics>>;
   sessions: ProjectMetricsViewModel["sessions"];
-  showMedian: boolean;
-  showTrend: boolean;
+  usedSkills: ProjectMetricsViewModel["usedSkills"];
+  usedSkillsCoverage: ProjectMetricsViewModel["usedSkillsCoverage"];
 }) {
+  const modeMeta = PROJECT_METRICS_CHART_MODE_META[chartMode];
+  const showRawValues = chartOverlays["raw-values"];
+  const showProjectMedian = chartOverlays["project-median"];
+
   return (
     <Card
       className={cn(SURFACE_CARD_CLASS, "min-h-0")}
@@ -1418,10 +1461,10 @@ function ProjectMetricsInspector({
                 <div className="mt-3 grid gap-2 sm:grid-cols-2">
                   {series.map((item) => {
                     const point = getProjectMetricPoint(selectedRow, item.key);
-                    const chartValue = selectedChartRow?.processedValues[item.key] ?? null;
-                    const trendValue = selectedChartRow?.trendValues[item.key] ?? null;
+                    const primaryValue = selectedChartRow ? getChartModeValue(selectedChartRow, chartMode, item.key) : null;
+                    const rawValue = selectedChartRow?.processedValues[item.key] ?? null;
                     const stats = seriesAnalytics[item.key];
-                    const chartValueChanged = !areMetricValuesEqual(point.value, chartValue);
+                    const rawValueChanged = !areMetricValuesEqual(point.value, rawValue);
                     return (
                       <div className="rounded-xl border border-border/70 bg-muted/20 p-3" key={item.key}>
                         <div className="flex items-center justify-between gap-2">
@@ -1432,23 +1475,24 @@ function ProjectMetricsInspector({
                           <CoveragePill coverage={point.coverage} />
                         </div>
                         <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
-                          {point.formattedValue}
+                          {formatProjectMetricSeriesValue(item.key, primaryValue)}
                         </div>
                         <div className="mt-1 space-y-1 text-xs text-muted-foreground">
-                          <div>{item.valueLabel}</div>
-                          {chartValueChanged ? (
+                          <div>{modeMeta.primaryValueLabel}</div>
+                          <div>Session metric: {point.formattedValue}</div>
+                          {showRawValues ? (
                             <div>
-                              Chart: {formatProjectMetricSeriesValue(item.key, chartValue)}
+                              {PROJECT_METRICS_CHART_OVERLAY_META["raw-values"].valueLabel}: {formatProjectMetricSeriesValue(item.key, rawValue)}
                             </div>
                           ) : null}
-                          {showTrend && trendValue != null ? (
+                          {showProjectMedian && stats?.projectMedian != null ? (
                             <div>
-                              Trend: {formatProjectMetricSeriesValue(item.key, trendValue)}
+                              {PROJECT_METRICS_CHART_OVERLAY_META["project-median"].valueLabel}: {formatProjectMetricSeriesValue(item.key, stats.projectMedian)}
                             </div>
                           ) : null}
-                          {showMedian && stats?.median != null ? (
+                          {!showRawValues && rawValueChanged ? (
                             <div>
-                              Median: {formatProjectMetricSeriesValue(item.key, stats.median)}
+                              Chart raw differs under {describeOutlierMode(outlierMode).toLowerCase()}.
                             </div>
                           ) : null}
                           {selectedChartRow?.outlierFlags[item.key] ? (
@@ -1477,6 +1521,45 @@ function ProjectMetricsInspector({
             <AlertDescription>Наведите курсор на chart point или выберите сессию ниже.</AlertDescription>
           </Alert>
         )}
+
+        <div className="rounded-2xl border border-border/70 bg-background/80 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                Used skills
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Rollup по явным usage markers за выбранное окно.
+              </div>
+            </div>
+            <CoveragePill coverage={usedSkillsCoverage} />
+          </div>
+
+          {usedSkills.length > 0 ? (
+            <div className="mt-3 flex flex-col gap-2" data-testid="project-metrics-used-skills">
+              {usedSkills.map((skill) => (
+                <div
+                  className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/15 px-3 py-2"
+                  key={skill.identifier}
+                >
+                  <div className="min-w-0">
+                    <div className="truncate font-mono text-xs text-foreground">{skill.identifier}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {skill.sessionCount} sessions · {skill.usageCount} usage
+                    </div>
+                  </div>
+                  <CoveragePill coverage={skill.coverage} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 rounded-xl border border-dashed border-border/70 bg-muted/10 px-3 py-3 text-xs text-muted-foreground">
+              {usedSkillsCoverage === "unknown"
+                ? "Явные skill usage markers в выбранном окне не найдены."
+                : "Used skills rollup пуст для текущего окна."}
+            </div>
+          )}
+        </div>
 
         <div className="min-h-0 rounded-2xl border border-border/70 bg-background/80 p-3">
           <div className="flex items-center justify-between gap-3">
@@ -1553,17 +1636,17 @@ function ProjectMetricsInspector({
 function SummaryChartTooltip({
   active,
   analytics,
+  chartMode,
+  chartOverlays,
   outlierMode,
   payload,
   series,
-  showMedian,
-  showTrend,
 }: TooltipContentProps<any, any> & {
   analytics: Partial<Record<ProjectMetricSeriesKey, ChartSeriesAnalytics>>;
+  chartMode: ProjectMetricsChartMode;
+  chartOverlays: Record<ProjectMetricsChartOverlayKey, boolean>;
   outlierMode: ChartOutlierMode;
   series: ProjectMetricSeries[];
-  showMedian: boolean;
-  showTrend: boolean;
 }) {
   const chartRow = extractChartRow(payload);
   if (!active || !chartRow) {
@@ -1571,6 +1654,9 @@ function SummaryChartTooltip({
   }
 
   const row = chartRow.row;
+  const modeMeta = PROJECT_METRICS_CHART_MODE_META[chartMode];
+  const showRawValues = chartOverlays["raw-values"];
+  const showProjectMedian = chartOverlays["project-median"];
 
   return (
     <div className="w-72 rounded-xl border border-border/80 bg-card/95 p-3 shadow-2xl shadow-black/20 backdrop-blur">
@@ -1584,10 +1670,9 @@ function SummaryChartTooltip({
       <div className="mt-3 space-y-2">
         {series.map((item) => {
           const point = getProjectMetricPoint(row, item.key);
-          const chartValue = chartRow.processedValues[item.key] ?? null;
-          const trendValue = chartRow.trendValues[item.key] ?? null;
+          const primaryValue = getChartModeValue(chartRow, chartMode, item.key);
+          const rawValue = chartRow.processedValues[item.key] ?? null;
           const stats = analytics[item.key];
-          const chartValueChanged = !areMetricValuesEqual(point.value, chartValue);
           return (
             <div className="space-y-1 text-xs" key={item.key}>
               <div className="flex items-center justify-between gap-3">
@@ -1596,19 +1681,18 @@ function SummaryChartTooltip({
                   {item.shortLabel}
                 </span>
                 <span className="text-right text-foreground">
-                  {point.formattedValue} <span className="text-muted-foreground">· {point.coverage}</span>
+                  {formatProjectMetricSeriesValue(item.key, primaryValue)} <span className="text-muted-foreground">· {point.coverage}</span>
                 </span>
               </div>
-              {(chartValueChanged || trendValue != null || stats?.median != null || chartRow.outlierFlags[item.key]) ? (
+              {(showRawValues || showProjectMedian || chartRow.outlierFlags[item.key]) ? (
                 <div className="space-y-0.5 pl-4 text-[11px] text-muted-foreground">
-                  {chartValueChanged ? (
-                    <div>chart: {formatProjectMetricSeriesValue(item.key, chartValue)}</div>
+                  <div>{modeMeta.primaryValueLabel.toLowerCase()}: {formatProjectMetricSeriesValue(item.key, primaryValue)}</div>
+                  <div>session metric: {point.formattedValue}</div>
+                  {showRawValues ? (
+                    <div>{PROJECT_METRICS_CHART_OVERLAY_META["raw-values"].valueLabel.toLowerCase()}: {formatProjectMetricSeriesValue(item.key, rawValue)}</div>
                   ) : null}
-                  {showTrend && trendValue != null ? (
-                    <div>trend: {formatProjectMetricSeriesValue(item.key, trendValue)}</div>
-                  ) : null}
-                  {showMedian && stats?.median != null ? (
-                    <div>median: {formatProjectMetricSeriesValue(item.key, stats.median)}</div>
+                  {showProjectMedian && stats?.projectMedian != null ? (
+                    <div>{PROJECT_METRICS_CHART_OVERLAY_META["project-median"].valueLabel.toLowerCase()}: {formatProjectMetricSeriesValue(item.key, stats.projectMedian)}</div>
                   ) : null}
                   {chartRow.outlierFlags[item.key] ? (
                     <div>outlier: {describeOutlierMode(outlierMode)}</div>
@@ -1872,33 +1956,33 @@ function computeSeriesDomain(
   {
     analytics,
     chartData,
+    mode,
+    overlays,
     seriesKeys,
-    showMedian,
-    showTrend,
   }: {
     analytics: Partial<Record<ProjectMetricSeriesKey, ChartSeriesAnalytics>>;
     chartData: ChartDisplayRow[];
+    mode: ProjectMetricsChartMode;
+    overlays: Record<ProjectMetricsChartOverlayKey, boolean>;
     seriesKeys: ProjectMetricSeriesKey[];
-    showMedian: boolean;
-    showTrend: boolean;
   },
 ): [number, number] {
   const values = chartData.flatMap((row) => {
-    const displayValues = seriesKeys
-      .map((seriesKey) => row.processedValues[seriesKey] ?? null)
+    const primaryValues = seriesKeys
+      .map((seriesKey) => getChartModeValue(row, mode, seriesKey))
       .filter((value): value is number => value != null);
-    const trendValues = showTrend
+    const rawValues = overlays["raw-values"]
       ? seriesKeys
-          .map((seriesKey) => row.trendValues[seriesKey] ?? null)
+          .map((seriesKey) => row.processedValues[seriesKey] ?? null)
           .filter((value): value is number => value != null)
       : [];
-    return [...displayValues, ...trendValues];
+    return [...primaryValues, ...rawValues];
   });
 
-  if (showMedian) {
+  if (overlays["project-median"]) {
     values.push(
       ...seriesKeys
-        .map((seriesKey) => analytics[seriesKey]?.median ?? null)
+        .map((seriesKey) => analytics[seriesKey]?.projectMedian ?? null)
         .filter((value): value is number => value != null),
     );
   }
@@ -1984,207 +2068,20 @@ function MetaItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-function buildChartAnalysis({
-  outlierMode,
-  rows,
-  series,
-  window,
-}: {
-  outlierMode: ChartOutlierMode;
-  rows: ProjectMetricsChartRow[];
-  series: ProjectMetricSeries[];
-  window: { startIndex: number; endIndex: number };
-}): ChartAnalysis {
-  const chartData: ChartDisplayRow[] = rows.map((row) => ({
-    index: row.index,
-    label: row.label,
-    outlierFlags: {},
-    processedValues: {},
-    row,
-    sessionId: row.sessionId,
-    trendValues: {},
-  }));
-  const seriesAnalytics: Partial<Record<ProjectMetricSeriesKey, ChartSeriesAnalytics>> = {};
-
-  for (const seriesItem of series) {
-    const rawValues = rows
-      .slice(window.startIndex, window.endIndex + 1)
-      .map((row) => getProjectMetricPoint(row, seriesItem.key).value);
-    const numericValues = rawValues.filter((value): value is number => value != null);
-    const fences = computeOutlierFences(numericValues);
-    const processedValues = rawValues.map((value) =>
-      applyOutlierMode(value, fences, outlierMode),
-    );
-    const trendWindowSize = pickTrendWindowSize(processedValues);
-    const trendValues = computeRollingAverage(processedValues, trendWindowSize);
-    const median = computeQuantile(
-      processedValues.filter((value): value is number => value != null),
-      0.5,
-    );
-    const outlierCount = rawValues.reduce<number>((count, value) => (
-      isOutlierValue(value, fences) ? count + 1 : count
-    ), 0);
-
-    seriesAnalytics[seriesItem.key] = {
-      availableCount: numericValues.length,
-      lowerFence: fences.lowerFence,
-      median,
-      outlierCount,
-      processedCount: processedValues.filter((value): value is number => value != null).length,
-      trendWindowSize,
-      upperFence: fences.upperFence,
-    };
-
-    for (let localIndex = 0; localIndex < rawValues.length; localIndex += 1) {
-      const absoluteIndex = window.startIndex + localIndex;
-      const dataRow = chartData[absoluteIndex];
-      dataRow.processedValues[seriesItem.key] = processedValues[localIndex] ?? null;
-      dataRow.trendValues[seriesItem.key] = trendValues[localIndex] ?? null;
-      dataRow.outlierFlags[seriesItem.key] = isOutlierValue(rawValues[localIndex], fences);
-    }
-  }
-
-  return {
-    chartData,
-    seriesAnalytics,
-  };
-}
-
 function hasVisibleChartData({
-  analytics,
   chartData,
+  mode,
   series,
-  showMedian,
-  showTrend,
   window,
 }: {
-  analytics: Partial<Record<ProjectMetricSeriesKey, ChartSeriesAnalytics>>;
   chartData: ChartDisplayRow[];
+  mode: ProjectMetricsChartMode;
   series: ProjectMetricSeries[];
-  showMedian: boolean;
-  showTrend: boolean;
   window: { startIndex: number; endIndex: number };
 }) {
   const visibleData = chartData.slice(window.startIndex, window.endIndex + 1);
   return series.some((seriesItem) => {
-    const hasDisplayedValue = visibleData.some((row) => row.processedValues[seriesItem.key] != null);
-    const hasTrendValue = showTrend && visibleData.some((row) => row.trendValues[seriesItem.key] != null);
-    const hasMedianValue = showMedian && analytics[seriesItem.key]?.median != null;
-    return hasDisplayedValue || hasTrendValue || hasMedianValue;
-  });
-}
-
-function computeOutlierFences(values: number[]) {
-  if (values.length < 4) {
-    return {
-      lowerFence: null,
-      upperFence: null,
-    };
-  }
-
-  const q1 = computeQuantile(values, 0.25);
-  const q3 = computeQuantile(values, 0.75);
-  if (q1 == null || q3 == null) {
-    return {
-      lowerFence: null,
-      upperFence: null,
-    };
-  }
-
-  const iqr = q3 - q1;
-  if (iqr === 0) {
-    return {
-      lowerFence: null,
-      upperFence: null,
-    };
-  }
-
-  return {
-    lowerFence: q1 - iqr * 1.5,
-    upperFence: q3 + iqr * 1.5,
-  };
-}
-
-function isOutlierValue(
-  value: number | null,
-  fences: { lowerFence: number | null; upperFence: number | null },
-) {
-  if (value == null || fences.lowerFence == null || fences.upperFence == null) {
-    return false;
-  }
-  return value < fences.lowerFence || value > fences.upperFence;
-}
-
-function applyOutlierMode(
-  value: number | null,
-  fences: { lowerFence: number | null; upperFence: number | null },
-  mode: ChartOutlierMode,
-) {
-  if (value == null || !isOutlierValue(value, fences)) {
-    return value;
-  }
-
-  if (mode === "exclude") {
-    return null;
-  }
-  if (mode === "clamp" && fences.lowerFence != null && fences.upperFence != null) {
-    return Math.min(fences.upperFence, Math.max(fences.lowerFence, value));
-  }
-  return value;
-}
-
-function computeQuantile(values: number[], quantile: number) {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].sort((left, right) => left - right);
-  const position = (sorted.length - 1) * quantile;
-  const baseIndex = Math.floor(position);
-  const rest = position - baseIndex;
-  const baseValue = sorted[baseIndex];
-  const nextValue = sorted[baseIndex + 1];
-  if (nextValue == null) {
-    return baseValue;
-  }
-  return baseValue + (nextValue - baseValue) * rest;
-}
-
-function pickTrendWindowSize(values: Array<number | null>) {
-  const availableCount = values.filter((value): value is number => value != null).length;
-  if (availableCount <= 1) {
-    return 1;
-  }
-
-  if (availableCount <= 4) {
-    return Math.min(availableCount, 3);
-  }
-
-  let size = Math.max(3, Math.min(9, Math.round(availableCount / 4)));
-  if (size % 2 === 0) {
-    size += 1;
-  }
-  return Math.min(size, availableCount);
-}
-
-function computeRollingAverage(values: Array<number | null>, windowSize: number) {
-  if (values.length === 0) {
-    return [];
-  }
-  if (windowSize <= 1) {
-    return [...values];
-  }
-
-  const halfWindow = Math.floor(windowSize / 2);
-  return values.map((_, index) => {
-    const start = Math.max(0, index - halfWindow);
-    const end = Math.min(values.length - 1, index + halfWindow);
-    const slice = values
-      .slice(start, end + 1)
-      .filter((value): value is number => value != null);
-    if (slice.length === 0) {
-      return null;
-    }
-    return slice.reduce((sum, value) => sum + value, 0) / slice.length;
+    return visibleData.some((row) => getChartModeValue(row, mode, seriesItem.key) != null);
   });
 }
 

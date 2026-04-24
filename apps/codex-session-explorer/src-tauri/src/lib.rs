@@ -2,7 +2,8 @@
 mod commands;
 
 pub use codex_session_explorer_backend::{
-    DetectCodexHomeResponse, InitializeCodexHomeResponse, SessionPreview, ViewerBackend,
+    DetectCodexHomeResponse, InitializeCodexHomeResponse, RecomputeMetricsRequest,
+    RecomputeMetricsResponse, SessionPreview, ViewerBackend,
 };
 
 #[cfg(feature = "desktop")]
@@ -59,6 +60,7 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
             commands::load_session,
             commands::load_session_metrics,
             commands::query_project_metrics,
+            commands::recompute_metrics,
             commands::tail_session
         ])
         .plugin(
@@ -102,6 +104,7 @@ mod tests {
         assert!(permissions.contains("allow-load-session-preview"));
         assert!(permissions.contains("allow-load-session"));
         assert!(permissions.contains("allow-tail-session"));
+        assert!(permissions.contains("allow-recompute-metrics"));
         assert!(!permissions.contains("shell"));
         assert!(!permissions.contains("process"));
 

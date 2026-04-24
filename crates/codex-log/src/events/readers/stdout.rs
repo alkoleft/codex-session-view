@@ -274,54 +274,50 @@ impl JsonOutputEventReader {
             "command_execution" => {
                 increment(tool_counts, "command_execution");
                 if phase == "started" {
-                    (
-                        "shell.call".to_string(),
-                        payload_to_value(&ToolCallPayload {
-                            actor_type: Some("agent".to_string()),
-                            thread_id: self.state.thread_id.clone(),
-                            tool_name: "command_execution".to_string(),
-                            tool_use_id: item.get("id").and_then(Value::as_str).map(str::to_string),
-                            status: item
-                                .get("status")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            input: Some(Value::Object(Map::from_iter([(
-                                "command".to_string(),
-                                item.get("command").cloned().unwrap_or(Value::Null),
-                            )]))),
-                            ..ToolCallPayload::default()
-                        }),
-                        "parsed".to_string(),
-                    )
+                    let mut payload = payload_to_value(&ToolCallPayload {
+                        actor_type: Some("agent".to_string()),
+                        thread_id: self.state.thread_id.clone(),
+                        tool_name: "command_execution".to_string(),
+                        tool_use_id: item.get("id").and_then(Value::as_str).map(str::to_string),
+                        status: item
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        input: Some(Value::Object(Map::from_iter([(
+                            "command".to_string(),
+                            item.get("command").cloned().unwrap_or(Value::Null),
+                        )]))),
+                        ..ToolCallPayload::default()
+                    });
+                    enrich_skill_usage_payload(&mut payload);
+                    ("shell.call".to_string(), payload, "parsed".to_string())
                 } else {
-                    (
-                        "shell.result".to_string(),
-                        payload_to_value(&ToolResultPayload {
-                            actor_type: Some("agent".to_string()),
-                            thread_id: self.state.thread_id.clone(),
-                            tool_name: "command_execution".to_string(),
-                            tool_use_id: item.get("id").and_then(Value::as_str).map(str::to_string),
-                            status: item
-                                .get("status")
-                                .and_then(Value::as_str)
-                                .map(str::to_string),
-                            input: Some(Value::Object(Map::from_iter([(
-                                "command".to_string(),
-                                item.get("command").cloned().unwrap_or(Value::Null),
-                            )]))),
-                            exit_code: item
-                                .get("exit_code")
-                                .and_then(Value::as_i64)
-                                .map(|v| v as i32),
-                            stderr: item.get("stderr").cloned(),
-                            output: item
-                                .get("aggregated_output")
-                                .cloned()
-                                .or_else(|| item.get("stdout").cloned()),
-                            ..ToolResultPayload::default()
-                        }),
-                        "parsed".to_string(),
-                    )
+                    let mut payload = payload_to_value(&ToolResultPayload {
+                        actor_type: Some("agent".to_string()),
+                        thread_id: self.state.thread_id.clone(),
+                        tool_name: "command_execution".to_string(),
+                        tool_use_id: item.get("id").and_then(Value::as_str).map(str::to_string),
+                        status: item
+                            .get("status")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        input: Some(Value::Object(Map::from_iter([(
+                            "command".to_string(),
+                            item.get("command").cloned().unwrap_or(Value::Null),
+                        )]))),
+                        exit_code: item
+                            .get("exit_code")
+                            .and_then(Value::as_i64)
+                            .map(|v| v as i32),
+                        stderr: item.get("stderr").cloned(),
+                        output: item
+                            .get("aggregated_output")
+                            .cloned()
+                            .or_else(|| item.get("stdout").cloned()),
+                        ..ToolResultPayload::default()
+                    });
+                    enrich_skill_usage_payload(&mut payload);
+                    ("shell.result".to_string(), payload, "parsed".to_string())
                 }
             }
             "mcp_tool_call" => {

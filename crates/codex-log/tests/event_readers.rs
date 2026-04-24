@@ -282,3 +282,25 @@ fn root_reasoning_item_is_normalized_to_agent_reasoning() {
     assert_eq!(event.event_type, "agent.reasoning");
     assert_eq!(event.payload["text"].as_str(), Some("thinking..."));
 }
+
+#[test]
+fn shell_events_capture_skill_identifier_marker_for_skill_file_reads() {
+    let mut reader = make_reader();
+    let mut tool_counts = HashMap::new();
+    let mut subagent_counts = HashMap::new();
+    let mut subagent_threads = HashSet::new();
+
+    let (_, event) = reader.parse_main_output_line(
+        0,
+        r#"{"type":"item.completed","item":{"type":"command_execution","id":"cmd-1","command":"sed -n '1,120p' /repo/.codex/skills/openspec-apply-change/SKILL.md","status":"completed","exit_code":0,"aggregated_output":"..."}}"#,
+        &mut tool_counts,
+        &mut subagent_counts,
+        &mut subagent_threads,
+    );
+
+    assert_eq!(event.event_type, "shell.result");
+    assert_eq!(
+        event.payload["skill_identifiers"][0].as_str(),
+        Some("openspec-apply-change")
+    );
+}

@@ -4,7 +4,7 @@ use codex_log::session::{
 use codex_log::session_metrics::{ProjectMetricsResponse, SessionMetrics, SessionMetricsQuery};
 use codex_session_explorer_backend::{
     DetectCodexHomeResponse, InitializeCodexHomeResponse, ProjectMetricsCatalogEntry,
-    SessionPreview, ViewerBackend,
+    RecomputeMetricsRequest, RecomputeMetricsResponse, SessionPreview, ViewerBackend,
 };
 use tauri::State;
 
@@ -115,6 +115,16 @@ pub fn query_project_metrics(
 ) -> CommandResult<ProjectMetricsResponse> {
     state
         .query_project_metrics(query)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn recompute_metrics(
+    state: State<'_, ViewerBackend>,
+    request: RecomputeMetricsRequest,
+) -> CommandResult<RecomputeMetricsResponse> {
+    state
+        .recompute_metrics(request)
         .map_err(|err| err.to_string())
 }
 

@@ -223,6 +223,9 @@ impl JsonOutputEventReader {
                                     ),
                                 ]))
                             };
+                            if is_shell_tool(&name) {
+                                enrich_skill_usage_payload(&mut payload);
+                            }
                             if is_spawn_agent {
                                 enrich_spawn_agent_started_payload(&mut payload, &parsed_arguments);
                             }
@@ -290,6 +293,7 @@ impl JsonOutputEventReader {
                                     item.get("output"),
                                     &parsed_output,
                                 );
+                                enrich_skill_usage_payload(&mut payload);
                             }
                             if is_spawn_agent {
                                 enrich_spawn_agent_completed_payload(&mut payload, &parsed_output);
@@ -980,6 +984,7 @@ impl JsonOutputEventReader {
                                     item.get("formatted_output").cloned().unwrap_or(Value::Null),
                                 );
                             }
+                            enrich_skill_usage_payload(&mut payload);
                             insert_duplicate_of(&mut payload, "response_item.function_call_output");
                         }
                         "web_search_end" => {

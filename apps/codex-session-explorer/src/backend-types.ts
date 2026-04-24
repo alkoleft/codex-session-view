@@ -362,6 +362,56 @@ export type OperationMetrics = {
   spawn_agent_calls: CoveredMetric<number>;
 };
 
+export type TaskClass =
+  | "implementation"
+  | "review"
+  | "analysis"
+  | "planning"
+  | "approval"
+  | "unknown";
+
+export type TaskClassSource =
+  | "collaboration_mode"
+  | "agent_role"
+  | "requested_agent_type"
+  | "receiver_role"
+  | "ambiguous_signals"
+  | "unclassified";
+
+export type TaskClassConfidence = "confident" | "partial" | "unknown";
+
+export type TaskFactRawSignals = {
+  agent_role: string | null;
+  requested_agent_type: string | null;
+  receiver_role: string | null;
+  collaboration_mode_kind: string | null;
+  model_context_window: string | null;
+  actor_type: string | null;
+};
+
+export type TaskMetricsFact = {
+  analytic_key: string;
+  session_id: string;
+  project_key: string;
+  session_scope: SessionScope;
+  run_task_id: string;
+  turn_id: string;
+  thread_id: string | null;
+  parent_thread_id: string | null;
+  started_at: string;
+  ended_at: string | null;
+  started_seq: number;
+  ended_seq: number | null;
+  outcome: OutcomeSummary;
+  token_ledger: TokenLedger;
+  duration: DurationBreakdown;
+  operations: OperationMetrics;
+  task_class: TaskClass;
+  task_class_source: TaskClassSource;
+  task_class_confidence: TaskClassConfidence;
+  raw_signals: TaskFactRawSignals;
+};
+
 export type SessionMetrics = {
   session_id: string;
   metrics_schema_version: number;
@@ -387,6 +437,12 @@ export type SessionMetrics = {
     task_count: CoveredMetric<number>;
     turn_count: CoveredMetric<number>;
     agent_work_item_count: CoveredMetric<number>;
+  };
+  task_facts: TaskMetricsFact[];
+  used_skills: {
+    identifiers: string[];
+    coverage: MetricCoverage;
+    source: MetricSource;
   };
   business_review: {
     review_cycles: CoveredMetric<number>;
@@ -435,8 +491,39 @@ export type ProjectMetricsResponse = {
   sessions: SessionMetrics[];
   token_ledger: TokenLedger;
   duration_ms: CoveredMetric<number>;
+  factors: {
+    start_context_size: CoveredMetric<number>;
+    skills_count: CoveredMetric<number>;
+    mcp_server_count: CoveredMetric<number>;
+  };
+  operations: {
+    spawn_agent_calls: CoveredMetric<number>;
+  };
+  task_metrics: {
+    task_count: CoveredMetric<number>;
+  };
+  task_facts: TaskMetricsFact[];
+  used_skills: {
+    skills: Array<{
+      identifier: string;
+      usage_count: number;
+      session_count: number;
+    }>;
+    coverage: MetricCoverage;
+    source: MetricSource;
+  };
   baseline: SessionMetrics["baseline"];
   derived_efficiency: SessionMetrics["derived_efficiency"];
+};
+
+export type RecomputeMetricsRequest = {
+  project_key?: string | null;
+  text_limit?: number;
+};
+
+export type RecomputeMetricsResponse = {
+  project_key: string | null;
+  session_count: number;
 };
 
 export type EventRecord = {
