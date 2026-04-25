@@ -194,6 +194,7 @@ describe("resolveProjectMetricsRange", () => {
   it("builds preset and custom query windows", () => {
     const now = new Date("2026-04-23T12:00:00Z");
     expect(resolveProjectMetricsRange(createInitialProjectMetricsRange(), now)).toMatchObject({
+      start_ts: "2026-04-09T12:00:00.000Z",
       end_ts: "2026-04-23T12:00:00.000Z",
     });
 

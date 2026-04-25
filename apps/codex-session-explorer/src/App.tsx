@@ -590,6 +590,7 @@ export default function App() {
     ? projectOptions.find((option) => option.projectKey === selectedProjectKey) ?? null
     : null;
   const compactShell = mainScreen === "project_metrics";
+  const shellHeaderButtonSize = "sm";
 
   const applyPreview = useCallback((preview: SessionPreview) => {
     tailCursorRef.current = preview.tail_cursor;
@@ -1362,19 +1363,16 @@ export default function App() {
       <main
         data-ui-scroll-container
         className={cn(
-          "box-border flex min-h-0 flex-1 overflow-x-hidden px-4 py-4 sm:px-6 sm:py-6",
-          compactShell ? "overflow-y-auto" : "h-full overflow-y-hidden",
+          "box-border flex h-full min-h-0 flex-1 overflow-x-hidden overflow-y-hidden px-4 py-4 sm:px-6 sm:py-6",
         )}
       >
         <div
           className={cn(
-            "flex w-full flex-col",
-            compactShell
-              ? "min-h-full gap-3"
-              : "h-full min-h-0 flex-1 gap-5 overflow-hidden",
+            "flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden",
+            compactShell ? "gap-3" : "gap-5",
           )}
         >
-          <Card className={PANEL_CARD_CLASS}>
+          <Card className={cn(PANEL_CARD_CLASS, "shrink-0")}>
             <CardHeader className={cn("gap-3", compactShell ? "py-3" : "py-4")}>
               <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
                 <div className={cn("flex min-w-0 flex-1 flex-col", compactShell ? "gap-1" : "gap-2")}>
@@ -1412,7 +1410,7 @@ export default function App() {
                     onClick={() => {
                       setMainScreen("session");
                     }}
-                    size={compactShell ? "sm" : "default"}
+                    size={shellHeaderButtonSize}
                     type="button"
                     variant={mainScreen === "session" ? "default" : "outline"}
                   >
@@ -1422,7 +1420,7 @@ export default function App() {
                     onClick={() => {
                       setMainScreen("project_metrics");
                     }}
-                    size={compactShell ? "sm" : "default"}
+                    size={shellHeaderButtonSize}
                     type="button"
                     variant={mainScreen === "project_metrics" ? "default" : "outline"}
                   >
@@ -1431,7 +1429,7 @@ export default function App() {
                   <Button
                     disabled={!backendCapabilities.liveTail}
                     onClick={toggleLiveTail}
-                    size={compactShell ? "sm" : "default"}
+                    size={shellHeaderButtonSize}
                     type="button"
                     variant="outline"
                   >
@@ -1444,7 +1442,7 @@ export default function App() {
                     onClick={() => {
                       setIsSessionDialogOpen(true);
                     }}
-                    size={compactShell ? "sm" : "default"}
+                    size={shellHeaderButtonSize}
                     type="button"
                   >
                     <FolderSearch2 data-icon="inline-start" />
@@ -1455,7 +1453,7 @@ export default function App() {
                       onClick={() => {
                         clearSelectedSession("Выбор очищен локально. Сессию можно открыть из диалога.");
                       }}
-                      size={compactShell ? "sm" : "default"}
+                      size={shellHeaderButtonSize}
                       type="button"
                       variant="outline"
                     >
@@ -1470,8 +1468,8 @@ export default function App() {
 
           <section
             className={cn(
-              "flex flex-col",
-              compactShell ? "gap-3" : "min-h-0 flex-1 gap-5",
+              "min-h-0 flex-1",
+              compactShell ? "flex flex-col gap-3 overflow-hidden" : "flex flex-col gap-5",
             )}
           >
             {mainScreen === "project_metrics" ? (

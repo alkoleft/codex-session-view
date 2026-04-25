@@ -8,7 +8,7 @@ import type {
   SessionMetrics,
 } from "@/backend";
 
-export type ProjectMetricsRangePreset = "7d" | "30d" | "90d" | "all" | "custom";
+export type ProjectMetricsRangePreset = "7d" | "14d" | "30d" | "90d" | "all" | "custom";
 
 export type ProjectMetricsRangeSelection = {
   preset: ProjectMetricsRangePreset;
@@ -350,7 +350,7 @@ const PROJECT_METRIC_SERIES_DEFINITIONS: readonly ProjectMetricSeriesDefinition[
 
 export function createInitialProjectMetricsRange(): ProjectMetricsRangeSelection {
   return {
-    preset: "30d",
+    preset: "14d",
     start: "",
     end: "",
   };
@@ -376,7 +376,13 @@ export function resolveProjectMetricsRange(
 
   const end = new Date(now);
   const start = new Date(now);
-  const days = range.preset === "7d" ? 7 : range.preset === "90d" ? 90 : 30;
+  const days = range.preset === "7d"
+    ? 7
+    : range.preset === "14d"
+      ? 14
+      : range.preset === "90d"
+        ? 90
+        : 30;
   start.setUTCDate(start.getUTCDate() - days);
 
   return {

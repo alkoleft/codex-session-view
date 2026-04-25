@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useId, useRef, useState } from "react";
 import type { Dispatch, SetStateAction, WheelEvent as ReactWheelEvent } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   BarChart3,
@@ -76,6 +77,39 @@ type ChartSelection = {
   startIndex: number | null;
 };
 
+type MenuAnchor = {
+  left: number;
+  top: number;
+};
+
+type WindowInsightTone = "default" | "accent" | "danger";
+
+type WindowInsightCard = {
+  hint: string;
+  label: string;
+  tone?: WindowInsightTone;
+  value: string;
+};
+
+type WindowAnomalySummary = {
+  coverage: "known" | "partial" | "unknown";
+  label: string;
+  reasons: string[];
+  sessionId: string;
+  startedAt: string | null;
+};
+
+type WindowSummaryModel = {
+  anomalyCount: number;
+  anomalyHighlights: WindowAnomalySummary[];
+  cards: WindowInsightCard[];
+  completedCount: number;
+  degradedCount: number;
+  partialCount: number;
+  totalSessions: number;
+  unknownCount: number;
+};
+
 export function ProjectMetricsScreen({
   catalogBusy,
   currentSessionId,
@@ -128,6 +162,20 @@ export function ProjectMetricsScreen({
   const windowMenuId = useId();
   const projectMenuRef = useRef<HTMLDivElement | null>(null);
   const windowMenuRef = useRef<HTMLDivElement | null>(null);
+  const projectMenuPanelRef = useRef<HTMLDivElement | null>(null);
+  const windowMenuPanelRef = useRef<HTMLDivElement | null>(null);
+  const projectTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const windowTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const [projectMenuAnchor, setProjectMenuAnchor] = useState<MenuAnchor | null>(null);
+  const [windowMenuAnchor, setWindowMenuAnchor] = useState<MenuAnchor | null>(null);
+
+  function readMenuAnchor(element: HTMLElement): MenuAnchor {
+    const rect = element.getBoundingClientRect();
+    return {
+      left: rect.left,
+      top: rect.bottom + 4,
+    };
+  }
 
   useEffect(() => {
     function handlePointerDown(event: PointerEvent) {
@@ -136,10 +184,20 @@ export function ProjectMetricsScreen({
         return;
       }
 
-      if (projectMenuRef.current && !projectMenuRef.current.contains(target)) {
+      if (
+        projectMenuRef.current
+        && !projectMenuRef.current.contains(target)
+        && projectMenuPanelRef.current
+        && !projectMenuPanelRef.current.contains(target)
+      ) {
         setProjectMenuOpen(false);
       }
-      if (windowMenuRef.current && !windowMenuRef.current.contains(target)) {
+      if (
+        windowMenuRef.current
+        && !windowMenuRef.current.contains(target)
+        && windowMenuPanelRef.current
+        && !windowMenuPanelRef.current.contains(target)
+      ) {
         setWindowMenuOpen(false);
       }
     }
@@ -159,6 +217,29 @@ export function ProjectMetricsScreen({
       window.removeEventListener("keydown", handleEscape);
     };
   }, []);
+
+  useEffect(() => {
+    if (!projectMenuOpen && !windowMenuOpen) {
+      return;
+    }
+
+    function syncMenuAnchors() {
+      if (projectMenuOpen && projectTriggerRef.current) {
+        setProjectMenuAnchor(readMenuAnchor(projectTriggerRef.current));
+      }
+      if (windowMenuOpen && windowTriggerRef.current) {
+        setWindowMenuAnchor(readMenuAnchor(windowTriggerRef.current));
+      }
+    }
+
+    window.addEventListener("resize", syncMenuAnchors);
+    window.addEventListener("scroll", syncMenuAnchors, true);
+    syncMenuAnchors();
+    return () => {
+      window.removeEventListener("resize", syncMenuAnchors);
+      window.removeEventListener("scroll", syncMenuAnchors, true);
+    };
+  }, [projectMenuOpen, windowMenuOpen]);
 
   useEffect(() => {
     if (!viewModel) {
@@ -186,8 +267,15 @@ export function ProjectMetricsScreen({
   const selectedWindowLabel = describeRangePreset(range.preset);
 
   return (
-    <div className="flex min-w-0 flex-col">
-      <Card className={cn(SURFACE_CARD_CLASS, "w-full")}>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <Card
+        className={cn(
+          SURFACE_CARD_CLASS,
+          "flex min-h-0 flex-1 flex-col overflow-hidden",
+          "w-full",
+        )}
+        data-testid="project-metrics-shell"
+      >
         <CardHeader className="gap-3 border-b border-border/50 pb-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="space-y-0.5">
@@ -230,10 +318,19 @@ export function ProjectMetricsScreen({
                 aria-controls={projectMenuId}
                 aria-expanded={projectMenuOpen}
                 className={TOOLBAR_TRIGGER_CLASS}
-                onClick={() => {
-                  setProjectMenuOpen((current) => !current);
+                onClick={(event) => {
+                  const nextAnchor = readMenuAnchor(event.currentTarget);
+                  setProjectMenuOpen((current) => {
+                    const next = !current;
+                    if (next) {
+                      setProjectMenuAnchor(nextAnchor);
+                    }
+                    return next;
+                  });
                   setWindowMenuOpen(false);
+                  setWindowMenuAnchor(null);
                 }}
+                ref={projectTriggerRef}
                 type="button"
               >
                 <span className="min-w-0 text-left">
@@ -244,54 +341,6 @@ export function ProjectMetricsScreen({
                 </span>
                 <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition", projectMenuOpen && "rotate-180")} />
               </button>
-              {projectMenuOpen ? (
-                <div
-                  className="absolute left-0 top-full z-20 mt-1 w-[min(34rem,calc(100vw-3rem))] overflow-hidden rounded-xl border border-border/80 bg-card shadow-2xl shadow-black/25"
-                  id={projectMenuId}
-                  role="listbox"
-                >
-                  <div className="max-h-80 overflow-y-auto overscroll-contain p-1.5" data-testid="project-selector-scroll">
-                    <div className="flex flex-col">
-                      {projectOptions.length === 0 ? (
-                        <div className="px-3 py-3 text-sm text-muted-foreground">
-                          Projects unavailable
-                        </div>
-                      ) : (
-                        projectOptions.map((option) => (
-                          <button
-                            className={cn(
-                              "grid grid-cols-[auto_1fr] items-start gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-muted/50",
-                              option.projectKey === selectedProjectKey && "bg-muted text-foreground",
-                            )}
-                            key={option.projectKey}
-                            onClick={() => {
-                              onProjectChange(option.projectKey);
-                              setProjectMenuOpen(false);
-                            }}
-                            role="option"
-                            type="button"
-                          >
-                            <span className="pt-0.5 text-[color:var(--accent-strong)]">
-                              {option.projectKey === selectedProjectKey ? <Check className="size-4" /> : <span className="block size-4" />}
-                            </span>
-                            <span className="min-w-0">
-                              <span className="block truncate text-sm font-medium text-foreground">
-                                {option.label}
-                              </span>
-                              <span className="mt-1 block text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
-                                {formatScopeCountsSummary(option.availableScopeCounts)}
-                              </span>
-                              <span className="mt-0.5 block break-all text-xs leading-5 text-muted-foreground">
-                                {option.description}
-                              </span>
-                            </span>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
             </div>
 
             <div className="relative" ref={windowMenuRef}>
@@ -299,10 +348,19 @@ export function ProjectMetricsScreen({
                 aria-controls={windowMenuId}
                 aria-expanded={windowMenuOpen}
                 className={TOOLBAR_TRIGGER_CLASS}
-                onClick={() => {
-                  setWindowMenuOpen((current) => !current);
+                onClick={(event) => {
+                  const nextAnchor = readMenuAnchor(event.currentTarget);
+                  setWindowMenuOpen((current) => {
+                    const next = !current;
+                    if (next) {
+                      setWindowMenuAnchor(nextAnchor);
+                    }
+                    return next;
+                  });
                   setProjectMenuOpen(false);
+                  setProjectMenuAnchor(null);
                 }}
+                ref={windowTriggerRef}
                 type="button"
               >
                 <span className="min-w-0 text-left">
@@ -311,37 +369,6 @@ export function ProjectMetricsScreen({
                 </span>
                 <ChevronDown className={cn("size-4 shrink-0 text-muted-foreground transition", windowMenuOpen && "rotate-180")} />
               </button>
-              {windowMenuOpen ? (
-                <div
-                  className="absolute left-0 top-full z-20 mt-1 w-52 overflow-hidden rounded-xl border border-border/80 bg-card shadow-2xl shadow-black/25"
-                  id={windowMenuId}
-                  role="listbox"
-                >
-                  <div className="flex flex-col p-1.5">
-                    {(["7d", "30d", "90d", "all", "custom"] as ProjectMetricsRangePreset[]).map((preset) => (
-                      <button
-                        className={cn(
-                          "flex items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition hover:bg-muted/50",
-                          range.preset === preset && "bg-muted text-foreground",
-                        )}
-                        key={preset}
-                        onClick={() => {
-                          onRangeChange({
-                            ...range,
-                            preset,
-                          });
-                          setWindowMenuOpen(false);
-                        }}
-                        role="option"
-                        type="button"
-                      >
-                        <span>{describeRangePreset(preset)}</span>
-                        {range.preset === preset ? <Check className="size-4 text-[color:var(--accent-strong)]" /> : null}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
             </div>
 
             <div className="flex flex-wrap items-center gap-1 rounded-xl border border-border/70 bg-background p-1">
@@ -401,8 +428,8 @@ export function ProjectMetricsScreen({
 
         </CardHeader>
 
-        <CardContent className="min-h-0 flex-1 pt-4">
-          <div className="flex min-h-0 flex-col gap-3">
+        <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden pt-4">
+          <div className="flex min-h-0 flex-1 flex-col gap-3">
             {error ? (
               <Alert variant="destructive">
                 <AlertTriangle className="size-4" />
@@ -464,6 +491,103 @@ export function ProjectMetricsScreen({
           </div>
         </CardContent>
       </Card>
+      {typeof document !== "undefined" && projectMenuOpen && projectMenuAnchor
+        ? createPortal(
+            <div
+              className="fixed z-50 w-[min(34rem,calc(100vw-3rem))] overflow-hidden rounded-xl border border-border/80 bg-card shadow-2xl shadow-black/25"
+              id={projectMenuId}
+              ref={projectMenuPanelRef}
+              role="listbox"
+              style={{
+                left: `${Math.max(16, Math.min(projectMenuAnchor.left, window.innerWidth - 16))}px`,
+                top: `${projectMenuAnchor.top}px`,
+              }}
+            >
+              <div className="max-h-80 overflow-y-auto overscroll-contain p-1.5" data-testid="project-selector-scroll">
+                <div className="flex flex-col">
+                  {projectOptions.length === 0 ? (
+                    <div className="px-3 py-3 text-sm text-muted-foreground">
+                      Projects unavailable
+                    </div>
+                  ) : (
+                    projectOptions.map((option) => (
+                      <button
+                        className={cn(
+                          "grid grid-cols-[auto_1fr] items-start gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-muted/50",
+                          option.projectKey === selectedProjectKey && "bg-muted text-foreground",
+                        )}
+                        key={option.projectKey}
+                        onClick={() => {
+                          onProjectChange(option.projectKey);
+                          setProjectMenuOpen(false);
+                          setProjectMenuAnchor(null);
+                        }}
+                        role="option"
+                        type="button"
+                      >
+                        <span className="pt-0.5 text-[color:var(--accent-strong)]">
+                          {option.projectKey === selectedProjectKey ? <Check className="size-4" /> : <span className="block size-4" />}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-foreground">
+                            {option.label}
+                          </span>
+                          <span className="mt-1 block text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+                            {formatScopeCountsSummary(option.availableScopeCounts)}
+                          </span>
+                          <span className="mt-0.5 block break-all text-xs leading-5 text-muted-foreground">
+                            {option.description}
+                          </span>
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+      {typeof document !== "undefined" && windowMenuOpen && windowMenuAnchor
+        ? createPortal(
+            <div
+              className="fixed z-50 w-52 overflow-hidden rounded-xl border border-border/80 bg-card shadow-2xl shadow-black/25"
+              id={windowMenuId}
+              ref={windowMenuPanelRef}
+              role="listbox"
+              style={{
+                left: `${Math.max(16, Math.min(windowMenuAnchor.left, window.innerWidth - 224 - 16))}px`,
+                top: `${windowMenuAnchor.top}px`,
+              }}
+            >
+              <div className="flex flex-col p-1.5">
+                {(["7d", "14d", "30d", "90d", "all", "custom"] as ProjectMetricsRangePreset[]).map((preset) => (
+                  <button
+                    className={cn(
+                      "flex items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition hover:bg-muted/50",
+                      range.preset === preset && "bg-muted text-foreground",
+                    )}
+                    key={preset}
+                    onClick={() => {
+                      onRangeChange({
+                        ...range,
+                        preset,
+                      });
+                      setWindowMenuOpen(false);
+                      setWindowMenuAnchor(null);
+                    }}
+                    role="option"
+                    type="button"
+                  >
+                    <span>{describeRangePreset(preset)}</span>
+                    {range.preset === preset ? <Check className="size-4 text-[color:var(--accent-strong)]" /> : null}
+                  </button>
+                ))}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -489,7 +613,8 @@ function ProjectMetricsContent({
   visibleSeriesKeys: ProjectMetricSeriesKey[];
   zoomWindow: { startIndex: number; endIndex: number };
 }) {
-  const [secondaryPanel, setSecondaryPanel] = useState<"overview" | "series" | null>(null);
+  const [chartSettingsOpen, setChartSettingsOpen] = useState(false);
+  const [seriesPanelOpen, setSeriesPanelOpen] = useState(false);
   const [outlierMode, setOutlierMode] = useState<ChartOutlierMode>("clamp");
   const [chartMode, setChartMode] = useState<ProjectMetricsChartMode>("trend");
   const [chartOverlays, setChartOverlays] = useState<Record<ProjectMetricsChartOverlayKey, boolean>>({
@@ -511,6 +636,9 @@ function ProjectMetricsContent({
   const showRawValues = chartOverlays["raw-values"];
   const showProjectMedian = chartOverlays["project-median"];
   const visibleRows = viewModel.chartRows.slice(clampedWindow.startIndex, clampedWindow.endIndex + 1);
+  const visibleChartRows = chartAnalysis.chartData.slice(clampedWindow.startIndex, clampedWindow.endIndex + 1);
+  const visibleSessionIds = new Set(visibleRows.map((row) => row.sessionId));
+  const visibleSessionItems = viewModel.sessions.filter((session) => visibleSessionIds.has(session.sessionId));
   const selectedRow = findActiveRow({
     activeSessionId,
     currentSessionId,
@@ -548,6 +676,16 @@ function ProjectMetricsContent({
     selection.endIndex,
     viewModel.chartRows.length,
   );
+  const windowSummaryModel = buildWindowSummaryModel({
+    rows: visibleRows,
+    chartRows: visibleChartRows,
+    series: visibleSeries,
+    sessions: visibleSessionItems,
+  });
+  const hasPartialData =
+    windowSummaryModel.partialCount > 0
+    || windowSummaryModel.unknownCount > 0
+    || windowSummaryModel.degradedCount > 0;
 
   function clearSelection() {
     setSelection({
@@ -648,37 +786,43 @@ function ProjectMetricsContent({
   }
 
   return (
-    <div className="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1.85fr)_minmax(320px,0.78fr)]">
-      <div className="flex min-h-0 flex-col gap-4" data-testid="project-metrics-stage">
-        <Card className={SURFACE_CARD_CLASS} size="sm">
+    <div
+      className="grid min-h-0 flex-1 gap-4 overflow-hidden xl:grid-cols-[minmax(0,1.85fr)_minmax(320px,0.78fr)]"
+      data-testid="project-metrics-split-view"
+    >
+      <div className="min-h-0" data-testid="project-metrics-stage">
+        <Card className={cn(SURFACE_CARD_CLASS, "flex h-full min-h-0 flex-col")} size="sm">
           <CardHeader className="gap-3 border-b border-border/50 pb-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
                 <CardTitle className="text-sm">Summary chart</CardTitle>
                 <p className="text-xs text-muted-foreground">
-                  Active analytic mode drives the chart, tooltip, and inspector for the selected session window.
+                  График теперь главный. Детальные настройки и каталог series открываются только по запросу.
                 </p>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
+                <Badge className="h-6 px-2 text-[11px]" variant="outline">
+                  {visibleSeries.length} series
+                </Badge>
                 <div className="flex flex-wrap gap-1">
                   <Button
-                    aria-pressed={secondaryPanel === "overview"}
-                    onClick={() => setSecondaryPanel((current) => current === "overview" ? null : "overview")}
+                    aria-expanded={chartSettingsOpen}
+                    onClick={() => setChartSettingsOpen((current) => !current)}
                     size="xs"
                     type="button"
-                    variant={secondaryPanel === "overview" ? "secondary" : "outline"}
-                  >
-                    Overview
-                  </Button>
-                  <Button
-                    aria-pressed={secondaryPanel === "series"}
-                    onClick={() => setSecondaryPanel((current) => current === "series" ? null : "series")}
-                    size="xs"
-                    type="button"
-                    variant={secondaryPanel === "series" ? "secondary" : "outline"}
+                    variant={chartSettingsOpen ? "secondary" : "outline"}
                   >
                     <SlidersHorizontal className="size-3" data-icon="inline-start" />
+                    Chart settings
+                  </Button>
+                  <Button
+                    aria-expanded={seriesPanelOpen}
+                    onClick={() => setSeriesPanelOpen((current) => !current)}
+                    size="xs"
+                    type="button"
+                    variant={seriesPanelOpen ? "secondary" : "outline"}
+                  >
                     Series
                   </Button>
                 </div>
@@ -690,33 +834,52 @@ function ProjectMetricsContent({
               </div>
             </div>
 
-            {secondaryPanel === "overview" ? (
-              <OverviewPanel viewModel={viewModel} />
-            ) : null}
-
-            {secondaryPanel === "series" ? (
-              <SeriesPanel
-                chartRowsCount={viewModel.chartRows.length}
-                series={viewModel.chartSeries}
-                setVisibleSeriesKeys={setVisibleSeriesKeys}
-                visibleSeriesKeys={visibleSeriesKeys}
-              />
-            ) : null}
+            <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-border/70 bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{windowSummary}</span>
+              <span>·</span>
+              <span>{windowLabelSummary}</span>
+              <span>·</span>
+              <span>{activeModeMeta.label}</span>
+              <span>·</span>
+              <span>{describeOutlierMode(outlierMode)}</span>
+              <span className="ml-auto">Showing {visibleRows.length} of {viewModel.chartRows.length} sessions</span>
+            </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
                 <ZoomIn className="size-3.5" />
-                Zoom
+                Window
               </span>
               <button
-                className={cn(ZOOM_BUTTON_CLASS, getWindowSize(clampedWindow) === viewModel.chartRows.length && ZOOM_BUTTON_ACTIVE_CLASS)}
+                className={cn(
+                  ZOOM_BUTTON_CLASS,
+                  getWindowSize(clampedWindow) === viewModel.chartRows.length && ZOOM_BUTTON_ACTIVE_CLASS,
+                )}
                 onClick={() => {
-                  setZoomWindow(clampZoomWindow({ startIndex: 0, endIndex: viewModel.chartRows.length - 1 }, viewModel.chartRows.length));
+                  setZoomWindow(
+                    clampZoomWindow(
+                      { startIndex: 0, endIndex: viewModel.chartRows.length - 1 },
+                      viewModel.chartRows.length,
+                    ),
+                  );
                 }}
                 type="button"
               >
                 All
               </button>
+              {quickWindowSizes.map((size) => (
+                <button
+                  aria-label={`Show ${size} sessions`}
+                  className={cn(ZOOM_BUTTON_CLASS, windowSize === size && ZOOM_BUTTON_ACTIVE_CLASS)}
+                  key={size}
+                  onClick={() => {
+                    setZoomWindow(focusWindowAroundIndex(viewModel.chartRows.length, size, focusIndex));
+                  }}
+                  type="button"
+                >
+                  {size}
+                </button>
+              ))}
               <button
                 className={ZOOM_BUTTON_CLASS}
                 disabled={windowSize <= 2}
@@ -747,7 +910,13 @@ function ProjectMetricsContent({
                 className={ZOOM_BUTTON_CLASS}
                 disabled={clampedWindow.startIndex === 0}
                 onClick={() => {
-                  setZoomWindow(shiftZoomWindow(clampedWindow, viewModel.chartRows.length, -Math.max(1, Math.floor(windowSize / 2))));
+                  setZoomWindow(
+                    shiftZoomWindow(
+                      clampedWindow,
+                      viewModel.chartRows.length,
+                      -Math.max(1, Math.floor(windowSize / 2)),
+                    ),
+                  );
                 }}
                 type="button"
               >
@@ -760,7 +929,13 @@ function ProjectMetricsContent({
                 className={ZOOM_BUTTON_CLASS}
                 disabled={clampedWindow.endIndex >= viewModel.chartRows.length - 1}
                 onClick={() => {
-                  setZoomWindow(shiftZoomWindow(clampedWindow, viewModel.chartRows.length, Math.max(1, Math.floor(windowSize / 2))));
+                  setZoomWindow(
+                    shiftZoomWindow(
+                      clampedWindow,
+                      viewModel.chartRows.length,
+                      Math.max(1, Math.floor(windowSize / 2)),
+                    ),
+                  );
                 }}
                 type="button"
               >
@@ -780,440 +955,446 @@ function ProjectMetricsContent({
                   Latest
                 </button>
               ) : null}
-              {quickWindowSizes.map((size) => (
-                <button
-                  aria-label={`Show ${size} sessions`}
-                  className={cn(ZOOM_BUTTON_CLASS, windowSize === size && ZOOM_BUTTON_ACTIVE_CLASS)}
-                  key={size}
-                  onClick={() => {
-                    setZoomWindow(focusWindowAroundIndex(viewModel.chartRows.length, size, focusIndex));
-                  }}
-                  type="button"
-                >
-                  {size}
-                </button>
-              ))}
             </div>
 
-            <div
-              className="grid gap-3 rounded-2xl border border-border/70 bg-background/70 p-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_auto]"
-              data-testid="project-metrics-analytics-controls"
-            >
-              <label className="flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                  <span>Window size</span>
-                  <span className="text-foreground">{windowSize} sessions</span>
-                </div>
-                <input
-                  aria-label="Window size"
-                  className="accent-[color:var(--accent-strong)]"
-                  disabled={!canSlideWindow}
-                  max={maxWindowSize}
-                  min={Math.min(2, maxWindowSize)}
-                  onChange={(event) => {
-                    const nextSize = Number(event.target.value);
-                    if (!Number.isFinite(nextSize)) {
-                      return;
-                    }
-                    setZoomWindow(
-                      focusWindowAroundIndex(
-                        viewModel.chartRows.length,
-                        nextSize,
-                        focusIndex,
-                      ),
-                    );
-                  }}
-                  step={1}
-                  type="range"
-                  value={windowSize}
-                />
-              </label>
+            {seriesPanelOpen ? (
+              <SeriesPanel
+                chartRowsCount={viewModel.chartRows.length}
+                series={viewModel.chartSeries}
+                setVisibleSeriesKeys={setVisibleSeriesKeys}
+                visibleSeriesKeys={visibleSeriesKeys}
+              />
+            ) : null}
 
-              <label className="flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                  <span>Window position</span>
-                  <span className="text-foreground">
-                    {maxWindowStart > 0 ? clampedWindow.startIndex + 1 : 1}
-                  </span>
-                </div>
-                <input
-                  aria-label="Window position"
-                  className="accent-[color:var(--accent-strong)]"
-                  disabled={!canSlideWindow || maxWindowStart === 0}
-                  max={maxWindowStart}
-                  min={0}
-                  onChange={(event) => {
-                    const startIndex = Number(event.target.value);
-                    if (!Number.isFinite(startIndex)) {
-                      return;
-                    }
-                    setZoomWindow({
-                      startIndex,
-                      endIndex: Math.min(viewModel.chartRows.length - 1, startIndex + windowSize - 1),
-                    });
-                  }}
-                  step={1}
-                  type="range"
-                  value={Math.min(clampedWindow.startIndex, maxWindowStart)}
-                />
-              </label>
+            {chartSettingsOpen ? (
+              <div
+                className="grid gap-3 rounded-2xl border border-border/70 bg-background/70 p-3 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1.2fr)_minmax(0,1.2fr)_auto]"
+                data-testid="project-metrics-analytics-controls"
+              >
+                <label className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    <span>Window size</span>
+                    <span className="text-foreground">{windowSize} sessions</span>
+                  </div>
+                  <input
+                    aria-label="Window size"
+                    className="accent-[color:var(--accent-strong)]"
+                    disabled={!canSlideWindow}
+                    max={maxWindowSize}
+                    min={Math.min(2, maxWindowSize)}
+                    onChange={(event) => {
+                      const nextSize = Number(event.target.value);
+                      if (!Number.isFinite(nextSize)) {
+                        return;
+                      }
+                      setZoomWindow(
+                        focusWindowAroundIndex(
+                          viewModel.chartRows.length,
+                          nextSize,
+                          focusIndex,
+                        ),
+                      );
+                    }}
+                    step={1}
+                    type="range"
+                    value={windowSize}
+                  />
+                </label>
 
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                  <span>Chart mode</span>
-                  <span className="text-foreground">{activeModeMeta.label}</span>
+                <label className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    <span>Window position</span>
+                    <span className="text-foreground">
+                      {maxWindowStart > 0 ? clampedWindow.startIndex + 1 : 1}
+                    </span>
+                  </div>
+                  <input
+                    aria-label="Window position"
+                    className="accent-[color:var(--accent-strong)]"
+                    disabled={!canSlideWindow || maxWindowStart === 0}
+                    max={maxWindowStart}
+                    min={0}
+                    onChange={(event) => {
+                      const startIndex = Number(event.target.value);
+                      if (!Number.isFinite(startIndex)) {
+                        return;
+                      }
+                      setZoomWindow({
+                        startIndex,
+                        endIndex: Math.min(viewModel.chartRows.length - 1, startIndex + windowSize - 1),
+                      });
+                    }}
+                    step={1}
+                    type="range"
+                    value={Math.min(clampedWindow.startIndex, maxWindowStart)}
+                  />
+                </label>
+
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    <span>Chart mode</span>
+                    <span className="text-foreground">{activeModeMeta.label}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {PROJECT_METRICS_CHART_MODES.map((mode) => {
+                      const metadata = PROJECT_METRICS_CHART_MODE_META[mode];
+                      return (
+                        <button
+                          aria-pressed={chartMode === mode}
+                          className={cn(
+                            ZOOM_BUTTON_CLASS,
+                            chartMode === mode && ZOOM_BUTTON_ACTIVE_CLASS,
+                          )}
+                          key={mode}
+                          onClick={() => setChartMode(mode)}
+                          title={metadata.description}
+                          type="button"
+                        >
+                          {metadata.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="text-xs text-muted-foreground" data-testid="project-metrics-mode-help">
+                    {activeModeMeta.helpText}
+                  </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {PROJECT_METRICS_CHART_MODES.map((mode) => {
-                    const metadata = PROJECT_METRICS_CHART_MODE_META[mode];
-                    return (
+
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-wrap gap-2">
+                    {PROJECT_METRICS_CHART_OVERLAYS.map((overlayKey) => {
+                      const metadata = PROJECT_METRICS_CHART_OVERLAY_META[overlayKey];
+                      const active = chartOverlays[overlayKey];
+                      return (
+                        <button
+                          aria-pressed={active}
+                          className={cn(ZOOM_BUTTON_CLASS, active && ZOOM_BUTTON_ACTIVE_CLASS)}
+                          key={overlayKey}
+                          onClick={() => {
+                            setChartOverlays((current) => ({
+                              ...current,
+                              [overlayKey]: !current[overlayKey],
+                            }));
+                          }}
+                          title={metadata.description}
+                          type="button"
+                        >
+                          {metadata.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(["keep", "clamp", "exclude"] as ChartOutlierMode[]).map((value) => (
                       <button
-                        aria-pressed={chartMode === mode}
+                        aria-pressed={outlierMode === value}
                         className={cn(
                           ZOOM_BUTTON_CLASS,
-                          chartMode === mode && ZOOM_BUTTON_ACTIVE_CLASS,
+                          outlierMode === value && ZOOM_BUTTON_ACTIVE_CLASS,
                         )}
-                        key={mode}
-                        onClick={() => setChartMode(mode)}
-                        title={metadata.description}
+                        key={value}
+                        onClick={() => setOutlierMode(value)}
                         type="button"
                       >
-                        {metadata.label}
+                        {describeOutlierMode(value)}
                       </button>
-                    );
-                  })}
-                </div>
-                <div className="text-xs text-muted-foreground" data-testid="project-metrics-mode-help">
-                  {activeModeMeta.helpText}
+                    ))}
+                  </div>
                 </div>
               </div>
-
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap gap-2">
-                  {PROJECT_METRICS_CHART_OVERLAYS.map((overlayKey) => {
-                    const metadata = PROJECT_METRICS_CHART_OVERLAY_META[overlayKey];
-                    const active = chartOverlays[overlayKey];
-                    return (
-                      <button
-                        aria-pressed={active}
-                        className={cn(ZOOM_BUTTON_CLASS, active && ZOOM_BUTTON_ACTIVE_CLASS)}
-                        key={overlayKey}
-                        onClick={() => {
-                          setChartOverlays((current) => ({
-                            ...current,
-                            [overlayKey]: !current[overlayKey],
-                          }));
-                        }}
-                        title={metadata.description}
-                        type="button"
-                      >
-                        {metadata.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {(["keep", "clamp", "exclude"] as ChartOutlierMode[]).map((value) => (
-                    <button
-                      aria-pressed={outlierMode === value}
-                      className={cn(
-                        ZOOM_BUTTON_CLASS,
-                        outlierMode === value && ZOOM_BUTTON_ACTIVE_CLASS,
-                      )}
-                      key={value}
-                      onClick={() => setOutlierMode(value)}
-                      type="button"
-                    >
-                      {describeOutlierMode(value)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border/70 bg-muted/15 px-3 py-2 text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">{windowSummary}</span>
-              <span>·</span>
-              <span>{windowLabelSummary}</span>
-              <span>·</span>
-              <span>{activeModeMeta.label}</span>
-              <span>·</span>
-              <span>{describeOutlierMode(outlierMode)}</span>
-              <span className="ml-auto">Showing {visibleRows.length} of {viewModel.chartRows.length} sessions</span>
-            </div>
+            ) : null}
           </CardHeader>
 
-          <CardContent className="space-y-3 pt-3">
-            {viewModel.degraded ? (
-              <Alert>
-                <AlertTriangle className="size-4" />
-                <AlertTitle>Degraded project identity</AlertTitle>
-                <AlertDescription>
-                  Часть project identity неполная. Метрики показаны честно, но bucket нельзя считать полным project catalog.
-                </AlertDescription>
-              </Alert>
-            ) : null}
+          <CardContent className="min-h-0 flex-1 pt-3">
+            <ScrollArea className="h-full min-h-0" data-testid="project-metrics-stage-scroll">
+              <div className="flex flex-col gap-3 pr-4">
+                <OverviewPanel
+                  anomalies={windowSummaryModel.anomalyHighlights}
+                  cards={windowSummaryModel.cards}
+                  totalSessions={windowSummaryModel.totalSessions}
+                />
 
-            {viewModel.hasUnknownScope ? (
-              <Alert>
-                <AlertTriangle className="size-4" />
-                <AlertTitle>Unknown scope detected</AlertTitle>
-                <AlertDescription>
-                  Часть project sessions не удалось надёжно классифицировать как `main` или `subsession`.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-
-            {visibleSeries.length === 0 ? (
-              <Alert>
-                <Search className="size-4" />
-                <AlertTitle>No series selected</AlertTitle>
-                <AlertDescription>Включите хотя бы одну curated series, чтобы построить summary chart.</AlertDescription>
-              </Alert>
-            ) : !hasAvailableVisibleData ? (
-              <Alert>
-                <AlertTriangle className="size-4" />
-                <AlertTitle>Visible window has no chartable values</AlertTitle>
-                <AlertDescription>
-                  В текущем zoom-window активный режим `{activeModeMeta.label}` не даёт chartable values. Расширьте окно или включите другие метрики.
-                </AlertDescription>
-              </Alert>
-            ) : (
-              <>
-                <div className="rounded-xl border border-border/70 bg-muted/10 px-3 py-2 text-xs text-muted-foreground">
-                  Primary line = {activeModeMeta.label}. {PROJECT_METRICS_CHART_OVERLAY_META["raw-values"].label}
-                  {" and "}
-                  {PROJECT_METRICS_CHART_OVERLAY_META["project-median"].label}
-                  {" stay independent overlays. Drag across the chart to zoom into an interval, or use wheel to pan the visible window."}
-                </div>
-                {selectionPreview ? (
-                  <div className="rounded-xl border border-[color:var(--accent-strong)]/35 bg-[color:var(--accent-strong)]/10 px-3 py-2 text-xs text-foreground">
-                    Selecting sessions {selectionPreview.startIndex + 1}-{selectionPreview.endIndex + 1}
-                    {" · "}
-                    {chartAnalysis.chartData[selectionPreview.startIndex]?.label ?? "n/a"}
-                    {" → "}
-                    {chartAnalysis.chartData[selectionPreview.endIndex]?.label ?? "n/a"}
-                  </div>
-                ) : null}
-
-                <div
-                  className="h-[28rem] w-full lg:h-[32rem]"
-                  data-testid="project-metrics-chart-surface"
-                  onWheel={handleChartWheel}
-                >
-                  <ResponsiveContainer height="100%" width="100%">
-                    <LineChart
-                      className="cursor-crosshair"
-                      data={chartAnalysis.chartData}
-                      margin={{ top: 12, right: 24, bottom: 20, left: 8 }}
-                      onMouseDown={handleChartMouseDown}
-                      onMouseMove={handleChartMouseMove}
-                      onMouseUp={handleChartMouseUp}
-                    >
-                      <CartesianGrid stroke="currentColor" strokeDasharray="4 6" strokeOpacity={0.12} />
-                      {selectionPreview ? (
-                        <ReferenceArea
-                          fill="color-mix(in srgb, var(--accent-strong) 16%, transparent)"
-                          fillOpacity={0.8}
-                          ifOverflow="visible"
-                          stroke="color-mix(in srgb, var(--accent-strong) 50%, transparent)"
-                          strokeOpacity={0.9}
-                          x1={selectionPreview.startIndex}
-                          x2={selectionPreview.endIndex}
-                          yAxisId="preview"
-                        />
-                      ) : null}
-                      <XAxis
-                        allowDataOverflow
-                        dataKey="index"
-                        domain={[clampedWindow.startIndex, clampedWindow.endIndex]}
-                        minTickGap={24}
-                        stroke="currentColor"
-                        strokeOpacity={0.45}
-                        tickFormatter={(value) => chartAnalysis.chartData[Number(value)]?.label ?? ""}
-                        tick={{ fill: "currentColor", fontSize: 12 }}
-                        type="number"
-                      />
-                      <YAxis
-                        allowDataOverflow
-                        domain={computeSeriesDomain({
-                          analytics: chartAnalysis.seriesAnalytics,
-                          chartData: chartAnalysis.chartData.slice(clampedWindow.startIndex, clampedWindow.endIndex + 1),
-                          mode: chartMode,
-                          overlays: chartOverlays,
-                          seriesKeys: visibleSeriesKeys,
-                        })}
-                        hide
-                        yAxisId="preview"
-                      />
-                      {showProjectMedian
-                        ? visibleSeries.map((series) => {
-                          const stats = chartAnalysis.seriesAnalytics[series.key];
-                          if (!stats || stats.projectMedian == null) {
-                            return null;
-                          }
-                          return (
-                              <Fragment key={`${series.key}:project-median:overlay`}>
-                                <ReferenceLine
-                                  ifOverflow="visible"
-                                  stroke="var(--background)"
-                                  strokeOpacity={0.96}
-                                  strokeWidth={6}
-                                  y={stats.projectMedian}
-                                  yAxisId={series.key}
-                                />
-                                <ReferenceLine
-                                  ifOverflow="visible"
-                                  label={{
-                                    fill: series.color,
-                                    fontSize: 11,
-                                    fontWeight: 700,
-                                    position: "insideTopRight",
-                                    value: `${series.shortLabel} ${PROJECT_METRICS_CHART_OVERLAY_META["project-median"].seriesLabelSuffix}`,
-                                  }}
-                                  stroke={series.color}
-                                  strokeDasharray="2 6"
-                                  strokeOpacity={0.95}
-                                  strokeWidth={2.2}
-                                  y={stats.projectMedian}
-                                  yAxisId={series.key}
-                                />
-                              </Fragment>
-                            );
-                          })
-                        : null}
-                      {visibleSeries.map((series) => (
-                        <YAxis
-                          allowDataOverflow
-                          domain={computeSeriesDomain({
-                            analytics: chartAnalysis.seriesAnalytics,
-                            chartData: chartAnalysis.chartData.slice(clampedWindow.startIndex, clampedWindow.endIndex + 1),
-                            mode: chartMode,
-                            overlays: chartOverlays,
-                            seriesKeys: [series.key],
-                          })}
-                          hide
-                          key={series.key}
-                          yAxisId={series.key}
-                        />
-                      ))}
-                      <Tooltip
-                        content={(props) => (
-                          <SummaryChartTooltip
-                            {...props}
-                            analytics={chartAnalysis.seriesAnalytics}
-                            chartMode={chartMode}
-                            chartOverlays={chartOverlays}
-                            outlierMode={outlierMode}
-                            series={visibleSeries}
-                          />
-                        )}
-                      />
-                      {visibleSeries.map((series) => (
-                        <Fragment key={`${series.key}:${chartMode}:primary`}>
-                          <Line
-                            connectNulls={false}
-                            dataKey={(row: ChartDisplayRow) => getChartModeValue(row, chartMode, series.key)}
-                            dot={false}
-                            isAnimationActive={false}
-                            name={`${series.label} ${activeModeMeta.label} mask`}
-                            stroke="var(--background)"
-                            strokeOpacity={0.96}
-                            strokeWidth={7}
-                            type="monotone"
-                            yAxisId={series.key}
-                          />
-                          <Line
-                            activeDot={{ r: 6, strokeWidth: 2 }}
-                            connectNulls={false}
-                            dataKey={(row: ChartDisplayRow) => getChartModeValue(row, chartMode, series.key)}
-                            dot={showPrimaryDots ? (
-                              <SeriesDot
-                                currentSessionId={currentSessionId}
-                                onActivateSession={onActiveSessionIdChange}
-                                outlierMode={outlierMode}
-                                seriesKey={series.key}
-                              />
-                            ) : false}
-                            isAnimationActive={false}
-                            name={`${series.label} ${activeModeMeta.label}`}
-                            stroke={series.color}
-                            strokeOpacity={1}
-                            strokeWidth={3.2}
-                            type="monotone"
-                            yAxisId={series.key}
-                          />
-                        </Fragment>
-                      ))}
-                      {showRawValues
-                        ? visibleSeries.map((series) => (
-                            <Line
-                              activeDot={{ r: 5, strokeWidth: 2 }}
-                              connectNulls={false}
-                              dataKey={(row: ChartDisplayRow) => row.processedValues[series.key] ?? null}
-                              dot={showRawDots ? (
-                                <SeriesDot
-                                  currentSessionId={currentSessionId}
-                                  onActivateSession={onActiveSessionIdChange}
-                                  outlierMode={outlierMode}
-                                  seriesKey={series.key}
-                                />
-                              ) : false}
-                              isAnimationActive={false}
-                              key={`${series.key}:raw-values`}
-                              name={`${series.label} ${PROJECT_METRICS_CHART_OVERLAY_META["raw-values"].label}`}
-                              stroke={series.color}
-                              strokeOpacity={0.3}
-                              strokeWidth={1.4}
-                              type="monotone"
-                              yAxisId={series.key}
-                            />
-                          ))
-                        : null}
-                      <Brush
-                        dataKey="index"
-                        endIndex={clampedWindow.endIndex}
-                        fill="color-mix(in srgb, var(--background) 88%, transparent)"
-                        height={26}
-                        onChange={(nextWindow) => {
-                          if (
-                            typeof nextWindow?.startIndex !== "number"
-                            || typeof nextWindow?.endIndex !== "number"
-                          ) {
-                            return;
-                          }
-                          setZoomWindow(clampZoomWindow(nextWindow, viewModel.chartRows.length));
-                        }}
-                        startIndex={clampedWindow.startIndex}
-                        stroke="color-mix(in srgb, currentColor 35%, transparent)"
-                        tickFormatter={(value) => chartAnalysis.chartData[Number(value)]?.label ?? ""}
-                        travellerWidth={10}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-
-                {selectedRow && !selectedRowVisible ? (
+                {hasPartialData ? (
                   <Alert>
-                    <Search className="size-4" />
-                    <AlertTitle>Selected session is outside the current window</AlertTitle>
-                    <AlertDescription className="flex flex-wrap items-center gap-2">
-                      <span>Inspector stays synced, but the selected point is not visible on the current chart window.</span>
-                      <Button
-                        onClick={() => {
-                          setZoomWindow(focusWindowAroundIndex(viewModel.chartRows.length, Math.max(4, windowSize), selectedRow.index));
-                        }}
-                        size="xs"
-                        type="button"
-                        variant="outline"
-                      >
-                        Bring into view
-                      </Button>
+                    <AlertTriangle className="size-4" />
+                    <AlertTitle>Partial data remains visible</AlertTitle>
+                    <AlertDescription>
+                      {windowSummaryModel.partialCount > 0
+                        ? `${windowSummaryModel.partialCount} sessions have partial metric coverage. `
+                        : ""}
+                      {windowSummaryModel.unknownCount > 0
+                        ? `${windowSummaryModel.unknownCount} sessions remain in unknown scope. `
+                        : ""}
+                      {windowSummaryModel.degradedCount > 0
+                        ? `${windowSummaryModel.degradedCount} sessions come from degraded project identity.`
+                        : ""}
                     </AlertDescription>
                   </Alert>
                 ) : null}
-              </>
-            )}
+
+                {visibleSeries.length === 0 ? (
+                  <Alert>
+                    <Search className="size-4" />
+                    <AlertTitle>No series selected</AlertTitle>
+                    <AlertDescription>Включите хотя бы одну curated series, чтобы построить summary chart.</AlertDescription>
+                  </Alert>
+                ) : !hasAvailableVisibleData ? (
+                  <Alert>
+                    <AlertTriangle className="size-4" />
+                    <AlertTitle>Visible window has no chartable values</AlertTitle>
+                    <AlertDescription>
+                      В текущем zoom-window активный режим `{activeModeMeta.label}` не даёт chartable values. Расширьте окно или включите другие метрики.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <>
+                    <div className="rounded-2xl border border-border/70 bg-[color:var(--accent-strong)]/8 px-3 py-2 text-xs text-muted-foreground">
+                      Primary line = {activeModeMeta.label}. Drag across the chart to zoom into an interval, use wheel to pan,
+                      and focus the marked anomalies first.
+                    </div>
+                    {selectionPreview ? (
+                      <div className="rounded-xl border border-[color:var(--accent-strong)]/35 bg-[color:var(--accent-strong)]/10 px-3 py-2 text-xs text-foreground">
+                        Selecting sessions {selectionPreview.startIndex + 1}-{selectionPreview.endIndex + 1}
+                        {" · "}
+                        {chartAnalysis.chartData[selectionPreview.startIndex]?.label ?? "n/a"}
+                        {" → "}
+                        {chartAnalysis.chartData[selectionPreview.endIndex]?.label ?? "n/a"}
+                      </div>
+                    ) : null}
+
+                    <div
+                      className="h-[32rem] w-full lg:h-[38rem] xl:h-[42rem]"
+                      data-testid="project-metrics-chart-surface"
+                      onWheel={handleChartWheel}
+                    >
+                      {visibleRows.length === 1 ? (
+                        <SingleSessionChartState
+                          chartMode={chartMode}
+                          row={visibleRows[0]}
+                          series={visibleSeries}
+                        />
+                      ) : (
+                        <ResponsiveContainer height="100%" width="100%">
+                          <LineChart
+                            className="cursor-crosshair"
+                            data={chartAnalysis.chartData}
+                            margin={{ top: 12, right: 24, bottom: 20, left: 8 }}
+                            onMouseDown={handleChartMouseDown}
+                            onMouseMove={handleChartMouseMove}
+                            onMouseUp={handleChartMouseUp}
+                          >
+                            <CartesianGrid stroke="currentColor" strokeDasharray="4 6" strokeOpacity={0.12} />
+                            {selectionPreview ? (
+                              <ReferenceArea
+                                fill="color-mix(in srgb, var(--accent-strong) 16%, transparent)"
+                                fillOpacity={0.8}
+                                ifOverflow="visible"
+                                stroke="color-mix(in srgb, var(--accent-strong) 50%, transparent)"
+                                strokeOpacity={0.9}
+                                x1={selectionPreview.startIndex}
+                                x2={selectionPreview.endIndex}
+                                yAxisId="preview"
+                              />
+                            ) : null}
+                            <XAxis
+                              allowDataOverflow
+                              dataKey="index"
+                              domain={[clampedWindow.startIndex, clampedWindow.endIndex]}
+                              minTickGap={24}
+                              stroke="currentColor"
+                              strokeOpacity={0.45}
+                              tickFormatter={(value) => chartAnalysis.chartData[Number(value)]?.label ?? ""}
+                              tick={{ fill: "currentColor", fontSize: 12 }}
+                              type="number"
+                            />
+                            <YAxis
+                              allowDataOverflow
+                              domain={computeSeriesDomain({
+                                analytics: chartAnalysis.seriesAnalytics,
+                                chartData: chartAnalysis.chartData.slice(clampedWindow.startIndex, clampedWindow.endIndex + 1),
+                                mode: chartMode,
+                                overlays: chartOverlays,
+                                seriesKeys: visibleSeriesKeys,
+                              })}
+                              hide
+                              yAxisId="preview"
+                            />
+                            {showProjectMedian
+                              ? visibleSeries.map((series) => {
+                                const stats = chartAnalysis.seriesAnalytics[series.key];
+                                if (!stats || stats.projectMedian == null) {
+                                  return null;
+                                }
+                                return (
+                                  <Fragment key={`${series.key}:project-median:overlay`}>
+                                    <ReferenceLine
+                                      ifOverflow="visible"
+                                      stroke="var(--background)"
+                                      strokeOpacity={0.96}
+                                      strokeWidth={6}
+                                      y={stats.projectMedian}
+                                      yAxisId={series.key}
+                                    />
+                                    <ReferenceLine
+                                      ifOverflow="visible"
+                                      label={{
+                                        fill: series.color,
+                                        fontSize: 11,
+                                        fontWeight: 700,
+                                        position: "insideTopRight",
+                                        value: `${series.shortLabel} ${PROJECT_METRICS_CHART_OVERLAY_META["project-median"].seriesLabelSuffix}`,
+                                      }}
+                                      stroke={series.color}
+                                      strokeDasharray="2 6"
+                                      strokeOpacity={0.95}
+                                      strokeWidth={2.2}
+                                      y={stats.projectMedian}
+                                      yAxisId={series.key}
+                                    />
+                                  </Fragment>
+                                );
+                              })
+                              : null}
+                            {visibleSeries.map((series) => (
+                              <YAxis
+                                allowDataOverflow
+                                domain={computeSeriesDomain({
+                                  analytics: chartAnalysis.seriesAnalytics,
+                                  chartData: chartAnalysis.chartData.slice(clampedWindow.startIndex, clampedWindow.endIndex + 1),
+                                  mode: chartMode,
+                                  overlays: chartOverlays,
+                                  seriesKeys: [series.key],
+                                })}
+                                hide
+                                key={series.key}
+                                yAxisId={series.key}
+                              />
+                            ))}
+                            <Tooltip
+                              content={(props) => (
+                                <SummaryChartTooltip
+                                  {...props}
+                                  analytics={chartAnalysis.seriesAnalytics}
+                                  chartMode={chartMode}
+                                  chartOverlays={chartOverlays}
+                                  outlierMode={outlierMode}
+                                  series={visibleSeries}
+                                />
+                              )}
+                            />
+                            {visibleSeries.map((series) => (
+                              <Fragment key={`${series.key}:${chartMode}:primary`}>
+                                <Line
+                                  connectNulls={false}
+                                  dataKey={(row: ChartDisplayRow) => getChartModeValue(row, chartMode, series.key)}
+                                  dot={false}
+                                  isAnimationActive={false}
+                                  name={`${series.label} ${activeModeMeta.label} mask`}
+                                  stroke="var(--background)"
+                                  strokeOpacity={0.96}
+                                  strokeWidth={7}
+                                  type="monotone"
+                                  yAxisId={series.key}
+                                />
+                                <Line
+                                  activeDot={{ r: 6, strokeWidth: 2 }}
+                                  connectNulls={false}
+                                  dataKey={(row: ChartDisplayRow) => getChartModeValue(row, chartMode, series.key)}
+                                  dot={showPrimaryDots ? (
+                                    <SeriesDot
+                                      currentSessionId={currentSessionId}
+                                      onActivateSession={onActiveSessionIdChange}
+                                      outlierMode={outlierMode}
+                                      seriesKey={series.key}
+                                    />
+                                  ) : false}
+                                  isAnimationActive={false}
+                                  name={`${series.label} ${activeModeMeta.label}`}
+                                  stroke={series.color}
+                                  strokeOpacity={1}
+                                  strokeWidth={3.2}
+                                  type="monotone"
+                                  yAxisId={series.key}
+                                />
+                              </Fragment>
+                            ))}
+                            {showRawValues
+                              ? visibleSeries.map((series) => (
+                                <Line
+                                  activeDot={{ r: 5, strokeWidth: 2 }}
+                                  connectNulls={false}
+                                  dataKey={(row: ChartDisplayRow) => row.processedValues[series.key] ?? null}
+                                  dot={showRawDots ? (
+                                    <SeriesDot
+                                      currentSessionId={currentSessionId}
+                                      onActivateSession={onActiveSessionIdChange}
+                                      outlierMode={outlierMode}
+                                      seriesKey={series.key}
+                                    />
+                                  ) : false}
+                                  isAnimationActive={false}
+                                  key={`${series.key}:raw-values`}
+                                  name={`${series.label} ${PROJECT_METRICS_CHART_OVERLAY_META["raw-values"].label}`}
+                                  stroke={series.color}
+                                  strokeOpacity={0.3}
+                                  strokeWidth={1.4}
+                                  type="monotone"
+                                  yAxisId={series.key}
+                                />
+                              ))
+                              : null}
+                            <Brush
+                              dataKey="index"
+                              endIndex={clampedWindow.endIndex}
+                              fill="color-mix(in srgb, var(--background) 88%, transparent)"
+                              height={26}
+                              onChange={(nextWindow) => {
+                                if (
+                                  typeof nextWindow?.startIndex !== "number"
+                                  || typeof nextWindow?.endIndex !== "number"
+                                ) {
+                                  return;
+                                }
+                                setZoomWindow(clampZoomWindow(nextWindow, viewModel.chartRows.length));
+                              }}
+                              startIndex={clampedWindow.startIndex}
+                              stroke="color-mix(in srgb, currentColor 35%, transparent)"
+                              tickFormatter={(value) => chartAnalysis.chartData[Number(value)]?.label ?? ""}
+                              travellerWidth={10}
+                            />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      )}
+                    </div>
+
+                    {selectedRow && !selectedRowVisible ? (
+                      <Alert>
+                        <Search className="size-4" />
+                        <AlertTitle>Selected session is outside the current window</AlertTitle>
+                        <AlertDescription className="flex flex-wrap items-center gap-2">
+                          <span>Inspector stays synced, but the selected point is not visible on the current chart window.</span>
+                          <Button
+                            onClick={() => {
+                              setZoomWindow(focusWindowAroundIndex(viewModel.chartRows.length, Math.max(4, windowSize), selectedRow.index));
+                            }}
+                            size="xs"
+                            type="button"
+                            variant="outline"
+                          >
+                            Bring into view
+                          </Button>
+                        </AlertDescription>
+                      </Alert>
+                    ) : null}
+
+                    <AnomalyPanel
+                      anomalies={windowSummaryModel.anomalyHighlights}
+                      onFocusSession={focusSession}
+                    />
+                  </>
+                )}
+              </div>
+            </ScrollArea>
           </CardContent>
         </Card>
       </div>
@@ -1238,7 +1419,233 @@ function ProjectMetricsContent({
   );
 }
 
-function OverviewPanel({ viewModel }: { viewModel: ProjectMetricsViewModel }) {
+function buildWindowSummaryModel({
+  chartRows,
+  rows,
+  series,
+  sessions,
+}: {
+  chartRows: ChartDisplayRow[];
+  rows: ProjectMetricsChartRow[];
+  series: ProjectMetricSeries[];
+  sessions: ProjectMetricsViewModel["sessions"];
+}): WindowSummaryModel {
+  const sessionsById = new Map(sessions.map((session) => [session.sessionId, session]));
+  const completedCount = sessions.filter((session) => session.outcome === "completed").length;
+  const degradedCount = sessions.filter((session) => session.projectState === "degraded").length;
+  const unknownCount = sessions.filter((session) => session.sessionScope === "unknown").length;
+  const partialCount = rows.reduce((count, row) => {
+    const coverage = series.length > 0 ? dominantCoverage(row, series) : "known";
+    return count + (coverage === "partial" ? 1 : 0);
+  }, 0);
+  const completionRate = formatRatio(completedCount, sessions.length);
+  const tokenDrift = describeSeriesDelta(chartRows, "tokens");
+  const durationDrift = describeSeriesDelta(chartRows, "duration");
+  const anomalies = buildWindowAnomalies({
+    chartRows,
+    series,
+    sessionsById,
+  });
+
+  return {
+    anomalyCount: anomalies.length,
+    anomalyHighlights: anomalies.slice(0, 6),
+    cards: [
+      {
+        hint: "sessions visible in the current chart window",
+        label: "Sessions",
+        tone: "accent",
+        value: new Intl.NumberFormat("ru-RU").format(sessions.length),
+      },
+      {
+        hint: `${completedCount} completed sessions in window`,
+        label: "Completion",
+        tone: completionRate.tone,
+        value: completionRate.value,
+      },
+      {
+        hint: "tokens from the start to the end of the window",
+        label: "Token drift",
+        tone: tokenDrift.tone,
+        value: tokenDrift.value,
+      },
+      {
+        hint: "duration from the start to the end of the window",
+        label: "Duration drift",
+        tone: durationDrift.tone,
+        value: durationDrift.value,
+      },
+      {
+        hint: anomalies.length > 0 ? anomalies[0].reasons[0] : "no anomalies flagged in the current view",
+        label: "Anomalies",
+        tone: anomalies.length > 0 ? "danger" : "default",
+        value: anomalies.length > 0 ? `${anomalies.length} flagged` : "Stable",
+      },
+      {
+        hint: describeCoverageHint(partialCount, unknownCount, degradedCount),
+        label: "Coverage",
+        tone: partialCount > 0 || unknownCount > 0 || degradedCount > 0 ? "danger" : "default",
+        value: describeCoverageValue(partialCount, unknownCount, degradedCount),
+      },
+    ],
+    completedCount,
+    degradedCount,
+    partialCount,
+    totalSessions: sessions.length,
+    unknownCount,
+  };
+}
+
+function buildWindowAnomalies({
+  chartRows,
+  series,
+  sessionsById,
+}: {
+  chartRows: ChartDisplayRow[];
+  series: ProjectMetricSeries[];
+  sessionsById: Map<string, ProjectMetricsViewModel["sessions"][number]>;
+}): WindowAnomalySummary[] {
+  const anomalies: WindowAnomalySummary[] = [];
+
+  for (const chartRow of chartRows) {
+    const session = sessionsById.get(chartRow.sessionId);
+    const reasons: string[] = [];
+
+    for (const item of series) {
+      if (chartRow.outlierFlags[item.key]) {
+        reasons.push(`${item.shortLabel} outlier`);
+      }
+    }
+
+    if (session?.projectState === "degraded") {
+      reasons.push("degraded project identity");
+    }
+    if (session?.sessionScope === "unknown") {
+      reasons.push("unknown scope");
+    }
+
+    const coverage = session?.coverage ?? (series.length > 0 ? dominantCoverage(chartRow.row, series) : "known");
+    if (coverage === "partial") {
+      reasons.push("partial metric coverage");
+    } else if (coverage === "unknown") {
+      reasons.push("missing chart values");
+    }
+
+    if (reasons.length === 0) {
+      continue;
+    }
+
+    anomalies.push({
+      coverage,
+      label: chartRow.row.label,
+      reasons: Array.from(new Set(reasons)).slice(0, 3),
+      sessionId: chartRow.sessionId,
+      startedAt: session?.startedAt ?? null,
+    });
+  }
+
+  anomalies.sort((left, right) => {
+    return (
+      right.reasons.length - left.reasons.length
+      || (right.startedAt ?? "").localeCompare(left.startedAt ?? "")
+      || right.sessionId.localeCompare(left.sessionId)
+    );
+  });
+
+  return anomalies;
+}
+
+function describeSeriesDelta(
+  chartRows: ChartDisplayRow[],
+  seriesKey: ProjectMetricSeriesKey,
+): { tone: WindowInsightTone; value: string } {
+  const values = chartRows
+    .map((row) => row.processedValues[seriesKey])
+    .filter((value): value is number => value != null);
+
+  if (values.length < 2) {
+    return {
+      tone: "default",
+      value: "n/a",
+    };
+  }
+
+  const first = values[0];
+  const last = values.at(-1) ?? first;
+  if (Math.abs(first) < 0.0001) {
+    return {
+      tone: last > 0 ? "accent" : "default",
+      value: last > 0 ? "new activity" : "flat",
+    };
+  }
+
+  const delta = ((last - first) / Math.abs(first)) * 100;
+  return {
+    tone: delta >= 25 ? "danger" : Math.abs(delta) >= 8 ? "accent" : "default",
+    value: `${delta > 0 ? "+" : ""}${delta.toFixed(Math.abs(delta) >= 20 ? 0 : 1)}%`,
+  };
+}
+
+function formatRatio(completedCount: number, totalCount: number): { tone: WindowInsightTone; value: string } {
+  if (totalCount === 0) {
+    return {
+      tone: "default",
+      value: "n/a",
+    };
+  }
+
+  const percentage = (completedCount / totalCount) * 100;
+  return {
+    tone: percentage >= 85 ? "accent" : percentage < 60 ? "danger" : "default",
+    value: `${Math.round(percentage)}%`,
+  };
+}
+
+function describeCoverageValue(partialCount: number, unknownCount: number, degradedCount: number) {
+  if (partialCount === 0 && unknownCount === 0 && degradedCount === 0) {
+    return "Known";
+  }
+
+  const fragments = [];
+  if (partialCount > 0) {
+    fragments.push(`${partialCount} partial`);
+  }
+  if (unknownCount > 0) {
+    fragments.push(`${unknownCount} unknown`);
+  }
+  if (degradedCount > 0) {
+    fragments.push(`${degradedCount} degraded`);
+  }
+  return fragments.join(" · ");
+}
+
+function describeCoverageHint(partialCount: number, unknownCount: number, degradedCount: number) {
+  if (partialCount === 0 && unknownCount === 0 && degradedCount === 0) {
+    return "all visible sessions have known coverage";
+  }
+
+  const fragments = [];
+  if (partialCount > 0) {
+    fragments.push("partial metrics");
+  }
+  if (unknownCount > 0) {
+    fragments.push("unknown scope");
+  }
+  if (degradedCount > 0) {
+    fragments.push("degraded project identity");
+  }
+  return fragments.join(" · ");
+}
+
+function OverviewPanel({
+  anomalies,
+  cards,
+  totalSessions,
+}: {
+  anomalies: WindowAnomalySummary[];
+  cards: WindowInsightCard[];
+  totalSessions: number;
+}) {
   return (
     <div
       className="rounded-2xl border border-border/70 bg-muted/10 p-3"
@@ -1246,16 +1653,20 @@ function OverviewPanel({ viewModel }: { viewModel: ProjectMetricsViewModel }) {
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-          Overview
+          Window pulse
         </div>
-        <div className="flex flex-wrap gap-1 text-xs text-muted-foreground">
-          {viewModel.degraded ? <Badge variant="outline">degraded project</Badge> : null}
-          {viewModel.hasUnknownScope ? <Badge variant="outline">unknown scope present</Badge> : null}
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span>{totalSessions} sessions in view</span>
+          {anomalies.length > 0 ? (
+            <Badge className="h-5 px-2 text-[10px]" variant="outline">
+              {anomalies.length} anomaly{anomalies.length === 1 ? "" : "ies"}
+            </Badge>
+          ) : null}
         </div>
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        {viewModel.summaryCards.map((card) => (
+        {cards.map((card) => (
           <div className="rounded-xl border border-border/70 bg-background/80 px-3 py-2.5" key={card.label}>
             <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
               {card.label}
@@ -1264,12 +1675,101 @@ function OverviewPanel({ viewModel }: { viewModel: ProjectMetricsViewModel }) {
               className={cn(
                 "mt-1.5 text-base font-semibold tracking-[-0.03em] text-foreground",
                 card.tone === "accent" && "text-[color:var(--accent-strong)]",
-                card.tone === "danger" && "text-rose-300",
+                card.tone === "danger" && "text-rose-700",
               )}
             >
               {card.value}
             </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {card.hint}
+            </div>
           </div>
+        ))}
+      </div>
+
+      {anomalies.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {anomalies.slice(0, 3).map((anomaly) => (
+            <div
+              className="inline-flex min-w-0 items-center gap-2 rounded-full border border-rose-200/80 bg-rose-50 px-3 py-1.5 text-xs text-rose-800"
+              key={anomaly.sessionId}
+            >
+              <span className="font-mono">{anomaly.sessionId.slice(0, 8)}</span>
+              <span className="truncate">{anomaly.reasons[0]}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AnomalyPanel({
+  anomalies,
+  onFocusSession,
+}: {
+  anomalies: WindowAnomalySummary[];
+  onFocusSession: (sessionId: string) => void;
+}) {
+  if (anomalies.length === 0) {
+    return (
+      <div
+        className="rounded-2xl border border-border/70 bg-background/80 p-3"
+        data-testid="project-metrics-anomaly-panel"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              Anomaly review
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              В текущем окне явных anomaly markers не найдено.
+            </div>
+          </div>
+          <Badge className="h-5 px-2 text-[10px]" variant="outline">
+            0 flagged
+          </Badge>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="rounded-2xl border border-border/70 bg-background/80 p-3"
+      data-testid="project-metrics-anomaly-panel"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+            Anomaly review
+          </div>
+          <div className="mt-1 text-xs text-muted-foreground">
+            Начинайте разбор с этих сессий: они выбиваются по метрикам или качеству данных.
+          </div>
+        </div>
+        <Badge className="h-5 px-2 text-[10px]" variant="outline">
+          {anomalies.length} flagged
+        </Badge>
+      </div>
+
+      <div className="mt-3 grid gap-2 xl:grid-cols-2">
+        {anomalies.map((anomaly) => (
+          <button
+            className="rounded-xl border border-border/70 bg-muted/15 px-3 py-3 text-left transition hover:bg-muted/30"
+            key={anomaly.sessionId}
+            onClick={() => onFocusSession(anomaly.sessionId)}
+            type="button"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-mono text-xs text-foreground">{anomaly.sessionId.slice(0, 8)}</span>
+              <CoveragePill coverage={anomaly.coverage} />
+            </div>
+            <div className="mt-2 text-sm font-medium text-foreground">{anomaly.label}</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {anomaly.reasons.join(" · ")}
+            </div>
+          </button>
         ))}
       </div>
     </div>
@@ -1400,7 +1900,7 @@ function ProjectMetricsInspector({
 
   return (
     <Card
-      className={cn(SURFACE_CARD_CLASS, "min-h-0")}
+      className={cn(SURFACE_CARD_CLASS, "flex h-full min-h-0 flex-col")}
       data-testid="project-metrics-inspector"
       size="sm"
     >
@@ -1425,211 +1925,268 @@ function ProjectMetricsInspector({
         </div>
       </CardHeader>
 
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-3 pt-3">
-        {selectedRow ? (
-          <>
-            <div className="rounded-2xl border border-border/70 bg-muted/10 p-3">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                    Selected point
-                  </div>
-                  <div className="text-base font-semibold text-foreground">{selectedRow.label}</div>
-                  <div className="font-mono text-xs text-muted-foreground">{selectedRow.sessionId}</div>
-                </div>
-                {series.length > 0 ? <CoveragePill coverage={dominantCoverage(selectedRow, series)} /> : null}
-              </div>
-
-              {selectedSessionItem ? (
-                <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                  <MetaItem label="Outcome" value={selectedSessionItem.outcome} />
-                  <MetaItem label="Duration" value={selectedSessionItem.duration} />
-                  <MetaItem label="Tokens" value={selectedSessionItem.tokens} />
-                  <MetaItem label="Tool calls" value={selectedSessionItem.toolCalls} />
-                  <MetaItem label="Failures" value={selectedSessionItem.failures} />
-                  <MetaItem label="Project state" value={selectedSessionItem.projectState} />
-                  <MetaItem label="Scope" value={describeScopeBadge(selectedSessionItem.sessionScope)} />
-                </dl>
-              ) : null}
-            </div>
-
-            {series.length > 0 ? (
-              <div className="rounded-2xl border border-border/70 bg-background/80 p-3">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                  Metric snapshot
-                </div>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                  {series.map((item) => {
-                    const point = getProjectMetricPoint(selectedRow, item.key);
-                    const primaryValue = selectedChartRow ? getChartModeValue(selectedChartRow, chartMode, item.key) : null;
-                    const rawValue = selectedChartRow?.processedValues[item.key] ?? null;
-                    const stats = seriesAnalytics[item.key];
-                    const rawValueChanged = !areMetricValuesEqual(point.value, rawValue);
-                    return (
-                      <div className="rounded-xl border border-border/70 bg-muted/20 p-3" key={item.key}>
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-                            <span className="size-2.5 rounded-full" style={{ backgroundColor: item.color }} />
-                            {item.shortLabel}
-                          </span>
-                          <CoveragePill coverage={point.coverage} />
-                        </div>
-                        <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
-                          {formatProjectMetricSeriesValue(item.key, primaryValue)}
-                        </div>
-                        <div className="mt-1 space-y-1 text-xs text-muted-foreground">
-                          <div>{modeMeta.primaryValueLabel}</div>
-                          <div>Session metric: {point.formattedValue}</div>
-                          {showRawValues ? (
-                            <div>
-                              {PROJECT_METRICS_CHART_OVERLAY_META["raw-values"].valueLabel}: {formatProjectMetricSeriesValue(item.key, rawValue)}
-                            </div>
-                          ) : null}
-                          {showProjectMedian && stats?.projectMedian != null ? (
-                            <div>
-                              {PROJECT_METRICS_CHART_OVERLAY_META["project-median"].valueLabel}: {formatProjectMetricSeriesValue(item.key, stats.projectMedian)}
-                            </div>
-                          ) : null}
-                          {!showRawValues && rawValueChanged ? (
-                            <div>
-                              Chart raw differs under {describeOutlierMode(outlierMode).toLowerCase()}.
-                            </div>
-                          ) : null}
-                          {selectedChartRow?.outlierFlags[item.key] ? (
-                            <div>
-                              Outlier: {describeOutlierMode(outlierMode)}
-                            </div>
-                          ) : null}
-                        </div>
+      <CardContent className="min-h-0 flex-1 pt-3">
+        <ScrollArea className="h-full min-h-0" data-testid="project-metrics-inspector-scroll">
+          <div className="flex flex-col gap-3 pr-3">
+            {selectedRow ? (
+              <>
+                <div className="rounded-2xl border border-border/70 bg-muted/10 p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                        Selected point
                       </div>
-                    );
-                  })}
+                      <div className="text-base font-semibold text-foreground">{selectedRow.label}</div>
+                      <div className="font-mono text-xs text-muted-foreground">{selectedRow.sessionId}</div>
+                    </div>
+                    {series.length > 0 ? <CoveragePill coverage={dominantCoverage(selectedRow, series)} /> : null}
+                  </div>
+
+                  {selectedSessionItem ? (
+                    <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                      <MetaItem label="Outcome" value={selectedSessionItem.outcome} />
+                      <MetaItem label="Duration" value={selectedSessionItem.duration} />
+                      <MetaItem label="Tokens" value={selectedSessionItem.tokens} />
+                      <MetaItem label="Tool calls" value={selectedSessionItem.toolCalls} />
+                      <MetaItem label="Failures" value={selectedSessionItem.failures} />
+                      <MetaItem label="Project state" value={selectedSessionItem.projectState} />
+                      <MetaItem label="Scope" value={describeScopeBadge(selectedSessionItem.sessionScope)} />
+                    </dl>
+                  ) : null}
                 </div>
-              </div>
+
+                {series.length > 0 ? (
+                  <div className="rounded-2xl border border-border/70 bg-background/80 p-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                      Metric snapshot
+                    </div>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {series.map((item) => {
+                        const point = getProjectMetricPoint(selectedRow, item.key);
+                        const primaryValue = selectedChartRow ? getChartModeValue(selectedChartRow, chartMode, item.key) : null;
+                        const rawValue = selectedChartRow?.processedValues[item.key] ?? null;
+                        const stats = seriesAnalytics[item.key];
+                        const rawValueChanged = !areMetricValuesEqual(point.value, rawValue);
+                        return (
+                          <div className="rounded-xl border border-border/70 bg-muted/20 p-3" key={item.key}>
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                                <span className="size-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                                {item.shortLabel}
+                              </span>
+                              <CoveragePill coverage={point.coverage} />
+                            </div>
+                            <div className="mt-2 text-lg font-semibold tracking-[-0.03em] text-foreground">
+                              {formatProjectMetricSeriesValue(item.key, primaryValue)}
+                            </div>
+                            <div className="mt-1 space-y-1 text-xs text-muted-foreground">
+                              <div>{modeMeta.primaryValueLabel}</div>
+                              <div>Session metric: {point.formattedValue}</div>
+                              {showRawValues ? (
+                                <div>
+                                  {PROJECT_METRICS_CHART_OVERLAY_META["raw-values"].valueLabel}: {formatProjectMetricSeriesValue(item.key, rawValue)}
+                                </div>
+                              ) : null}
+                              {showProjectMedian && stats?.projectMedian != null ? (
+                                <div>
+                                  {PROJECT_METRICS_CHART_OVERLAY_META["project-median"].valueLabel}: {formatProjectMetricSeriesValue(item.key, stats.projectMedian)}
+                                </div>
+                              ) : null}
+                              {!showRawValues && rawValueChanged ? (
+                                <div>
+                                  Chart raw differs under {describeOutlierMode(outlierMode).toLowerCase()}.
+                                </div>
+                              ) : null}
+                              {selectedChartRow?.outlierFlags[item.key] ? (
+                                <div>
+                                  Outlier: {describeOutlierMode(outlierMode)}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <Alert>
+                    <Search className="size-4" />
+                    <AlertTitle>No active series in the chart</AlertTitle>
+                    <AlertDescription>Enable at least one series to populate the metric snapshot.</AlertDescription>
+                  </Alert>
+                )}
+              </>
             ) : (
               <Alert>
                 <Search className="size-4" />
-                <AlertTitle>No active series in the chart</AlertTitle>
-                <AlertDescription>Enable at least one series to populate the metric snapshot.</AlertDescription>
+                <AlertTitle>No active point</AlertTitle>
+                <AlertDescription>Наведите курсор на chart point или выберите сессию ниже.</AlertDescription>
               </Alert>
             )}
-          </>
-        ) : (
-          <Alert>
-            <Search className="size-4" />
-            <AlertTitle>No active point</AlertTitle>
-            <AlertDescription>Наведите курсор на chart point или выберите сессию ниже.</AlertDescription>
-          </Alert>
-        )}
 
-        <div className="rounded-2xl border border-border/70 bg-background/80 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                Used skills
-              </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                Rollup по явным usage markers за выбранное окно.
-              </div>
-            </div>
-            <CoveragePill coverage={usedSkillsCoverage} />
-          </div>
-
-          {usedSkills.length > 0 ? (
-            <div className="mt-3 flex flex-col gap-2" data-testid="project-metrics-used-skills">
-              {usedSkills.map((skill) => (
-                <div
-                  className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/15 px-3 py-2"
-                  key={skill.identifier}
-                >
-                  <div className="min-w-0">
-                    <div className="truncate font-mono text-xs text-foreground">{skill.identifier}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {skill.sessionCount} sessions · {skill.usageCount} usage
-                    </div>
+            <div className="rounded-2xl border border-border/70 bg-background/80 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    Used skills
                   </div>
-                  <CoveragePill coverage={skill.coverage} />
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Rollup по явным usage markers за выбранное окно.
+                  </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="mt-3 rounded-xl border border-dashed border-border/70 bg-muted/10 px-3 py-3 text-xs text-muted-foreground">
-              {usedSkillsCoverage === "unknown"
-                ? "Явные skill usage markers в выбранном окне не найдены."
-                : "Used skills rollup пуст для текущего окна."}
-            </div>
-          )}
-        </div>
-
-        <div className="min-h-0 rounded-2xl border border-border/70 bg-background/80 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                Contributing sessions
+                <CoveragePill coverage={usedSkillsCoverage} />
               </div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                Hover/click on the chart and inspector selection remain aligned.
-              </div>
-            </div>
-            <Badge className="h-5 px-2 text-[10px]" variant="outline">
-              {sessions.length} total
-            </Badge>
-          </div>
 
-          <ScrollArea className="mt-3 h-[min(48vh,30rem)]">
-            <div className="flex flex-col gap-2 pr-3">
-              {sessions.map((session) => {
-                const selected = session.sessionId === selectedRow?.sessionId;
-                const opened = session.sessionId === currentSessionId;
-                return (
-                  <div
-                    className={cn(
-                      "rounded-xl border border-border/70 bg-background/70 p-3",
-                      selected && "border-foreground/20 bg-muted/50",
-                      opened && "ring-1 ring-foreground/15",
-                    )}
-                    key={session.sessionId}
-                  >
-                    <div className="flex items-start gap-2">
-                      <button
-                        className="min-w-0 flex-1 text-left"
-                        onClick={() => onFocusSession(session.sessionId)}
-                        type="button"
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-mono text-xs text-foreground">{session.sessionId.slice(0, 8)}</span>
-                          <CoveragePill coverage={session.coverage} />
+              {usedSkills.length > 0 ? (
+                <div className="mt-3 flex flex-col gap-2" data-testid="project-metrics-used-skills">
+                  {usedSkills.map((skill) => (
+                    <div
+                      className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/15 px-3 py-2"
+                      key={skill.identifier}
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-mono text-xs text-foreground">{skill.identifier}</div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {skill.sessionCount} sessions · {skill.usageCount} usage
                         </div>
-                        <div className="mt-2 text-xs text-muted-foreground">
-                          {session.startedAt ?? "n/a"} · {session.outcome} · {describeScopeBadge(session.sessionScope)}
-                        </div>
-                        <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                          <MetaItem label="Duration" value={session.duration} />
-                          <MetaItem label="Tokens" value={session.tokens} />
-                          <MetaItem label="Tool calls" value={session.toolCalls} />
-                          <MetaItem label="Failures" value={session.failures} />
-                        </dl>
-                      </button>
-                      <Button
-                        onClick={() => {
-                          onFocusSession(session.sessionId);
-                          onOpenSession(session.sessionId);
-                        }}
-                        size="xs"
-                        type="button"
-                        variant="outline"
-                      >
-                        Open
-                      </Button>
+                      </div>
+                      <CoveragePill coverage={skill.coverage} />
                     </div>
-                  </div>
-                );
-              })}
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-3 rounded-xl border border-dashed border-border/70 bg-muted/10 px-3 py-3 text-xs text-muted-foreground">
+                  {usedSkillsCoverage === "unknown"
+                    ? "Явные skill usage markers в выбранном окне не найдены."
+                    : "Used skills rollup пуст для текущего окна."}
+                </div>
+              )}
             </div>
-          </ScrollArea>
-        </div>
+
+            <div className="rounded-2xl border border-border/70 bg-background/80 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                    Contributing sessions
+                  </div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    Hover/click on the chart and inspector selection remain aligned.
+                  </div>
+                </div>
+                <Badge className="h-5 px-2 text-[10px]" variant="outline">
+                  {sessions.length} total
+                </Badge>
+              </div>
+
+              <div className="mt-3 max-h-[24rem] overflow-y-auto pr-1">
+                <div className="flex flex-col gap-2">
+                {sessions.map((session) => {
+                  const selected = session.sessionId === selectedRow?.sessionId;
+                  const opened = session.sessionId === currentSessionId;
+                  return (
+                    <div
+                      className={cn(
+                        "rounded-xl border border-border/70 bg-background/70 p-3",
+                        selected && "border-foreground/20 bg-muted/50",
+                        opened && "ring-1 ring-foreground/15",
+                      )}
+                      key={session.sessionId}
+                    >
+                      <div className="flex items-start gap-2">
+                        <button
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() => onFocusSession(session.sessionId)}
+                          type="button"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono text-xs text-foreground">{session.sessionId.slice(0, 8)}</span>
+                            <CoveragePill coverage={session.coverage} />
+                          </div>
+                          <div className="mt-2 text-xs text-muted-foreground">
+                            {session.startedAt ?? "n/a"} · {session.outcome} · {describeScopeBadge(session.sessionScope)}
+                          </div>
+                          <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                            <MetaItem label="Duration" value={session.duration} />
+                            <MetaItem label="Tokens" value={session.tokens} />
+                            <MetaItem label="Tool calls" value={session.toolCalls} />
+                            <MetaItem label="Failures" value={session.failures} />
+                          </dl>
+                        </button>
+                        <Button
+                          onClick={() => {
+                            onFocusSession(session.sessionId);
+                            onOpenSession(session.sessionId);
+                          }}
+                          size="xs"
+                          type="button"
+                          variant="outline"
+                        >
+                          Open
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </ScrollArea>
       </CardContent>
     </Card>
+  );
+}
+
+function SingleSessionChartState({
+  chartMode,
+  row,
+  series,
+}: {
+  chartMode: ProjectMetricsChartMode;
+  row: ProjectMetricsChartRow;
+  series: ProjectMetricSeries[];
+}) {
+  const modeMeta = PROJECT_METRICS_CHART_MODE_META[chartMode];
+
+  return (
+    <div
+      className="flex h-full flex-col justify-between rounded-2xl border border-dashed border-border/70 bg-muted/10 p-6"
+      data-testid="project-metrics-single-session-state"
+    >
+      <div className="space-y-2">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          Single-session window
+        </div>
+        <div className="text-2xl font-semibold tracking-[-0.03em] text-foreground">{row.label}</div>
+        <div className="max-w-2xl text-sm text-muted-foreground">
+          В текущем окне только одна сессия, поэтому вместо линии динамики показан её срез. Расширьте window,
+          чтобы увидеть полноценный trend и anomaly spread.
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {series.map((item) => {
+          const point = getProjectMetricPoint(row, item.key);
+          return (
+            <div className="rounded-xl border border-border/70 bg-background/80 p-4" key={item.key}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  <span className="size-2.5 rounded-full" style={{ backgroundColor: item.color }} />
+                  {item.shortLabel}
+                </span>
+                <CoveragePill coverage={point.coverage} />
+              </div>
+              <div className="mt-3 text-xl font-semibold tracking-[-0.03em] text-foreground">
+                {point.formattedValue}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {modeMeta.primaryValueLabel} is not meaningful with a single point.
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -1758,6 +2315,8 @@ function describeRangePreset(preset: ProjectMetricsRangePreset) {
   switch (preset) {
     case "7d":
       return "Last 7 days";
+    case "14d":
+      return "Last 14 days";
     case "30d":
       return "Last 30 days";
     case "90d":

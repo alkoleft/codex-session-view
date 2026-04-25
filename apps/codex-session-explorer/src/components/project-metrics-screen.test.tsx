@@ -6,8 +6,17 @@ import type { ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/components/ui/scroll-area", () => ({
-  ScrollArea: ({ children, className }: { children: ReactNode; className?: string }) => (
-    <div className={className}>{children}</div>
+  ScrollArea: ({
+    children,
+    className,
+    ...props
+  }: {
+    children: ReactNode;
+    className?: string;
+  } & React.HTMLAttributes<HTMLDivElement>) => (
+    <div className={className} {...props}>
+      {children}
+    </div>
   ),
 }));
 
@@ -300,6 +309,15 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByText("Summary chart")).toBeTruthy();
     expect(screen.getByTestId("project-metrics-toolbar")).toBeTruthy();
     expect(screen.getByTestId("project-metrics-inspector")).toBeTruthy();
+    expect(screen.queryByTestId("project-metrics-analytics-controls")).toBeNull();
+    expect(screen.getByTestId("project-metrics-overview-panel")).toBeTruthy();
+    expect(screen.getByText("Last 14 days")).toBeTruthy();
+    expect(screen.getByText("Partial data remains visible")).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-anomaly-panel")).toBeTruthy();
+    expect(screen.getByText("Used skills")).toBeTruthy();
+    expect(screen.getByText("openspec-apply-change")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Chart settings" }));
     expect(screen.getByTestId("project-metrics-analytics-controls")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Trend" }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: "Moving average" }).getAttribute("aria-pressed")).toBe("false");
@@ -308,8 +326,6 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByRole("button", { name: "Project median" }).getAttribute("aria-pressed")).toBe("false");
     expect(screen.getByTestId("project-metrics-mode-help").textContent).toContain("Theil-Sen");
     expect(screen.getAllByText(/Raw values:/i).length).toBeGreaterThan(0);
-    expect(screen.getByText("Used skills")).toBeTruthy();
-    expect(screen.getByText("openspec-apply-change")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Moving median" }));
     expect(screen.getByRole("button", { name: "Moving median" }).getAttribute("aria-pressed")).toBe("true");
@@ -331,10 +347,6 @@ describe("ProjectMetricsScreen", () => {
     expect(derivedToggle.getAttribute("aria-pressed")).toBe("false");
     await user.click(derivedToggle);
     expect(derivedToggle.getAttribute("aria-pressed")).toBe("true");
-
-    expect(screen.queryByTestId("project-metrics-overview-panel")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Overview" }));
-    expect(screen.getByTestId("project-metrics-overview-panel")).toBeTruthy();
 
     expect(screen.getByText("Sessions 1-16 of 16")).toBeTruthy();
     expect(screen.getByText("Showing 16 of 16 sessions")).toBeTruthy();
@@ -369,6 +381,81 @@ describe("ProjectMetricsScreen", () => {
 
     await user.click(screen.getByRole("button", { name: "Open session" }));
     expect(onOpenSession).toHaveBeenCalledWith("session-16");
+  }, 10000);
+
+  it("keeps the project stage and inspector on independent scroll containers", () => {
+    render(
+      <ProjectMetricsScreen
+        catalogBusy={false}
+        currentSessionId="session-16"
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={makeResponse(16)}
+        onIncludeSpawnAgentsChange={vi.fn()}
+        onOpenSession={vi.fn()}
+        onProjectChange={vi.fn()}
+        onRangeChange={vi.fn()}
+        onScopeFilterChange={vi.fn()}
+        onRefresh={vi.fn()}
+        projectOptions={[
+          {
+            projectKey: "project-alpha",
+            backendProjectKeys: ["project:test"],
+            label: "project-alpha",
+            description: "main · https://example.com/repo.git · /repo/project-alpha · 16 sessions",
+            state: "normal",
+            sessionCount: 16,
+            availableScopeCounts: { main: 8, subsession: 7, unknown: 1 },
+          },
+        ]}
+        range={createInitialProjectMetricsRange()}
+        selectedProjectKey="project-alpha"
+        scopeFilter="all"
+      />,
+    );
+
+    expect(screen.getByTestId("project-metrics-shell").className).toContain("overflow-hidden");
+    expect(screen.getByTestId("project-metrics-split-view").className).toContain("overflow-hidden");
+    expect(screen.getByTestId("project-metrics-stage-scroll").className).toContain("h-full");
+    expect(screen.getByTestId("project-metrics-inspector-scroll").className).toContain("h-full");
+  });
+
+  it("shows a focused fallback for a single-session chart window", () => {
+    render(
+      <ProjectMetricsScreen
+        catalogBusy={false}
+        currentSessionId="session-1"
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={makeResponse(1)}
+        onIncludeSpawnAgentsChange={vi.fn()}
+        onOpenSession={vi.fn()}
+        onProjectChange={vi.fn()}
+        onRangeChange={vi.fn()}
+        onScopeFilterChange={vi.fn()}
+        onRefresh={vi.fn()}
+        projectOptions={[
+          {
+            projectKey: "project-alpha",
+            backendProjectKeys: ["project:test"],
+            label: "project-alpha",
+            description: "main · https://example.com/repo.git · /repo/project-alpha · 1 sessions",
+            state: "normal",
+            sessionCount: 1,
+            availableScopeCounts: { main: 1, subsession: 0, unknown: 0 },
+          },
+        ]}
+        range={createInitialProjectMetricsRange()}
+        selectedProjectKey="project-alpha"
+        scopeFilter="all"
+      />,
+    );
+
+    expect(screen.getByTestId("project-metrics-single-session-state")).toBeTruthy();
+    expect(screen.getByText("Single-session window")).toBeTruthy();
+    expect(screen.getByText(/В текущем окне только одна сессия/i)).toBeTruthy();
   });
 
   it("keeps chart-point click lightweight and updates selection without opening the session", () => {
@@ -491,7 +578,7 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByRole("button", { name: "Main" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Subsession" })).toBeTruthy();
     expect(screen.getByText(/Unknown session scope remains outside narrow filters/i)).toBeTruthy();
-    expect(screen.getByText(/unknown scope/i)).toBeTruthy();
+    expect(screen.getByText(/Partial data remains visible/i)).toBeTruthy();
   });
 
   it("builds chart modes, project median overlays, and preserves unknown gaps", () => {
