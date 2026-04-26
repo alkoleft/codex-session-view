@@ -23,6 +23,14 @@
 
 ![Выбранная сессия codex-session-explorer](../../docs/screenshots/codex-session-explorer-real-selected-session.png)
 
+### Сессия со spawned agents
+
+![Сессия со spawned agents в codex-session-explorer](../../docs/screenshots/codex-session-explorer-spawned-agents.png)
+
+### Project metrics
+
+![Project metrics в codex-session-explorer](../../docs/screenshots/codex-session-project-metrics.png)
+
 ## Примечание по scaffold
 
 - Upstream `create-tauri-ui` требует `bun`.
