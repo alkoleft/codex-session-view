@@ -9,7 +9,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use clap::Parser;
 use codex_log::session::TailCursor;
-use codex_log::session_metrics::SessionMetricsQuery;
+use codex_log::session_metrics::{ProjectMetricsSessionDetail, SessionMetricsQuery};
 use codex_session_explorer_backend::{
     RecomputeMetricsRequest, RecomputeMetricsResponse, ViewerBackend,
 };
@@ -106,6 +106,10 @@ fn build_router(state: AppState) -> Router {
             "/api/viewer/load_session_preview_by_id",
             post(load_session_preview_by_id),
         )
+        .route(
+            "/api/viewer/load_project_metrics_session_detail_by_id",
+            post(load_project_metrics_session_detail_by_id),
+        )
         .route("/api/viewer/load_session", post(load_session))
         .route(
             "/api/viewer/load_session_metrics",
@@ -166,6 +170,17 @@ async fn load_session_preview_by_id(
     state
         .backend
         .load_session_preview_by_id(&request.session_id, request.event_limit)
+        .map(Json)
+        .map_err(ApiError::from)
+}
+
+async fn load_project_metrics_session_detail_by_id(
+    State(state): State<AppState>,
+    Json(request): Json<SessionIdPreviewRequest>,
+) -> Result<Json<ProjectMetricsSessionDetail>, ApiError> {
+    state
+        .backend
+        .load_project_metrics_session_detail_by_id(&request.session_id)
         .map(Json)
         .map_err(ApiError::from)
 }

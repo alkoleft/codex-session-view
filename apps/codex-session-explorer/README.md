@@ -52,7 +52,8 @@ cargo run -p codex-session-explorer-http -- --port 4321
 
 - Значение по умолчанию внутри Tauri runtime.
 - Использует текущие Rust-команды `detect_codex_home`, `initialize_codex_home`, `list_indexed_sessions`, `load_session_preview`, `load_session_preview_by_id`, `load_session`, `tail_session`.
-- Для materialized analytics дополнительно поддерживает `load_session_metrics`, `query_project_metrics` и явный `recompute_metrics`.
+- Для materialized analytics дополнительно поддерживает `load_session_metrics`, `query_project_metrics`,
+  `load_project_metrics_session_detail_by_id` и явный `recompute_metrics`.
 - Требует локальный `CODEX_HOME` и показывает локальные filesystem metadata.
 
 ### `remote`
@@ -90,6 +91,7 @@ Frontend ожидает `POST` endpoint’ы:
 - `/api/viewer/load_session`
 - `/api/viewer/load_session_metrics`
 - `/api/viewer/query_project_metrics`
+- `/api/viewer/load_project_metrics_session_detail_by_id`
 - `/api/viewer/recompute_metrics`
 - `/api/viewer/tail_session`
 

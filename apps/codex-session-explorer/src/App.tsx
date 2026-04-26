@@ -3,6 +3,7 @@ import {
   useCallback,
   useDeferredValue,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -52,10 +53,12 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { SessionEventList } from "@/components/session-event-list";
 import { AgentsPanel } from "@/components/agents-panel";
-import { ProjectMetricsScreen } from "@/components/project-metrics-screen";
+import {
+  ProjectMetricsScreen,
+  ProjectMetricsShellControls,
+} from "@/components/project-metrics-screen";
 import {
   aggregateProjectMetricsResponses,
-  createInitialProjectMetricsRange,
   resolveProjectMetricsRange,
   type ProjectMetricsRangeSelection,
   type ProjectSelectorOption,
@@ -66,6 +69,7 @@ import {
   preferredAgentThreadId,
 } from "@/components/agent-thread-view-model";
 import { cn } from "@/lib/utils";
+import { buildViewerRouteSearch, readViewerRoute } from "@/viewer-route";
 
 type BootState = "booting" | "needs_home" | "ready" | "error";
 type MainScreen = "session" | "project_metrics";
@@ -455,6 +459,7 @@ function SessionCatalogCard({
 }
 
 export default function App() {
+  const initialRouteRef = useRef(readViewerRoute(typeof window === "undefined" ? "" : window.location.search));
   const backendCapabilities = viewerBackendClient.capabilities;
   const backendMode = viewerBackendClient.mode;
   const [bootState, setBootState] = useState<BootState>("booting");
@@ -474,18 +479,17 @@ export default function App() {
   const [selectedPreview, setSelectedPreview] = useState<SessionPreview | null>(null);
   const [selectedLoadedSession, setSelectedLoadedSession] = useState<LoadedSession | null>(null);
   const [projectMetrics, setProjectMetrics] = useState<ProjectMetricsResponse | null>(null);
-  const [mainScreen, setMainScreen] = useState<MainScreen>("session");
+  const [mainScreen, setMainScreen] = useState<MainScreen>(initialRouteRef.current.mainScreen);
   const [projectOptions, setProjectOptions] = useState<ProjectSelectorOption[]>([]);
-  const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
+  const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(initialRouteRef.current.selectedProjectKey);
   const [projectMetricsRange, setProjectMetricsRange] = useState<ProjectMetricsRangeSelection>(
-    () => createInitialProjectMetricsRange(),
+    () => initialRouteRef.current.projectMetricsRange,
   );
   const [projectMetricsScopeFilter, setProjectMetricsScopeFilter] =
-    useState<SessionScopeFilter>("all");
+    useState<SessionScopeFilter>(initialRouteRef.current.projectMetricsScopeFilter);
   const [projectMetricsIncludeSpawnAgents, setProjectMetricsIncludeSpawnAgents] = useState(true);
   const [projectMetricsLoading, setProjectMetricsLoading] = useState(false);
   const [projectMetricsError, setProjectMetricsError] = useState<string | null>(null);
-  const [projectMetricsRefreshToken, setProjectMetricsRefreshToken] = useState(0);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [selectedAgentThreadId, setSelectedAgentThreadId] = useState<string | null>(null);
@@ -591,6 +595,49 @@ export default function App() {
     : null;
   const compactShell = mainScreen === "project_metrics";
   const shellHeaderButtonSize = "sm";
+  const viewerRouteState = useMemo(
+    () => ({
+      mainScreen,
+      selectedProjectKey,
+      projectMetricsRange,
+      projectMetricsScopeFilter,
+    }),
+    [mainScreen, projectMetricsRange, projectMetricsScopeFilter, selectedProjectKey],
+  );
+
+  const updateViewerRouteUrl = useCallback(
+    (historyMode: "push" | "replace", routeState = viewerRouteState) => {
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      const nextSearch = buildViewerRouteSearch(window.location.search, routeState);
+      const nextUrl = `${window.location.pathname}${nextSearch}${window.location.hash}`;
+      const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (nextUrl === currentUrl) {
+        return;
+      }
+
+      if (historyMode === "push") {
+        window.history.pushState(null, "", nextUrl);
+        return;
+      }
+
+      window.history.replaceState(null, "", nextUrl);
+    },
+    [viewerRouteState],
+  );
+
+  const navigateToMainScreen = useCallback(
+    (nextScreen: MainScreen) => {
+      setMainScreen(nextScreen);
+      updateViewerRouteUrl("push", {
+        ...viewerRouteState,
+        mainScreen: nextScreen,
+      });
+    },
+    [updateViewerRouteUrl, viewerRouteState],
+  );
 
   const applyPreview = useCallback((preview: SessionPreview) => {
     tailCursorRef.current = preview.tail_cursor;
@@ -958,6 +1005,25 @@ export default function App() {
   }, [backendCapabilities.needsCodexHome, catalogBusy, catalogError, catalogSessions, openSessionById]);
 
   useEffect(() => {
+    function handlePopState() {
+      const nextRoute = readViewerRoute(window.location.search);
+      setMainScreen(nextRoute.mainScreen);
+      setSelectedProjectKey(nextRoute.selectedProjectKey);
+      setProjectMetricsRange(nextRoute.projectMetricsRange);
+      setProjectMetricsScopeFilter(nextRoute.projectMetricsScopeFilter);
+    }
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
+  useEffect(() => {
+    updateViewerRouteUrl("replace");
+  }, [updateViewerRouteUrl]);
+
+  useEffect(() => {
     if (!isSessionDialogOpen || bootState !== "ready") {
       return;
     }
@@ -1031,8 +1097,13 @@ export default function App() {
         }));
         setProjectOptions(options);
         setSelectedProjectKey((current) => {
-          if (current && options.some((option) => option.projectKey === current)) {
-            return current;
+          if (current) {
+            const matchedRouteProject = options.find((option) =>
+              option.projectKey === current || option.label === current,
+            );
+            if (matchedRouteProject) {
+              return matchedRouteProject.projectKey;
+            }
           }
 
           const backendProjectKey = selectedLoadedSession?.metrics?.project.project_key;
@@ -1112,7 +1183,6 @@ export default function App() {
   }, [
     projectMetricsIncludeSpawnAgents,
     projectMetricsRange,
-    projectMetricsRefreshToken,
     projectMetricsScopeFilter,
     selectedProjectOption,
   ]);
@@ -1363,12 +1433,14 @@ export default function App() {
       <main
         data-ui-scroll-container
         className={cn(
-          "box-border flex h-full min-h-0 flex-1 overflow-x-hidden overflow-y-hidden px-4 py-4 sm:px-6 sm:py-6",
+          "box-border flex h-full min-h-0 flex-1 overflow-x-hidden px-4 py-4 sm:px-6 sm:py-6",
+          compactShell ? "overflow-y-auto xl:overflow-y-hidden" : "overflow-y-hidden",
         )}
       >
         <div
           className={cn(
-            "flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden",
+            "flex min-h-0 w-full flex-1 flex-col overflow-hidden",
+            compactShell ? "min-h-full xl:h-full" : "h-full",
             compactShell ? "gap-3" : "gap-5",
           )}
         >
@@ -1408,7 +1480,7 @@ export default function App() {
                 <div className="flex flex-wrap gap-2">
                   <Button
                     onClick={() => {
-                      setMainScreen("session");
+                      navigateToMainScreen("session");
                     }}
                     size={shellHeaderButtonSize}
                     type="button"
@@ -1418,7 +1490,7 @@ export default function App() {
                   </Button>
                   <Button
                     onClick={() => {
-                      setMainScreen("project_metrics");
+                      navigateToMainScreen("project_metrics");
                     }}
                     size={shellHeaderButtonSize}
                     type="button"
@@ -1463,38 +1535,43 @@ export default function App() {
                   ) : null}
                 </div>
               </div>
+
+              {compactShell ? (
+                <ProjectMetricsShellControls
+                  catalogBusy={catalogBusy}
+                  includeSpawnAgents={projectMetricsIncludeSpawnAgents}
+                  onIncludeSpawnAgentsChange={setProjectMetricsIncludeSpawnAgents}
+                  onProjectChange={setSelectedProjectKey}
+                  onRangeChange={setProjectMetricsRange}
+                  onScopeFilterChange={setProjectMetricsScopeFilter}
+                  projectOptions={projectOptions}
+                  range={projectMetricsRange}
+                  selectedProjectKey={selectedProjectKey}
+                  scopeFilter={projectMetricsScopeFilter}
+                />
+              ) : null}
             </CardHeader>
           </Card>
 
           <section
             className={cn(
-              "min-h-0 flex-1",
-              compactShell ? "flex flex-col gap-3 overflow-hidden" : "flex flex-col gap-5",
+              compactShell
+                ? "flex flex-col gap-3 xl:min-h-0 xl:flex-1 xl:overflow-hidden"
+                : "min-h-0 flex-1 flex flex-col gap-5",
             )}
           >
             {mainScreen === "project_metrics" ? (
               <ProjectMetricsScreen
-                catalogBusy={catalogBusy}
                 currentSessionId={displayedSessionId}
                 error={projectMetricsError}
                 includeSpawnAgents={projectMetricsIncludeSpawnAgents}
                 loading={projectMetricsLoading}
                 metrics={projectMetrics}
-                onIncludeSpawnAgentsChange={setProjectMetricsIncludeSpawnAgents}
                 onOpenSession={(sessionId) => {
-                  setMainScreen("session");
+                  navigateToMainScreen("session");
                   void openSessionById(sessionId);
                 }}
-                onProjectChange={setSelectedProjectKey}
-                onRangeChange={setProjectMetricsRange}
-                onScopeFilterChange={setProjectMetricsScopeFilter}
-                onRefresh={() => {
-                  setProjectMetricsRefreshToken((current) => current + 1);
-                }}
-                projectOptions={projectOptions}
-                range={projectMetricsRange}
                 selectedProjectKey={selectedProjectKey}
-                scopeFilter={projectMetricsScopeFilter}
               />
             ) : (
               <section className="grid min-h-0 flex-1 gap-5 xl:grid-cols-[minmax(0,1.75fr)_minmax(360px,0.9fr)]">

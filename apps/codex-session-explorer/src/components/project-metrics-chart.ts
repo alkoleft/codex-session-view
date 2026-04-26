@@ -15,13 +15,6 @@ export const PROJECT_METRICS_CHART_MODES = [
 
 export type ProjectMetricsChartMode = (typeof PROJECT_METRICS_CHART_MODES)[number];
 
-export const PROJECT_METRICS_CHART_OVERLAYS = [
-  "raw-values",
-  "project-median",
-] as const;
-
-export type ProjectMetricsChartOverlayKey = (typeof PROJECT_METRICS_CHART_OVERLAYS)[number];
-
 export type ProjectMetricsChartModeMeta = {
   key: ProjectMetricsChartMode;
   label: string;
@@ -30,55 +23,43 @@ export type ProjectMetricsChartModeMeta = {
   helpText: string;
 };
 
-export type ProjectMetricsChartOverlayMeta = {
-  key: ProjectMetricsChartOverlayKey;
+export type ProjectMetricsNormalizationMeta = {
+  key: "window-min-max";
   label: string;
-  valueLabel: string;
   description: string;
-  seriesLabelSuffix: string;
+};
+
+export const PROJECT_METRICS_NORMALIZATION_META: ProjectMetricsNormalizationMeta = {
+  key: "window-min-max",
+  label: "Global percent-delta index",
+  description:
+    "Все видимые series сначала переводятся в percent-delta against baseline первого известного значения, затем проходят через мягкое monotonic compression и только после этого попадают в общую 0..1 chart-scale.",
 };
 
 export const PROJECT_METRICS_CHART_MODE_META: Record<ProjectMetricsChartMode, ProjectMetricsChartModeMeta> = {
   trend: {
     key: "trend",
     label: "Trend",
-    primaryValueLabel: "Trend",
-    description: "Robust Theil-Sen line across the full project window.",
-    helpText: "Trend uses a Theil-Sen line across the full project query window and keeps unknown points as gaps.",
+    primaryValueLabel: "Normalized trend",
+    description: "Robust Theil-Sen line across the current query window.",
+    helpText:
+      "Trend использует Theil-Sen line по текущему окну и сохраняет unknown values как разрывы.",
   },
   "moving-average": {
     key: "moving-average",
     label: "Moving average",
-    primaryValueLabel: "Moving average",
+    primaryValueLabel: "Normalized moving average",
     description: "Adaptive rolling average over processed values.",
-    helpText: "Moving average smooths processed values with an adaptive window while preserving unknown gaps.",
+    helpText:
+      "Moving average сглаживает обработанные значения адаптивным окном, не склеивая unknown gaps.",
   },
   "moving-median": {
     key: "moving-median",
     label: "Moving median",
-    primaryValueLabel: "Moving median",
+    primaryValueLabel: "Normalized moving median",
     description: "Adaptive rolling median over processed values.",
-    helpText: "Moving median uses the same adaptive window as moving average but stays more resistant to spikes.",
-  },
-};
-
-export const PROJECT_METRICS_CHART_OVERLAY_META: Record<
-  ProjectMetricsChartOverlayKey,
-  ProjectMetricsChartOverlayMeta
-> = {
-  "raw-values": {
-    key: "raw-values",
-    label: "Raw values",
-    valueLabel: "Raw values",
-    description: "Show processed session values on top of the active analytic mode.",
-    seriesLabelSuffix: "raw",
-  },
-  "project-median": {
-    key: "project-median",
-    label: "Project median",
-    valueLabel: "Project median",
-    description: "Show a project-wide median baseline computed from the full query window.",
-    seriesLabelSuffix: "median",
+    helpText:
+      "Moving median использует то же adaptive window, но лучше держит spikes под контролем.",
   },
 };
 
@@ -90,6 +71,7 @@ export type ChartDisplayRow = {
   modeValues: ChartModeSeriesValues;
   outlierFlags: Partial<Record<ProjectMetricSeriesKey, boolean>>;
   processedValues: Partial<Record<ProjectMetricSeriesKey, number | null>>;
+  rawNormalizedValues: Partial<Record<ProjectMetricSeriesKey, number | null>>;
   row: ProjectMetricsChartRow;
   sessionId: string;
 };
@@ -97,6 +79,9 @@ export type ChartDisplayRow = {
 export type ChartSeriesAnalytics = {
   availableCount: number;
   lowerFence: number | null;
+  maxValue: number | null;
+  minValue: number | null;
+  normalizedProjectMedian: number | null;
   outlierCount: number;
   processedCount: number;
   projectMedian: number | null;
@@ -106,6 +91,7 @@ export type ChartSeriesAnalytics = {
 
 export type ChartAnalysis = {
   chartData: ChartDisplayRow[];
+  normalization: ProjectMetricsNormalizationMeta;
   seriesAnalytics: Partial<Record<ProjectMetricSeriesKey, ChartSeriesAnalytics>>;
 };
 
@@ -124,12 +110,12 @@ export function buildChartAnalysis({
     modeValues: createEmptyModeValueMap(),
     outlierFlags: {},
     processedValues: {},
+    rawNormalizedValues: {},
     row,
     sessionId: row.sessionId,
   }));
   const seriesAnalytics: Partial<Record<ProjectMetricSeriesKey, ChartSeriesAnalytics>> = {};
-
-  for (const seriesItem of series) {
+  const seriesComputations = series.map((seriesItem) => {
     const rawValues = rows.map((row) => getProjectMetricPoint(row, seriesItem.key).value);
     const numericValues = rawValues.filter((value): value is number => value != null);
     const fences = computeOutlierFences(numericValues);
@@ -146,28 +132,63 @@ export function buildChartAnalysis({
       isOutlierValue(value, fences) ? count + 1 : count
     ), 0);
 
-    seriesAnalytics[seriesItem.key] = {
+    return {
       availableCount: numericValues.length,
-      lowerFence: fences.lowerFence,
+      fences,
+      key: seriesItem.key,
+      movingAverageValues,
+      movingMedianValues,
       outlierCount,
       processedCount: processedValues.filter((value): value is number => value != null).length,
+      processedValues,
       projectMedian,
+      rawValues,
       smoothingWindowSize,
-      upperFence: fences.upperFence,
+      trendValues,
+    };
+  });
+  const normalizer = createChartNormalizer(seriesComputations);
+
+  for (const computation of seriesComputations) {
+    seriesAnalytics[computation.key] = {
+      availableCount: computation.availableCount,
+      lowerFence: computation.fences.lowerFence,
+      maxValue: normalizer.maxValue,
+      minValue: normalizer.minValue,
+      normalizedProjectMedian: normalizer.normalize(computation.key, computation.projectMedian),
+      outlierCount: computation.outlierCount,
+      processedCount: computation.processedCount,
+      projectMedian: computation.projectMedian,
+      smoothingWindowSize: computation.smoothingWindowSize,
+      upperFence: computation.fences.upperFence,
     };
 
     for (let index = 0; index < rows.length; index += 1) {
       const dataRow = chartData[index];
-      dataRow.processedValues[seriesItem.key] = processedValues[index] ?? null;
-      dataRow.modeValues.trend[seriesItem.key] = trendValues[index] ?? null;
-      dataRow.modeValues["moving-average"][seriesItem.key] = movingAverageValues[index] ?? null;
-      dataRow.modeValues["moving-median"][seriesItem.key] = movingMedianValues[index] ?? null;
-      dataRow.outlierFlags[seriesItem.key] = isOutlierValue(rawValues[index], fences);
+      dataRow.processedValues[computation.key] = computation.processedValues[index] ?? null;
+      dataRow.rawNormalizedValues[computation.key] = normalizer.normalize(
+        computation.key,
+        computation.processedValues[index] ?? null,
+      );
+      dataRow.modeValues.trend[computation.key] = normalizer.normalize(
+        computation.key,
+        computation.trendValues[index] ?? null,
+      );
+      dataRow.modeValues["moving-average"][computation.key] = normalizer.normalize(
+        computation.key,
+        computation.movingAverageValues[index] ?? null,
+      );
+      dataRow.modeValues["moving-median"][computation.key] = normalizer.normalize(
+        computation.key,
+        computation.movingMedianValues[index] ?? null,
+      );
+      dataRow.outlierFlags[computation.key] = isOutlierValue(computation.rawValues[index], computation.fences);
     }
   }
 
   return {
     chartData,
+    normalization: PROJECT_METRICS_NORMALIZATION_META,
     seriesAnalytics,
   };
 }
@@ -186,6 +207,78 @@ function createEmptyModeValueMap(): ChartModeSeriesValues {
     "moving-average": {},
     "moving-median": {},
   };
+}
+
+function createChartNormalizer(
+  computations: Array<{
+    key: ProjectMetricSeriesKey;
+    movingAverageValues: Array<number | null>;
+    movingMedianValues: Array<number | null>;
+    processedValues: Array<number | null>;
+    projectMedian: number | null;
+    trendValues: Array<number | null>;
+  }>,
+) {
+  const baselines = new Map<ProjectMetricSeriesKey, number>();
+  const transformedValues: number[] = [];
+
+  for (const computation of computations) {
+    const baseline = pickSeriesBaseline(computation.processedValues, computation.projectMedian);
+    baselines.set(computation.key, baseline);
+
+    for (const value of [
+      ...computation.processedValues,
+      ...computation.trendValues,
+      ...computation.movingAverageValues,
+      ...computation.movingMedianValues,
+    ]) {
+      const transformed = transformAgainstBaseline(value, baseline);
+      if (transformed != null) {
+        transformedValues.push(transformed);
+      }
+    }
+  }
+
+  const numericValues = transformedValues;
+  const minValue = numericValues.length > 0 ? Math.min(...numericValues) : null;
+  const maxValue = numericValues.length > 0 ? Math.max(...numericValues) : null;
+
+  return {
+    maxValue,
+    minValue,
+    normalize(seriesKey: ProjectMetricSeriesKey, value: number | null) {
+      if (value == null || minValue == null || maxValue == null) {
+        return null;
+      }
+      const baseline = baselines.get(seriesKey) ?? 0;
+      const transformed = transformAgainstBaseline(value, baseline);
+      if (transformed == null) {
+        return null;
+      }
+      if (Math.abs(maxValue - minValue) < 0.000001) {
+        return 0.5;
+      }
+      return (transformed - minValue) / (maxValue - minValue);
+    },
+  };
+}
+
+function pickSeriesBaseline(values: Array<number | null>, fallbackMedian: number | null) {
+  const firstKnown = values.find((value): value is number => value != null);
+  if (firstKnown != null) {
+    return firstKnown;
+  }
+  return fallbackMedian ?? 0;
+}
+
+function transformAgainstBaseline(value: number | null, baseline: number) {
+  if (value == null) {
+    return null;
+  }
+  const percentDelta = Math.abs(baseline) < 0.000001
+    ? value
+    : (value - baseline) / Math.abs(baseline);
+  return Math.asinh(percentDelta);
 }
 
 function computeOutlierFences(values: number[]) {

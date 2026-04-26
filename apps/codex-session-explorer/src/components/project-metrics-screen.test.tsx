@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/components/ui/scroll-area", () => ({
@@ -20,13 +20,61 @@ vi.mock("@/components/ui/scroll-area", () => ({
   ),
 }));
 
+vi.mock("@/backend", async () => {
+  const actual = await vi.importActual<typeof import("@/backend")>("@/backend");
+  return {
+    ...actual,
+    extractErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    loadProjectMetricsSessionDetailById: vi.fn(async (sessionId: string) => ({
+      session_id: sessionId,
+      session_ref: `${sessionId}.jsonl`,
+      title: "Pinned request title",
+      start_user_request: "Investigate the abnormal token spike.",
+      start_user_request_source: "indexed_first_user_message",
+      task_summary: "Compare the selected session against neighboring runs.",
+      task_summary_source: "indexed_title",
+      agent_role: "default",
+      task_class: "analysis",
+      task_class_confidence: "confident",
+    })),
+  };
+});
+
 vi.mock("recharts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("recharts")>();
   return {
     ...actual,
-    ResponsiveContainer: ({ children }: { children: ReactNode }) => (
-      <div style={{ width: 1200, height: 400 }}>{children}</div>
+    CartesianGrid: () => null,
+    Bar: ({
+      onClick,
+    }: {
+      onClick?: (payload: unknown) => void;
+    }) => (
+      <g
+        data-testid="mock-primary-bar"
+        onClick={() => onClick?.({ sessionId: "session-8" })}
+      >
+        <rect height="180" width="24" x="12" y="24" />
+      </g>
     ),
+    ComposedChart: ({
+      children,
+      ...props
+    }: {
+      children: ReactNode;
+    } & React.SVGProps<SVGSVGElement>) => (
+      <svg {...props}>
+        {children}
+      </svg>
+    ),
+    Line: () => null,
+    ReferenceArea: () => null,
+    ResponsiveContainer: ({ children }: { children: ReactNode }) => (
+      <div style={{ height: 420, width: 1200 }}>{children}</div>
+    ),
+    Tooltip: () => null,
+    XAxis: () => null,
+    YAxis: () => null,
   };
 });
 
@@ -34,12 +82,15 @@ import type {
   CoveredMetric,
   MetricCoverage,
   ProjectMetricsResponse,
+  ProjectMetricsSessionDetail,
   SessionMetrics,
 } from "@/backend";
+import { loadProjectMetricsSessionDetailById } from "@/backend";
+import { buildChartAnalysis } from "@/components/project-metrics-chart";
 import { buildProjectMetricsViewModel, createInitialProjectMetricsRange } from "@/components/project-metrics";
 import {
-  buildChartAnalysis,
   ProjectMetricsScreen,
+  ProjectMetricsShellControls,
   resolveSelectionWindow,
   SeriesDot,
 } from "@/components/project-metrics-screen";
@@ -72,23 +123,23 @@ function makeSession(index: number): SessionMetrics {
       git_branch: "main",
       git_sha: "abc",
     },
-    session_scope: index % 2 === 0 ? "subsession" : "main",
+    session_scope: index === 4 ? "unknown" : index % 2 === 0 ? "subsession" : "main",
     factors: {
       model: "gpt-5.4",
       reasoning_effort: "medium",
       cli_version: "1.0",
       sandbox_policy_kind: "workspace-write",
       approval_mode: "never",
-      agent_role: "default",
-      skills_count: covered(0),
+      agent_role: index % 2 === 0 ? "worker" : "default",
+      skills_count: covered(index),
       mcp_server_count: covered(0),
       mcp_call_count: covered(0),
       start_context_size: covered(0),
     },
     outcome: {
-      outcome: "completed",
+      outcome: index === 3 ? "failed" : "completed",
       coverage: "known",
-      error_type: null,
+      error_type: index === 3 ? "tool" : null,
     },
     event_count: covered(10 + index),
     thread_count: covered(1),
@@ -107,7 +158,7 @@ function makeSession(index: number): SessionMetrics {
       spawn_agent_calls: covered(1),
     },
     duration: {
-      total_ms: covered(120000 * index),
+      total_ms: covered(index === 6 ? 900000 : 120000 * index),
       generation_ms: covered(1000),
       tool_ms: covered(2000),
       shell_ms: covered(3000),
@@ -161,9 +212,9 @@ function makeSession(index: number): SessionMetrics {
       outcome_rate_delta: covered(0),
     },
     derived_efficiency: {
-      tokens_per_successful_session: covered(index === 6 ? null : 100 + index, index === 6 ? "unknown" : "known"),
+      tokens_per_successful_session: covered(100 + index),
       tokens_per_accepted_task: covered(100),
-      review_findings_per_1k_tokens: covered(index === 7 ? null : index / 10, index === 7 ? "unknown" : "known"),
+      review_findings_per_1k_tokens: covered(index / 10),
     },
   };
 }
@@ -199,7 +250,7 @@ function makeResponse(count: number): ProjectMetricsResponse {
     task_metrics: {
       task_count: covered(8),
     },
-    task_facts: sessions.flatMap((session) => session.task_facts),
+    task_facts: [],
     used_skills: {
       skills: [
         {
@@ -243,7 +294,7 @@ beforeAll(() => {
   Object.defineProperty(HTMLElement.prototype, "clientHeight", {
     configurable: true,
     get() {
-      return 400;
+      return 420;
     },
   });
   Object.defineProperty(HTMLElement.prototype, "getBoundingClientRect", {
@@ -251,11 +302,11 @@ beforeAll(() => {
     value() {
       return {
         width: 1200,
-        height: 400,
+        height: 420,
         top: 0,
         left: 0,
         right: 1200,
-        bottom: 400,
+        bottom: 420,
         x: 0,
         y: 0,
         toJSON() {
@@ -268,197 +319,402 @@ beforeAll(() => {
 
 afterEach(() => {
   cleanup();
+  vi.clearAllMocks();
+  window.localStorage.clear();
+});
+
+describe("ProjectMetricsShellControls", () => {
+  it("keeps project, period, scope, and spawn-agent controls in one shell surface", async () => {
+    const user = userEvent.setup();
+    const onProjectChange = vi.fn();
+    const onScopeFilterChange = vi.fn();
+    const onIncludeSpawnAgentsChange = vi.fn();
+    const onRangeChange = vi.fn();
+
+    render(
+      <ProjectMetricsShellControls
+        catalogBusy={true}
+        includeSpawnAgents={true}
+        onIncludeSpawnAgentsChange={onIncludeSpawnAgentsChange}
+        onProjectChange={onProjectChange}
+        onRangeChange={onRangeChange}
+        onScopeFilterChange={onScopeFilterChange}
+        projectOptions={[
+          {
+            projectKey: "project-alpha",
+            backendProjectKeys: ["project:test"],
+            label: "project-alpha",
+            description: "/repo/project-alpha",
+            state: "normal",
+            sessionCount: 8,
+            availableScopeCounts: { main: 4, subsession: 3, unknown: 1 },
+          },
+        ]}
+        range={{ ...createInitialProjectMetricsRange(), preset: "custom", start: "2026-04-20T10:00", end: "2026-04-21T10:00" }}
+        selectedProjectKey="project-alpha"
+        scopeFilter="all"
+      />,
+    );
+
+    expect(screen.getByTestId("project-metrics-shell-controls")).toBeTruthy();
+    expect(screen.getByText(/Catalog scan updates project labels/i)).toBeTruthy();
+    expect(screen.getByDisplayValue("project-alpha")).toBeTruthy();
+    expect(screen.getByDisplayValue("Custom range")).toBeTruthy();
+    expect(screen.getByDisplayValue("2026-04-20T10:00")).toBeTruthy();
+    expect(screen.getByDisplayValue("2026-04-21T10:00")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Main" }));
+    expect(onScopeFilterChange).toHaveBeenCalledWith("main");
+
+    await user.click(screen.getByText("Spawn agents"));
+    expect(onIncludeSpawnAgentsChange).toHaveBeenCalledWith(false);
+  });
 });
 
 describe("ProjectMetricsScreen", () => {
-  it("renders summary chart controls, supports zoom and pan buttons, and keeps chart-point drill-down", async () => {
+  it("renders chart-first workspace with pinned summary, tabbed side panel, and no removed blocks", async () => {
     const user = userEvent.setup();
     const onOpenSession = vi.fn();
 
     render(
       <ProjectMetricsScreen
-        catalogBusy={false}
         currentSessionId={null}
         error={null}
         includeSpawnAgents={true}
         loading={false}
-        metrics={makeResponse(16)}
-        onIncludeSpawnAgentsChange={vi.fn()}
+        metrics={makeResponse(8)}
         onOpenSession={onOpenSession}
-        onProjectChange={vi.fn()}
-        onRangeChange={vi.fn()}
-        onScopeFilterChange={vi.fn()}
-        onRefresh={vi.fn()}
-        projectOptions={[
-          {
-            projectKey: "project-alpha",
-            backendProjectKeys: ["project:test"],
-            label: "project-alpha",
-            description: "main · https://example.com/repo.git · /repo/project-alpha · 16 sessions",
-            state: "normal",
-            sessionCount: 16,
-            availableScopeCounts: { main: 8, subsession: 7, unknown: 1 },
-          },
-        ]}
-        range={createInitialProjectMetricsRange()}
         selectedProjectKey="project-alpha"
-        scopeFilter="all"
       />,
     );
 
-    expect(screen.getByText("Summary chart")).toBeTruthy();
-    expect(screen.getByTestId("project-metrics-toolbar")).toBeTruthy();
-    expect(screen.getByTestId("project-metrics-inspector")).toBeTruthy();
-    expect(screen.queryByTestId("project-metrics-analytics-controls")).toBeNull();
-    expect(screen.getByTestId("project-metrics-overview-panel")).toBeTruthy();
-    expect(screen.getByText("Last 14 days")).toBeTruthy();
-    expect(screen.getByText("Partial data remains visible")).toBeTruthy();
-    expect(screen.getByTestId("project-metrics-anomaly-panel")).toBeTruthy();
-    expect(screen.getByText("Used skills")).toBeTruthy();
-    expect(screen.getByText("openspec-apply-change")).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-split-view")).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-pinned-summary")).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-chart-overlay-controls")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Window pulse" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /Anomalies/i })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Series" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Chart" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Pinned session" })).toBeTruthy();
+    expect(screen.queryByText("Used skills")).toBeNull();
+    expect(screen.queryByText("Contributing sessions")).toBeNull();
+    expect(screen.queryByText("Partial data remains visible")).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Chart settings" }));
-    expect(screen.getByTestId("project-metrics-analytics-controls")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Trend" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "Moving average" }).getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByRole("button", { name: "Moving median" }).getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByRole("button", { name: "Raw values" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByRole("button", { name: "Project median" }).getAttribute("aria-pressed")).toBe("false");
-    expect(screen.getByTestId("project-metrics-mode-help").textContent).toContain("Theil-Sen");
-    expect(screen.getAllByText(/Raw values:/i).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("tab", { name: "Chart" }));
+    expect(screen.getByTestId("project-metrics-chart-tab")).toBeTruthy();
+    expect(screen.getByText("Global percent-delta index")).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Moving median" }));
-    expect(screen.getByRole("button", { name: "Moving median" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getByTestId("project-metrics-mode-help").textContent).toContain("more resistant to spikes");
+    await user.click(screen.getByRole("tab", { name: /Anomalies/i }));
+    expect(screen.getByTestId("project-metrics-anomalies-tab")).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-anomalies-tab").textContent).toMatch(/Metric|Baseline|Session|Data issue/);
 
-    await user.click(screen.getByRole("button", { name: "Raw values" }));
-    expect(screen.getByRole("button", { name: "Raw values" }).getAttribute("aria-pressed")).toBe("false");
-    expect(screen.queryByText(/Raw values:/i)).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "Project median" }));
-    expect(screen.getByRole("button", { name: "Project median" }).getAttribute("aria-pressed")).toBe("true");
-    expect(screen.getAllByText(/Project median:/i).length).toBeGreaterThan(0);
-
-    expect(screen.queryByTestId("project-metrics-series-panel")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Series" }));
-    expect(screen.getByTestId("project-metrics-series-panel")).toBeTruthy();
-
-    const derivedToggle = screen.getByRole("button", { name: /Review \/ 1k tokens/i });
-    expect(derivedToggle.getAttribute("aria-pressed")).toBe("false");
-    await user.click(derivedToggle);
-    expect(derivedToggle.getAttribute("aria-pressed")).toBe("true");
-
-    expect(screen.getByText("Sessions 1-16 of 16")).toBeTruthy();
-    expect(screen.getByText("Showing 16 of 16 sessions")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: "Show 8 sessions" }));
-    expect(screen.getByText("Sessions 9-16 of 16")).toBeTruthy();
-    expect(screen.getByText("Showing 8 of 16 sessions")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: /Earlier/i }));
-    expect(screen.getByText("Sessions 5-12 of 16")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: /Latest/i }));
-    expect(screen.getByText("Sessions 9-16 of 16")).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText("Window size"), {
-      target: { value: "6" },
-    });
-    expect(screen.getByText("Sessions 11-16 of 16")).toBeTruthy();
-
-    fireEvent.change(screen.getByLabelText("Window position"), {
-      target: { value: "4" },
-    });
-    expect(screen.getByText("Sessions 5-10 of 16")).toBeTruthy();
-
-    fireEvent.wheel(screen.getByTestId("project-metrics-chart-surface"), {
-      deltaY: -120,
-    });
-    expect(screen.getByText("Sessions 4-9 of 16")).toBeTruthy();
-
-    await user.click(screen.getByRole("button", { name: "Exclude outliers" }));
-    expect(screen.getByRole("button", { name: "Exclude outliers" }).getAttribute("aria-pressed")).toBe("true");
+    await user.click(screen.getByRole("tab", { name: "Pinned session" }));
+    expect(screen.getByTestId("project-metrics-pinned-tab")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Open session" }));
-    expect(onOpenSession).toHaveBeenCalledWith("session-16");
-  }, 10000);
+    expect(onOpenSession).toHaveBeenCalledWith("session-8");
+  });
 
-  it("keeps the project stage and inspector on independent scroll containers", () => {
+  it("keeps main area and side panel on independent scroll containers", () => {
     render(
       <ProjectMetricsScreen
-        catalogBusy={false}
-        currentSessionId="session-16"
+        currentSessionId="session-8"
         error={null}
         includeSpawnAgents={true}
         loading={false}
-        metrics={makeResponse(16)}
-        onIncludeSpawnAgentsChange={vi.fn()}
+        metrics={makeResponse(8)}
         onOpenSession={vi.fn()}
-        onProjectChange={vi.fn()}
-        onRangeChange={vi.fn()}
-        onScopeFilterChange={vi.fn()}
-        onRefresh={vi.fn()}
-        projectOptions={[
-          {
-            projectKey: "project-alpha",
-            backendProjectKeys: ["project:test"],
-            label: "project-alpha",
-            description: "main · https://example.com/repo.git · /repo/project-alpha · 16 sessions",
-            state: "normal",
-            sessionCount: 16,
-            availableScopeCounts: { main: 8, subsession: 7, unknown: 1 },
-          },
-        ]}
-        range={createInitialProjectMetricsRange()}
         selectedProjectKey="project-alpha"
-        scopeFilter="all"
       />,
     );
 
     expect(screen.getByTestId("project-metrics-shell").className).toContain("overflow-hidden");
     expect(screen.getByTestId("project-metrics-split-view").className).toContain("overflow-hidden");
-    expect(screen.getByTestId("project-metrics-stage-scroll").className).toContain("h-full");
-    expect(screen.getByTestId("project-metrics-inspector-scroll").className).toContain("h-full");
+    expect(screen.getAllByTestId("project-metrics-side-scroll")[0]?.className).toContain("h-full");
+    expect(screen.getByTestId("project-metrics-main-scroll").className).toContain("h-full");
+  });
+
+  it("renders series and chart tabs as compact control surfaces", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ProjectMetricsScreen
+        currentSessionId={null}
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={makeResponse(8)}
+        onOpenSession={vi.fn()}
+        selectedProjectKey="project-alpha"
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Series" }));
+    const seriesTab = screen.getByTestId("project-metrics-series-tab");
+    expect(within(seriesTab).getByText("operational")).toBeTruthy();
+    expect(within(seriesTab).getAllByText("Raw values").length).toBeGreaterThan(0);
+    expect(within(seriesTab).getAllByText("Make primary").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("tab", { name: "Chart" }));
+    expect(screen.getByRole("button", { name: "Trend" }).getAttribute("aria-pressed")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "Exclude outliers" }));
+    expect(screen.getByRole("button", { name: "Exclude outliers" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("reconciles workspace state across dataset refresh and preserves pinned session when still present", async () => {
+    const user = userEvent.setup();
+    const initialMetrics = makeResponse(8);
+    const refreshedMetrics = makeResponse(10);
+    const { rerender } = render(
+      <ProjectMetricsScreen
+        currentSessionId="session-6"
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={initialMetrics}
+        onOpenSession={vi.fn()}
+        selectedProjectKey="project-alpha"
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Series" }));
+    const tokensCard = screen.getByText("Total tokens").closest("div.rounded-xl") as HTMLElement | null;
+    expect(tokensCard).toBeTruthy();
+    await user.click(within(tokensCard!).getByRole("button", { name: "Raw values" }));
+
+    await user.click(screen.getByRole("tab", { name: "Chart" }));
+    await user.click(screen.getByRole("button", { name: "Exclude outliers" }));
+    expect(screen.getByRole("button", { name: "Exclude outliers" }).getAttribute("aria-pressed")).toBe("true");
+
+    rerender(
+      <ProjectMetricsScreen
+        currentSessionId="session-6"
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={refreshedMetrics}
+        onOpenSession={vi.fn()}
+        selectedProjectKey="project-alpha"
+      />,
+    );
+
+    expect(screen.getByTestId("project-metrics-chart-tab")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Exclude outliers" }).getAttribute("aria-pressed")).toBe("true");
+
+    await user.click(screen.getByRole("tab", { name: "Series" }));
+    const refreshedTokensCard = screen.getByText("Total tokens").closest("div.rounded-xl") as HTMLElement | null;
+    expect(refreshedTokensCard).toBeTruthy();
+    expect(within(refreshedTokensCard!).getByRole("button", { name: "Raw values" }).getAttribute("aria-pressed")).toBe("true");
+
+    await user.click(screen.getByRole("tab", { name: "Pinned session" }));
+    expect(screen.getByTestId("project-metrics-pinned-tab").textContent).toContain("session-6");
+  });
+
+  it("persists chart and series settings in browser storage and restores them after remount", async () => {
+    const user = userEvent.setup();
+    const props = {
+      currentSessionId: null,
+      error: null,
+      includeSpawnAgents: true,
+      loading: false,
+      metrics: makeResponse(8),
+      onOpenSession: vi.fn(),
+      selectedProjectKey: "project-alpha",
+    } satisfies ComponentProps<typeof ProjectMetricsScreen>;
+    const { unmount } = render(<ProjectMetricsScreen {...props} />);
+
+    expect(screen.getByRole("button", { name: "Zoom out" }).getAttribute("disabled")).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByRole("button", { name: "Zoom out" }).getAttribute("disabled")).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "Chart" }));
+    await user.click(screen.getByRole("button", { name: "Moving median" }));
+    await user.click(screen.getByRole("button", { name: "Exclude outliers" }));
+
+    await user.click(screen.getByRole("tab", { name: "Series" }));
+    const totalTokensCard = screen.getByText("Total tokens").closest("div.rounded-xl") as HTMLElement | null;
+    expect(totalTokensCard).toBeTruthy();
+    await user.click(within(totalTokensCard!).getByRole("button", { name: "Make primary" }));
+    await user.click(within(totalTokensCard!).getByRole("button", { name: "Raw values" }));
+
+    unmount();
+
+    render(<ProjectMetricsScreen {...props} />);
+
+    expect(screen.getByRole("button", { name: "Zoom out" }).getAttribute("disabled")).toBeNull();
+
+    await user.click(screen.getByRole("tab", { name: "Chart" }));
+    expect(screen.getByRole("button", { name: "Moving median" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "Exclude outliers" }).getAttribute("aria-pressed")).toBe("true");
+
+    await user.click(screen.getByRole("tab", { name: "Series" }));
+    const restoredTokensCard = screen.getByText("Total tokens").closest("div.rounded-xl") as HTMLElement | null;
+    expect(restoredTokensCard).toBeTruthy();
+    expect(within(restoredTokensCard!).getByRole("button", { name: "Raw values" }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(restoredTokensCard!).getByText("primary")).toBeTruthy();
+  });
+
+  it("resets a stale single-session zoom window when the dataset changes", async () => {
+    const initialMetrics = makeResponse(1);
+    const switchedMetrics = makeResponse(10);
+    switchedMetrics.project_key = "project:other";
+    switchedMetrics.contributing_session_ids = switchedMetrics.sessions.map((session, index) => {
+      const sessionId = `other-session-${index + 1}`;
+      session.session_id = sessionId;
+      session.project.project_key = "project:other";
+      return sessionId;
+    });
+
+    const { rerender } = render(
+      <ProjectMetricsScreen
+        currentSessionId={null}
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={initialMetrics}
+        onOpenSession={vi.fn()}
+        selectedProjectKey="project-alpha"
+      />,
+    );
+
+    expect(screen.getByTestId("project-metrics-single-session-state")).toBeTruthy();
+
+    rerender(
+      <ProjectMetricsScreen
+        currentSessionId={null}
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={switchedMetrics}
+        onOpenSession={vi.fn()}
+        selectedProjectKey="project-beta"
+      />,
+    );
+
+    expect(screen.queryByTestId("project-metrics-single-session-state")).toBeNull();
+    expect(screen.getByTestId("project-metrics-chart-surface")).toBeTruthy();
+  });
+
+  it("pins the clicked session from the primary bar layer", async () => {
+    const user = userEvent.setup();
+    const { container } = render(
+      <ProjectMetricsScreen
+        currentSessionId={null}
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={makeResponse(8)}
+        onOpenSession={vi.fn()}
+        selectedProjectKey="project-alpha"
+      />,
+    );
+
+    const primaryBar = container.querySelector("[data-testid='mock-primary-bar']");
+    expect(primaryBar).toBeTruthy();
+
+    await user.click(primaryBar as Element);
+
+    expect(screen.getByTestId("project-metrics-pinned-tab")).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-pinned-tab").textContent).toContain("session-8");
+  });
+
+  it("opens pinned-session tab from a pin action and keeps hidden series in pinned detail", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <ProjectMetricsScreen
+        currentSessionId={null}
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={makeResponse(8)}
+        onOpenSession={vi.fn()}
+        selectedProjectKey="project-alpha"
+      />,
+    );
+
+    await user.click(screen.getByRole("tab", { name: /Anomalies/i }));
+    await user.click(screen.getAllByRole("button", { name: "Pin session" })[0]!);
+
+    expect(screen.getByTestId("project-metrics-pinned-tab")).toBeTruthy();
+
+    await user.click(screen.getByRole("tab", { name: "Series" }));
+    const tokensCard = screen.getByText("Total tokens").closest("div.rounded-xl") as HTMLElement | null;
+    expect(tokensCard).toBeTruthy();
+    const visibleButton = within(tokensCard!).getByRole("button", { name: "Visible" });
+    await user.click(visibleButton);
+
+    await user.click(screen.getByRole("tab", { name: "Pinned session" }));
+    const pinnedTab = screen.getByTestId("project-metrics-pinned-tab");
+    expect(within(pinnedTab).getAllByText("Tokens").length).toBeGreaterThan(0);
+  });
+
+  it("resolves delayed pinned-session detail requests without leaving the tab in loading state", async () => {
+    const user = userEvent.setup();
+    let resolveDetail!: (detail: ProjectMetricsSessionDetail) => void;
+    vi.mocked(loadProjectMetricsSessionDetailById).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveDetail = resolve as (detail: ProjectMetricsSessionDetail) => void;
+        }),
+    );
+
+    const { container } = render(
+      <ProjectMetricsScreen
+        currentSessionId={null}
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={makeResponse(8)}
+        onOpenSession={vi.fn()}
+        selectedProjectKey="project-alpha"
+      />,
+    );
+
+    const primaryBar = container.querySelector("[data-testid='mock-primary-bar']");
+    expect(primaryBar).toBeTruthy();
+
+    await user.click(primaryBar as Element);
+    expect(screen.getByText("Loading pinned detail...")).toBeTruthy();
+
+    resolveDetail({
+      session_id: "session-8",
+      session_ref: "session-8.jsonl",
+      title: "Pinned request title",
+      start_user_request: "Investigate the abnormal token spike.",
+      start_user_request_source: "indexed_first_user_message",
+      task_summary: "Compare the selected session against neighboring runs.",
+      task_summary_source: "indexed_title",
+      agent_role: "default",
+      task_class: "analysis",
+      task_class_confidence: "confident",
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Loading pinned detail...")).toBeNull();
+    });
+    expect(screen.getByText("Investigate the abnormal token spike.")).toBeTruthy();
   });
 
   it("shows a focused fallback for a single-session chart window", () => {
     render(
       <ProjectMetricsScreen
-        catalogBusy={false}
         currentSessionId="session-1"
         error={null}
         includeSpawnAgents={true}
         loading={false}
         metrics={makeResponse(1)}
-        onIncludeSpawnAgentsChange={vi.fn()}
         onOpenSession={vi.fn()}
-        onProjectChange={vi.fn()}
-        onRangeChange={vi.fn()}
-        onScopeFilterChange={vi.fn()}
-        onRefresh={vi.fn()}
-        projectOptions={[
-          {
-            projectKey: "project-alpha",
-            backendProjectKeys: ["project:test"],
-            label: "project-alpha",
-            description: "main · https://example.com/repo.git · /repo/project-alpha · 1 sessions",
-            state: "normal",
-            sessionCount: 1,
-            availableScopeCounts: { main: 1, subsession: 0, unknown: 0 },
-          },
-        ]}
-        range={createInitialProjectMetricsRange()}
         selectedProjectKey="project-alpha"
-        scopeFilter="all"
       />,
     );
 
     expect(screen.getByTestId("project-metrics-single-session-state")).toBeTruthy();
     expect(screen.getByText("Single-session window")).toBeTruthy();
-    expect(screen.getByText(/В текущем окне только одна сессия/i)).toBeTruthy();
   });
 
-  it("keeps chart-point click lightweight and updates selection without opening the session", () => {
+  it("keeps chart-point click lightweight and updates pin without opening the session", () => {
     const onActivateSession = vi.fn();
     const onOpenSession = vi.fn();
     const response = makeResponse(4);
@@ -474,21 +730,21 @@ describe("ProjectMetricsScreen", () => {
           cx={24}
           cy={18}
           onActivateSession={onActivateSession}
-          outlierMode="keep"
           payload={{
             index: row!.index,
             label: row!.label,
             modeValues: {
-              trend: {},
+              trend: { tokens: 0.5 },
               "moving-average": {},
               "moving-median": {},
             },
             outlierFlags: {},
             processedValues: { tokens: row!.metrics.tokens.value },
+            rawNormalizedValues: { tokens: 0.5 },
             row: row!,
             sessionId: row!.sessionId,
           }}
-          seriesKey="tokens"
+          payloadKey="tokens"
           stroke="#2563eb"
         />
       </svg>,
@@ -502,126 +758,38 @@ describe("ProjectMetricsScreen", () => {
     expect(onOpenSession).not.toHaveBeenCalled();
   });
 
-  it("uses a scrollable container for long project selector lists", async () => {
-    const user = userEvent.setup();
-
-    render(
-      <ProjectMetricsScreen
-        catalogBusy={false}
-        currentSessionId={null}
-        error={null}
-        includeSpawnAgents={true}
-        loading={false}
-        metrics={makeResponse(4)}
-        onIncludeSpawnAgentsChange={vi.fn()}
-        onOpenSession={vi.fn()}
-        onProjectChange={vi.fn()}
-        onRangeChange={vi.fn()}
-        onScopeFilterChange={vi.fn()}
-        onRefresh={vi.fn()}
-        projectOptions={Array.from({ length: 30 }, (_, index) => ({
-          projectKey: `project-${index + 1}`,
-          backendProjectKeys: [`project:test:${index + 1}`],
-          label: `project-${index + 1}`,
-          description: `/repo/project-${index + 1}`,
-          state: "normal" as const,
-          sessionCount: index + 1,
-          availableScopeCounts: { main: index + 1, subsession: 0, unknown: 0 },
-        }))}
-        range={createInitialProjectMetricsRange()}
-        selectedProjectKey="project-1"
-        scopeFilter="all"
-      />,
-    );
-
-    await user.click(screen.getByRole("button", { name: "project-1" }));
-
-    const scrollContainer = screen.getByTestId("project-selector-scroll");
-    expect(scrollContainer.className).toContain("max-h-80");
-    expect(scrollContainer.className).toContain("overflow-y-auto");
-    expect(screen.getByRole("option", { name: /project-30/i })).toBeTruthy();
-  });
-
-  it("renders scope filter controls and unknown-scope hint for narrow filters", () => {
-    render(
-      <ProjectMetricsScreen
-        catalogBusy={false}
-        currentSessionId={null}
-        error={null}
-        includeSpawnAgents={true}
-        loading={false}
-        metrics={makeResponse(4)}
-        onIncludeSpawnAgentsChange={vi.fn()}
-        onOpenSession={vi.fn()}
-        onProjectChange={vi.fn()}
-        onRangeChange={vi.fn()}
-        onScopeFilterChange={vi.fn()}
-        onRefresh={vi.fn()}
-        projectOptions={[
-          {
-            projectKey: "project-alpha",
-            backendProjectKeys: ["project:test"],
-            label: "project-alpha",
-            description: "https://example.com/repo.git · /repo/project-alpha",
-            state: "normal",
-            sessionCount: 4,
-            availableScopeCounts: { main: 2, subsession: 1, unknown: 1 },
-          },
-        ]}
-        range={createInitialProjectMetricsRange()}
-        selectedProjectKey="project-alpha"
-        scopeFilter="main"
-      />,
-    );
-
-    expect(screen.getAllByRole("button", { name: "All" }).length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Main" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Subsession" })).toBeTruthy();
-    expect(screen.getByText(/Unknown session scope remains outside narrow filters/i)).toBeTruthy();
-    expect(screen.getByText(/Partial data remains visible/i)).toBeTruthy();
-  });
-
-  it("builds chart modes, project median overlays, and preserves unknown gaps", () => {
+  it("keeps sparse series readable inside shared normalization", () => {
     const response = makeResponse(8);
     response.sessions[7] = makeSession(8);
     response.sessions[7].duration.total_ms = covered(9_000_000);
-    response.sessions[3].duration.total_ms = covered(null);
+    response.sessions[0].operations.failed_operations = covered(0);
+    response.sessions[1].operations.failed_operations = covered(0);
+    response.sessions[2].operations.failed_operations = covered(1);
+    response.sessions[3].operations.failed_operations = covered(0);
 
     const viewModel = buildProjectMetricsViewModel(response, true);
     const durationSeries = viewModel.chartSeries.find((item) => item.key === "duration");
+    const failuresSeries = viewModel.chartSeries.find((item) => item.key === "failures");
 
     expect(durationSeries).toBeTruthy();
+    expect(failuresSeries).toBeTruthy();
 
-    const clamped = buildChartAnalysis({
+    const analysis = buildChartAnalysis({
       outlierMode: "clamp",
       rows: viewModel.chartRows,
-      series: [durationSeries!],
-    });
-    const excluded = buildChartAnalysis({
-      outlierMode: "exclude",
-      rows: viewModel.chartRows,
-      series: [durationSeries!],
+      series: [durationSeries!, failuresSeries!],
     });
 
-    expect(clamped.seriesAnalytics.duration?.outlierCount).toBe(1);
-    expect(clamped.seriesAnalytics.duration?.projectMedian).not.toBeNull();
-    expect(clamped.seriesAnalytics.duration?.smoothingWindowSize).toBe(3);
-    expect(clamped.chartData.at(-1)?.processedValues.duration).not.toBe(
-      viewModel.chartRows.at(-1)?.metrics.duration.value,
-    );
-    expect(clamped.chartData.at(3)?.modeValues.trend.duration).toBeNull();
-    expect(clamped.chartData.at(3)?.modeValues["moving-average"].duration).toBeNull();
-    expect(clamped.chartData.at(3)?.modeValues["moving-median"].duration).toBeNull();
-    expect(clamped.chartData.at(-1)?.modeValues.trend.duration).toBeLessThan(6_000_000);
-    expect(excluded.chartData.at(-1)?.processedValues.duration).toBeNull();
+    expect(analysis.normalization.label).toBe("Global percent-delta index");
+    expect(analysis.chartData[2]?.rawNormalizedValues.failures).toBeGreaterThan(0.12);
   });
 });
 
 describe("resolveSelectionWindow", () => {
   it("normalizes drag direction and ignores one-point selection", () => {
     expect(resolveSelectionWindow(9, 4, 16)).toEqual({
-      startIndex: 4,
       endIndex: 9,
+      startIndex: 4,
     });
     expect(resolveSelectionWindow(4, 4, 16)).toBeNull();
     expect(resolveSelectionWindow(null, 4, 16)).toBeNull();

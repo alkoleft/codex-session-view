@@ -4,6 +4,7 @@ import type {
   LoadedSession,
   ProjectMetricsCatalogEntry,
   ProjectMetricsResponse,
+  ProjectMetricsSessionDetail,
   SessionMetrics,
   SessionMetricsQuery,
   SessionPreview,
@@ -138,6 +139,15 @@ export class RemoteViewerBackendClient implements ViewerBackendClient {
     return this.postJson<ProjectMetricsResponse>("/api/viewer/query_project_metrics", {
       query,
     });
+  }
+
+  public loadProjectMetricsSessionDetailById(sessionId: string) {
+    return this.postJson<ProjectMetricsSessionDetail>(
+      "/api/viewer/load_project_metrics_session_detail_by_id",
+      {
+        session_id: sessionId,
+      },
+    );
   }
 
   public loadSessionPreviewById(sessionId: string) {

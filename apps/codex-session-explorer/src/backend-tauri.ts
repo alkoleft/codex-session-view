@@ -6,6 +6,7 @@ import type {
   LoadedSession,
   ProjectMetricsCatalogEntry,
   ProjectMetricsResponse,
+  ProjectMetricsSessionDetail,
   SessionMetrics,
   SessionMetricsQuery,
   SessionPreview,
@@ -142,6 +143,15 @@ export class TauriViewerBackendClient implements ViewerBackendClient {
     return invokeBackend<ProjectMetricsResponse>("query_project_metrics", {
       query,
     });
+  }
+
+  public loadProjectMetricsSessionDetailById(sessionId: string) {
+    return invokeBackend<ProjectMetricsSessionDetail>(
+      "load_project_metrics_session_detail_by_id",
+      {
+        sessionId,
+      },
+    );
   }
 
   public loadSessionPreviewById(sessionId: string) {

@@ -57,6 +57,7 @@ fn desktop_builder() -> tauri::Builder<tauri::Wry> {
             commands::list_project_metrics_catalog,
             commands::load_session_preview,
             commands::load_session_preview_by_id,
+            commands::load_project_metrics_session_detail_by_id,
             commands::load_session,
             commands::load_session_metrics,
             commands::query_project_metrics,
@@ -102,6 +103,7 @@ mod tests {
         assert!(permissions.contains("allow-initialize-codex-home"));
         assert!(permissions.contains("allow-list-sessions"));
         assert!(permissions.contains("allow-load-session-preview"));
+        assert!(permissions.contains("allow-load-project-metrics-session-detail-by-id"));
         assert!(permissions.contains("allow-load-session"));
         assert!(permissions.contains("allow-tail-session"));
         assert!(permissions.contains("allow-recompute-metrics"));

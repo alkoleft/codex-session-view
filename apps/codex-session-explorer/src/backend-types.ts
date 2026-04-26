@@ -380,6 +380,13 @@ export type TaskClassSource =
 
 export type TaskClassConfidence = "confident" | "partial" | "unknown";
 
+export type SessionDetailTextSource =
+  | "indexed_first_user_message"
+  | "indexed_title"
+  | "message_user"
+  | "task_started"
+  | "unavailable";
+
 export type TaskFactRawSignals = {
   agent_role: string | null;
   requested_agent_type: string | null;
@@ -514,6 +521,19 @@ export type ProjectMetricsResponse = {
   };
   baseline: SessionMetrics["baseline"];
   derived_efficiency: SessionMetrics["derived_efficiency"];
+};
+
+export type ProjectMetricsSessionDetail = {
+  session_id: string;
+  session_ref: string;
+  title: string | null;
+  start_user_request: string | null;
+  start_user_request_source: SessionDetailTextSource;
+  task_summary: string | null;
+  task_summary_source: SessionDetailTextSource;
+  agent_role: string | null;
+  task_class: TaskClass | null;
+  task_class_confidence: TaskClassConfidence;
 };
 
 export type RecomputeMetricsRequest = {

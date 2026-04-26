@@ -73,6 +73,10 @@ export function queryProjectMetrics(query: SessionMetricsQuery) {
   return defaultViewerBackendClient.queryProjectMetrics(query);
 }
 
+export function loadProjectMetricsSessionDetailById(sessionId: string) {
+  return defaultViewerBackendClient.loadProjectMetricsSessionDetailById(sessionId);
+}
+
 export function loadSessionPreviewById(sessionId: string) {
   return defaultViewerBackendClient.loadSessionPreviewById(sessionId);
 }

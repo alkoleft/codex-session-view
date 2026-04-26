@@ -161,6 +161,54 @@ describe("RemoteViewerBackendClient", () => {
     await expect(client.loadSession("sessions/demo.jsonl")).rejects.toThrow("backend exploded");
   });
 
+  it("loads project-metrics pinned-session detail via the dedicated endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          session_id: "session-1",
+          session_ref: "2026/04/23/rollout-session-1.jsonl",
+          title: "Implement parser fix",
+          start_user_request: "Fix the parser regression",
+          start_user_request_source: "indexed_first_user_message",
+          task_summary: "Implement parser fix",
+          task_summary_source: "indexed_title",
+          agent_role: "worker",
+          task_class: "implementation",
+          task_class_confidence: "confident",
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      ),
+    );
+
+    const client = new RemoteViewerBackendClient({
+      baseUrl,
+      fetch: fetchMock,
+    });
+
+    await expect(client.loadProjectMetricsSessionDetailById("session-1")).resolves.toMatchObject({
+      session_id: "session-1",
+      start_user_request: "Fix the parser regression",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${baseUrl}/api/viewer/load_project_metrics_session_detail_by_id`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          session_id: "session-1",
+        }),
+      },
+    );
+  });
+
   it("fails fast when live tail is requested", async () => {
     const client = new RemoteViewerBackendClient({
       baseUrl,

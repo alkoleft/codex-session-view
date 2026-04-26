@@ -5,6 +5,7 @@ import type {
   LoadedSession,
   ProjectMetricsCatalogEntry,
   ProjectMetricsResponse,
+  ProjectMetricsSessionDetail,
   ResolvedCodexHome,
   SessionMetrics,
   SessionMetricsQuery,
@@ -47,6 +48,7 @@ export interface ViewerBackendClient {
   loadSession: (sessionRef: string) => Promise<LoadedSession>;
   loadSessionMetrics: (sessionRef: string) => Promise<SessionMetrics>;
   queryProjectMetrics: (query: SessionMetricsQuery) => Promise<ProjectMetricsResponse>;
+  loadProjectMetricsSessionDetailById: (sessionId: string) => Promise<ProjectMetricsSessionDetail>;
   loadSessionPreview: (sessionRef: string) => Promise<SessionPreview>;
   loadSessionPreviewById: (sessionId: string) => Promise<SessionPreview>;
   subscribeToViewerCommands: (handlers: ViewerCommandHandlers) => Promise<() => void>;

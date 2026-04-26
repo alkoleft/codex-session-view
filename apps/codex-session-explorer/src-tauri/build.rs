@@ -17,6 +17,7 @@ fn main() {
             "load_session",
             "load_session_preview",
             "load_session_preview_by_id",
+            "load_project_metrics_session_detail_by_id",
             "tail_session",
         ]));
     tauri_build::try_build(attributes).expect("tauri build script should succeed");

@@ -1,7 +1,9 @@
 use codex_log::session::{
     IndexedSessionCatalogPage, LoadedSession, SessionCatalogPage, TailCursor, TailResult,
 };
-use codex_log::session_metrics::{ProjectMetricsResponse, SessionMetrics, SessionMetricsQuery};
+use codex_log::session_metrics::{
+    ProjectMetricsResponse, ProjectMetricsSessionDetail, SessionMetrics, SessionMetricsQuery,
+};
 use codex_session_explorer_backend::{
     DetectCodexHomeResponse, InitializeCodexHomeResponse, ProjectMetricsCatalogEntry,
     RecomputeMetricsRequest, RecomputeMetricsResponse, SessionPreview, ViewerBackend,
@@ -83,6 +85,16 @@ pub fn load_session_preview_by_id(
 ) -> CommandResult<SessionPreview> {
     state
         .load_session_preview_by_id(&session_id, event_limit)
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn load_project_metrics_session_detail_by_id(
+    state: State<'_, ViewerBackend>,
+    session_id: String,
+) -> CommandResult<ProjectMetricsSessionDetail> {
+    state
+        .load_project_metrics_session_detail_by_id(&session_id)
         .map_err(|err| err.to_string())
 }
 

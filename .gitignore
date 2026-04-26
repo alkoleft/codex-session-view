@@ -8,3 +8,4 @@ gen/
 .agents
 .codex
 scripts/codex-loop/
+.playwright-mcp/

@@ -186,6 +186,12 @@ pub struct IndexedSessionCatalogPage {
     pub diagnostics: Vec<SessionDiagnostic>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StateThreadSummary {
+    pub title: Option<String>,
+    pub first_user_message: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct IndexedSessionCatalogCursor {
     offset: usize,
@@ -499,6 +505,37 @@ impl SessionCatalog {
 
         let mut overlay = Some(overlay);
         self.find_file_backed_indexed_session(session_id, &mut diagnostics, &mut overlay)
+    }
+
+    pub fn find_state_thread_summary(
+        &self,
+        session_id: &str,
+    ) -> AppResult<Option<StateThreadSummary>> {
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return Ok(None);
+        }
+
+        let Some(state_db_path) = find_latest_state_db_path(&self.home.root)? else {
+            return Ok(None);
+        };
+
+        let connection = match open_state_db(&state_db_path) {
+            Ok(connection) => connection,
+            Err(_) => return Ok(None),
+        };
+
+        let mut statement = match connection
+            .prepare("select title, first_user_message from threads where id = ?1 limit 1")
+        {
+            Ok(statement) => statement,
+            Err(_) => return Ok(None),
+        };
+
+        statement
+            .query_row([session_id], state_thread_summary_from_state_row)
+            .optional()
+            .map_err(|err| AppError::Runner(err.to_string()))
     }
 
     pub fn find_session(&self, session_id: &str) -> AppResult<Option<SessionSummary>> {
@@ -1376,6 +1413,17 @@ fn indexed_session_summary_from_state_row(
         model: optional_text(model.as_deref()),
         reasoning_effort: optional_text(reasoning_effort.as_deref()),
         agent_path: optional_text(agent_path.as_deref()),
+    })
+}
+
+fn state_thread_summary_from_state_row(
+    row: &rusqlite::Row<'_>,
+) -> Result<StateThreadSummary, rusqlite::Error> {
+    let title: String = row.get(0)?;
+    let first_user_message: String = row.get(1)?;
+    Ok(StateThreadSummary {
+        title: optional_text(Some(title.as_str())),
+        first_user_message: optional_text(Some(first_user_message.as_str())),
     })
 }
 

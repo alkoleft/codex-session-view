@@ -16,7 +16,7 @@ use crate::events::types::{
     INFO_TOKENS, MCP_CALL, MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, RUNTIME_CONTEXT,
     TASK_COMPLETED, TASK_STARTED,
 };
-use crate::session::IndexedSessionSummary;
+use crate::session::{IndexedSessionSummary, StateThreadSummary};
 use crate::tree::{EventTree, TimelineItem};
 use crate::util::{hash8, normalize_path, utc_now_iso};
 
@@ -483,6 +483,31 @@ pub struct ProjectMetricsResponse {
     pub derived_efficiency: DerivedEfficiencyMetrics,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionDetailTextSource {
+    IndexedFirstUserMessage,
+    IndexedTitle,
+    MessageUser,
+    TaskStarted,
+    #[default]
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectMetricsSessionDetail {
+    pub session_id: String,
+    pub session_ref: String,
+    pub title: Option<String>,
+    pub start_user_request: Option<String>,
+    pub start_user_request_source: SessionDetailTextSource,
+    pub task_summary: Option<String>,
+    pub task_summary_source: SessionDetailTextSource,
+    pub agent_role: Option<String>,
+    pub task_class: Option<TaskClass>,
+    pub task_class_confidence: TaskClassConfidence,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetricsRebuildVersion {
     pub metrics_schema_version: u32,
@@ -504,6 +529,19 @@ pub trait MaterializedMetricsStore {
     fn load_session_metrics(&self, session_id: &str) -> AppResult<Option<SessionMetrics>>;
 
     fn needs_rebuild(&self, session_id: &str, version: MetricsRebuildVersion) -> AppResult<bool>;
+
+    fn store_session_detail(&self, detail: &ProjectMetricsSessionDetail) -> AppResult<()>;
+
+    fn load_session_detail(
+        &self,
+        session_id: &str,
+    ) -> AppResult<Option<ProjectMetricsSessionDetail>>;
+
+    fn needs_detail_rebuild(
+        &self,
+        session_id: &str,
+        version: MetricsRebuildVersion,
+    ) -> AppResult<bool>;
 
     fn query_project_metrics(
         &self,
@@ -722,6 +760,39 @@ pub fn compute_session_metrics(
     }
 }
 
+pub fn build_project_metrics_session_detail(
+    session_id: &str,
+    session_ref: &str,
+    events: &[EventRecord],
+    indexed_summary: Option<&IndexedSessionSummary>,
+    state_thread_summary: Option<&StateThreadSummary>,
+    metrics: &SessionMetrics,
+) -> ProjectMetricsSessionDetail {
+    let (start_user_request, start_user_request_source) =
+        resolve_start_user_request(events, state_thread_summary);
+    let (task_summary, task_summary_source) =
+        resolve_task_summary(events, state_thread_summary, indexed_summary);
+    let primary_task_fact = select_primary_task_fact(&metrics.task_facts);
+
+    ProjectMetricsSessionDetail {
+        session_id: session_id.to_string(),
+        session_ref: session_ref.to_string(),
+        title: state_thread_summary.and_then(|summary| summary.title.clone()),
+        start_user_request,
+        start_user_request_source,
+        task_summary,
+        task_summary_source,
+        agent_role: indexed_summary
+            .and_then(|summary| cleaned(summary.agent_role.as_deref()))
+            .or_else(|| cleaned(metrics.factors.agent_role.as_deref())),
+        task_class: primary_task_fact
+            .and_then(|fact| (fact.task_class != TaskClass::Unknown).then_some(fact.task_class)),
+        task_class_confidence: primary_task_fact
+            .map(|fact| fact.task_class_confidence)
+            .unwrap_or(TaskClassConfidence::Unknown),
+    }
+}
+
 pub fn apply_spawn_agent_mode(
     metrics: &SessionMetrics,
     mode: SpawnAgentAggregation,
@@ -744,6 +815,76 @@ pub fn apply_spawn_agent_mode(
         adjusted.duration.total_ms.value = Some(total.saturating_sub(spawn));
     }
     adjusted
+}
+
+fn resolve_start_user_request(
+    events: &[EventRecord],
+    state_thread_summary: Option<&StateThreadSummary>,
+) -> (Option<String>, SessionDetailTextSource) {
+    if let Some(text) =
+        state_thread_summary.and_then(|summary| cleaned(summary.first_user_message.as_deref()))
+    {
+        return (Some(text), SessionDetailTextSource::IndexedFirstUserMessage);
+    }
+
+    if let Some(text) = first_event_text(events, MESSAGE_USER, &["text", "message", "summary"]) {
+        return (Some(text), SessionDetailTextSource::MessageUser);
+    }
+
+    (None, SessionDetailTextSource::Unavailable)
+}
+
+fn resolve_task_summary(
+    events: &[EventRecord],
+    state_thread_summary: Option<&StateThreadSummary>,
+    indexed_summary: Option<&IndexedSessionSummary>,
+) -> (Option<String>, SessionDetailTextSource) {
+    if let Some(text) = state_thread_summary.and_then(|summary| cleaned(summary.title.as_deref())) {
+        return (Some(text), SessionDetailTextSource::IndexedTitle);
+    }
+
+    if let Some(text) = first_event_text(
+        events,
+        TASK_STARTED,
+        &["title", "task", "prompt", "message", "summary"],
+    ) {
+        return (Some(text), SessionDetailTextSource::TaskStarted);
+    }
+
+    if let Some(text) = indexed_summary.and_then(|summary| cleaned(summary.thread_name.as_deref()))
+    {
+        return (Some(text), SessionDetailTextSource::IndexedTitle);
+    }
+
+    (None, SessionDetailTextSource::Unavailable)
+}
+
+fn first_event_text(events: &[EventRecord], event_type: &str, keys: &[&str]) -> Option<String> {
+    events.iter().find_map(|event| {
+        if event.event_type != event_type {
+            return None;
+        }
+        keys.iter()
+            .find_map(|key| payload_string(event.payload.as_object(), key))
+    })
+}
+
+fn select_primary_task_fact(task_facts: &[TaskMetricsFact]) -> Option<&TaskMetricsFact> {
+    task_facts
+        .iter()
+        .filter(|fact| fact.parent_thread_id.is_none())
+        .min_by(|left, right| {
+            left.started_seq
+                .cmp(&right.started_seq)
+                .then_with(|| left.analytic_key.cmp(&right.analytic_key))
+        })
+        .or_else(|| {
+            task_facts.iter().min_by(|left, right| {
+                left.started_seq
+                    .cmp(&right.started_seq)
+                    .then_with(|| left.analytic_key.cmp(&right.analytic_key))
+            })
+        })
 }
 
 pub struct SqliteSessionMetricsStore {
@@ -788,6 +929,13 @@ impl SqliteSessionMetricsStore {
                 );
                 create index if not exists idx_session_metrics_project_time
                     on session_metrics(project_key, started_at, session_id);
+                create table if not exists session_metric_details (
+                    session_id text primary key not null,
+                    metrics_schema_version integer not null,
+                    source_projection_version integer not null,
+                    payload_json text not null,
+                    updated_at text not null
+                );
                 "#,
             )
             .map_err(|err| AppError::Runner(format!("metrics storage init failed: {err}")))?;
@@ -822,6 +970,13 @@ impl SqliteSessionMetricsStore {
         query: &SessionMetricsQuery,
     ) -> AppResult<ProjectMetricsResponse> {
         self.query_project_metrics(query)
+    }
+
+    pub fn get_session_detail(
+        &self,
+        session_id: &str,
+    ) -> AppResult<Option<ProjectMetricsSessionDetail>> {
+        self.load_session_detail(session_id)
     }
 }
 
@@ -893,6 +1048,76 @@ impl MaterializedMetricsStore for SqliteSessionMetricsStore {
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(true),
             Err(err) => Err(AppError::Runner(format!(
                 "metrics stale query failed: {err}"
+            ))),
+        }
+    }
+
+    fn store_session_detail(&self, detail: &ProjectMetricsSessionDetail) -> AppResult<()> {
+        let payload = serde_json::to_string(detail)
+            .map_err(|err| AppError::Runner(format!("detail serialization failed: {err}")))?;
+        self.conn
+            .execute(
+                r#"
+                insert into session_metric_details (
+                    session_id, metrics_schema_version, source_projection_version, payload_json, updated_at
+                )
+                values (?1, ?2, ?3, ?4, ?5)
+                on conflict(session_id) do update set
+                    metrics_schema_version = excluded.metrics_schema_version,
+                    source_projection_version = excluded.source_projection_version,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                "#,
+                params![
+                    detail.session_id,
+                    METRICS_SCHEMA_VERSION,
+                    METRICS_PROJECTION_VERSION,
+                    payload,
+                    utc_now_iso()
+                ],
+            )
+            .map_err(|err| AppError::Runner(format!("detail upsert failed: {err}")))?;
+        Ok(())
+    }
+
+    fn load_session_detail(
+        &self,
+        session_id: &str,
+    ) -> AppResult<Option<ProjectMetricsSessionDetail>> {
+        let mut stmt = self
+            .conn
+            .prepare("select payload_json from session_metric_details where session_id = ?1")
+            .map_err(|err| AppError::Runner(format!("detail query prepare failed: {err}")))?;
+        let result = stmt.query_row(params![session_id], |row| row.get::<_, String>(0));
+        match result {
+            Ok(payload) => serde_json::from_str::<ProjectMetricsSessionDetail>(&payload)
+                .map(Some)
+                .map_err(|err| AppError::Runner(format!("detail deserialization failed: {err}"))),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(err) => Err(AppError::Runner(format!("detail query failed: {err}"))),
+        }
+    }
+
+    fn needs_detail_rebuild(
+        &self,
+        session_id: &str,
+        version: MetricsRebuildVersion,
+    ) -> AppResult<bool> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "select metrics_schema_version, source_projection_version from session_metric_details where session_id = ?1",
+            )
+            .map_err(|err| AppError::Runner(format!("detail stale query prepare failed: {err}")))?;
+        let result = stmt.query_row(params![session_id], |row| {
+            Ok((row.get::<_, u32>(0)?, row.get::<_, u32>(1)?))
+        });
+        match result {
+            Ok((schema, projection)) => Ok(schema != version.metrics_schema_version
+                || projection != version.source_projection_version),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(true),
+            Err(err) => Err(AppError::Runner(format!(
+                "detail stale query failed: {err}"
             ))),
         }
     }
@@ -2822,6 +3047,29 @@ mod tests {
             .expect("get should succeed")
             .expect("session should exist");
         assert_eq!(loaded.project.project_key, first.project.project_key);
+        let detail = ProjectMetricsSessionDetail {
+            session_id: "session-1".to_string(),
+            session_ref: "2026/04/23/rollout-session-1.jsonl".to_string(),
+            title: Some("Implement parser fix".to_string()),
+            start_user_request: Some("Fix the parser regression".to_string()),
+            start_user_request_source: SessionDetailTextSource::IndexedFirstUserMessage,
+            task_summary: Some("Implement parser fix".to_string()),
+            task_summary_source: SessionDetailTextSource::IndexedTitle,
+            agent_role: Some("worker".to_string()),
+            task_class: Some(TaskClass::Implementation),
+            task_class_confidence: TaskClassConfidence::Confident,
+        };
+        store
+            .store_session_detail(&detail)
+            .expect("detail upsert should succeed");
+        assert!(!store
+            .needs_detail_rebuild("session-1", MetricsRebuildVersion::current())
+            .expect("detail stale query"));
+        let loaded_detail = store
+            .load_session_detail("session-1")
+            .expect("detail get should succeed")
+            .expect("detail should exist");
+        assert_eq!(loaded_detail.start_user_request, detail.start_user_request);
 
         let project = store
             .query_project_metrics(&SessionMetricsQuery {
@@ -2846,6 +3094,51 @@ mod tests {
             .expect("store should open");
 
         assert_materialized_metrics_store_contract(&store);
+    }
+
+    #[test]
+    fn project_metrics_session_detail_prefers_indexed_request_and_title() {
+        let events = vec![
+            event(
+                1,
+                MESSAGE_USER,
+                "2026-04-23T10:00:00Z",
+                json!({"text": "Fallback user message"}),
+            ),
+            event(
+                2,
+                TASK_STARTED,
+                "2026-04-23T10:00:01Z",
+                json!({"title": "Fallback task title"}),
+            ),
+            event(3, AGENT_COMPLETED, "2026-04-23T10:00:02Z", json!({})),
+        ];
+        let metrics = compute_session_metrics("session-1", &events, None, Some(&summary()));
+        let detail = build_project_metrics_session_detail(
+            "session-1",
+            "2026/04/23/rollout-session-1.jsonl",
+            &events,
+            Some(&summary()),
+            Some(&StateThreadSummary {
+                title: Some("Indexed task title".to_string()),
+                first_user_message: Some("Indexed request".to_string()),
+            }),
+            &metrics,
+        );
+
+        assert_eq!(
+            detail.start_user_request.as_deref(),
+            Some("Indexed request")
+        );
+        assert_eq!(
+            detail.start_user_request_source,
+            SessionDetailTextSource::IndexedFirstUserMessage
+        );
+        assert_eq!(detail.task_summary.as_deref(), Some("Indexed task title"));
+        assert_eq!(
+            detail.task_summary_source,
+            SessionDetailTextSource::IndexedTitle
+        );
     }
 
     #[test]

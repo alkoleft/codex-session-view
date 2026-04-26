@@ -11,9 +11,10 @@ use codex_log::session::{
     TailCursor, TailResult,
 };
 use codex_log::session_metrics::{
-    classify_session_scope, compute_session_metrics, extract_project_identity,
-    MaterializedMetricsStore, MetricsRebuildVersion, ProjectIdentityState, ProjectMetricsResponse,
-    SessionMetrics, SessionMetricsQuery, SessionMetricsStore, SessionScopeCounts,
+    build_project_metrics_session_detail, classify_session_scope, compute_session_metrics,
+    extract_project_identity, MaterializedMetricsStore, MetricsRebuildVersion,
+    ProjectIdentityState, ProjectMetricsResponse, ProjectMetricsSessionDetail, SessionMetrics,
+    SessionMetricsQuery, SessionMetricsStore, SessionScopeCounts,
 };
 use codex_log::tree::{
     build_event_tree_with_standalone_startup_metadata, load_records_from_standalone_rollout,
@@ -286,6 +287,24 @@ impl ViewerBackend {
         })
     }
 
+    pub fn load_project_metrics_session_detail_by_id(
+        &self,
+        session_id: &str,
+    ) -> AppResult<ProjectMetricsSessionDetail> {
+        let home = self.require_home()?;
+        let catalog = SessionCatalog::new(home.clone());
+        let session_ref = catalog
+            .resolve_session_ref_by_id(session_id)?
+            .ok_or_else(|| {
+                AppError::Runner(format!(
+                    "session file for session_id={} was not found under CODEX_HOME/sessions",
+                    session_id.trim()
+                ))
+            })?;
+        let store = open_metrics_store(&home)?;
+        self.load_session_detail_from_store(&home, &store, &session_ref)
+    }
+
     pub fn tail_session(
         &self,
         session_ref: &str,
@@ -357,6 +376,29 @@ impl ViewerBackend {
         self.materialize_session_metrics_into_store(home, store, session_ref, text_limit)
     }
 
+    fn load_session_detail_from_store(
+        &self,
+        home: &ResolvedCodexHome,
+        store: &dyn MaterializedMetricsStore,
+        session_ref: &str,
+    ) -> AppResult<ProjectMetricsSessionDetail> {
+        let path = home.resolve_session_ref(session_ref)?;
+        let session_id = validate_standalone_rollout_root(&path)?;
+        if !store.needs_detail_rebuild(&session_id, MetricsRebuildVersion::current())? {
+            if let Some(detail) = store.load_session_detail(&session_id)? {
+                return Ok(detail);
+            }
+        }
+
+        let (_, detail) = self.materialize_session_metrics_and_detail_into_store(
+            home,
+            store,
+            session_ref,
+            DEFAULT_TEXT_LIMIT,
+        )?;
+        Ok(detail)
+    }
+
     fn collect_session_refs(
         &self,
         home: &ResolvedCodexHome,
@@ -412,10 +454,27 @@ impl ViewerBackend {
         session_ref: &str,
         text_limit: usize,
     ) -> AppResult<SessionMetrics> {
+        let (metrics, _) = self.materialize_session_metrics_and_detail_into_store(
+            home,
+            store,
+            session_ref,
+            text_limit,
+        )?;
+        Ok(metrics)
+    }
+
+    fn materialize_session_metrics_and_detail_into_store(
+        &self,
+        home: &ResolvedCodexHome,
+        store: &dyn MaterializedMetricsStore,
+        session_ref: &str,
+        text_limit: usize,
+    ) -> AppResult<(SessionMetrics, ProjectMetricsSessionDetail)> {
         let path = home.resolve_session_ref(session_ref)?;
         let session_id = validate_standalone_rollout_root(&path)?;
         let catalog = SessionCatalog::new(home.clone());
         let indexed_summary = catalog.find_indexed_session(&session_id)?;
+        let state_thread_summary = catalog.find_state_thread_summary(&session_id)?;
         let standalone = load_records_from_standalone_rollout(&path, &session_id)?;
         let tree = build_event_tree_with_standalone_startup_metadata(
             &path,
@@ -429,8 +488,17 @@ impl ViewerBackend {
             Some(&tree),
             indexed_summary.as_ref(),
         );
+        let detail = build_project_metrics_session_detail(
+            &session_id,
+            session_ref,
+            &standalone.events,
+            indexed_summary.as_ref(),
+            state_thread_summary.as_ref(),
+            &metrics,
+        );
         store.store_session_metrics(&metrics)?;
-        Ok(metrics)
+        store.store_session_detail(&detail)?;
+        Ok((metrics, detail))
     }
 }
 
@@ -631,10 +699,10 @@ mod tests {
 
     use codex_log::session_metrics::{
         compute_session_metrics, extract_project_identity, CoveredMetric, DurationBreakdown,
-        MetricCoverage, MetricSource, OperationMetrics, OutcomeSummary, SessionMetrics,
-        SessionMetricsQuery, SessionMetricsStore, SessionOutcome, SessionScope, SessionScopeFilter,
-        TaskClass, TaskClassConfidence, TaskClassSource, TaskFactRawSignals, TaskMetricsFact,
-        TokenLedger, METRICS_PROJECTION_VERSION, METRICS_SCHEMA_VERSION,
+        MetricCoverage, MetricSource, OperationMetrics, OutcomeSummary, SessionDetailTextSource,
+        SessionMetrics, SessionMetricsQuery, SessionMetricsStore, SessionOutcome, SessionScope,
+        SessionScopeFilter, TaskClass, TaskClassConfidence, TaskClassSource, TaskFactRawSignals,
+        TaskMetricsFact, TokenLedger, METRICS_PROJECTION_VERSION, METRICS_SCHEMA_VERSION,
     };
     use codex_log::EventRecord;
     use rusqlite::Connection;
@@ -924,6 +992,68 @@ mod tests {
                 .and_then(|summary| summary.thread_name.as_deref()),
             Some("Alpha")
         );
+    }
+
+    #[test]
+    fn project_metrics_session_detail_by_id_returns_materialized_request_text() {
+        let tmp = tempdir().expect("tmpdir should exist");
+        let home = tmp.path().join(".codex");
+        let rollout_path = write_rollout_file(
+            &home,
+            "session-a",
+            &[
+                r#"{"timestamp":"2026-04-07T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"text":"Fallback prompt"}]}}"#,
+                r#"{"timestamp":"2026-04-07T10:00:02Z","type":"response_item","payload":{"type":"task_started","title":"Fallback task"}}"#,
+            ],
+        );
+        write_state_threads_db(
+            &home,
+            &[StateThreadRow {
+                session_id: "session-a",
+                rollout_path: &rollout_path,
+                updated_at: 1_744_021_000,
+                cwd: "/repo/project-alpha",
+                source: "cli",
+                title: "Indexed task title",
+                first_user_message: "Indexed request text",
+                agent_nickname: Some("codex"),
+                git_branch: Some("main"),
+                git_origin_url: Some("https://example.test/repo.git"),
+                tokens_used: 15,
+            }],
+        );
+
+        let backend = ViewerBackend::default();
+        backend
+            .initialize_codex_home(Some(home.display().to_string()))
+            .expect("home should initialize");
+
+        let detail = backend
+            .load_project_metrics_session_detail_by_id("session-a")
+            .expect("detail should load");
+        assert_eq!(detail.session_id, "session-a");
+        assert_eq!(
+            detail.start_user_request.as_deref(),
+            Some("Indexed request text")
+        );
+        assert_eq!(
+            detail.start_user_request_source,
+            SessionDetailTextSource::IndexedFirstUserMessage
+        );
+        assert_eq!(detail.task_summary.as_deref(), Some("Indexed task title"));
+        assert_eq!(
+            detail.task_summary_source,
+            SessionDetailTextSource::IndexedTitle
+        );
+
+        let stored = SessionMetricsStore::open(&metrics_storage_path(
+            &backend.require_home().expect("home"),
+        ))
+        .expect("metrics store should open")
+        .get_session_detail("session-a")
+        .expect("detail lookup should succeed")
+        .expect("detail should be materialized");
+        assert_eq!(stored, detail);
     }
 
     #[test]
