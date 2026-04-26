@@ -209,6 +209,49 @@ describe("RemoteViewerBackendClient", () => {
     );
   });
 
+  it("recomputes materialized metrics via the dedicated endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          project_key: "project:test",
+          session_count: 17,
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+          },
+        },
+      ),
+    );
+
+    const client = new RemoteViewerBackendClient({
+      baseUrl,
+      fetch: fetchMock,
+    });
+
+    await expect(
+      client.recomputeMetrics({
+        project_key: "project:test",
+        text_limit: 80,
+      }),
+    ).resolves.toEqual({
+      project_key: "project:test",
+      session_count: 17,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(`${baseUrl}/api/viewer/recompute_metrics`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        project_key: "project:test",
+        text_limit: 80,
+      }),
+    });
+  });
+
   it("fails fast when live tail is requested", async () => {
     const client = new RemoteViewerBackendClient({
       baseUrl,

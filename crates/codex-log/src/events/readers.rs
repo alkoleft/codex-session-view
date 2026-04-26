@@ -292,7 +292,7 @@ fn enrich_skill_usage_payload(payload: &mut Value) {
     let Some(payload_obj) = payload.as_object_mut() else {
         return;
     };
-    let identifiers = extract_skill_identifiers_from_value(&Value::Object(payload_obj.clone()));
+    let identifiers = extract_skill_identifiers_from_shell_payload(payload_obj);
     if identifiers.is_empty() {
         return;
     }
@@ -300,6 +300,18 @@ fn enrich_skill_usage_payload(payload: &mut Value) {
         "skill_identifiers".to_string(),
         Value::Array(identifiers.into_iter().map(Value::from).collect()),
     );
+}
+
+fn extract_skill_identifiers_from_shell_payload(payload_obj: &Map<String, Value>) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    for key in ["input", "command", "parsed_cmd"] {
+        if let Some(value) = payload_obj.get(key) {
+            for identifier in extract_skill_identifiers_from_value(value) {
+                out.insert(identifier);
+            }
+        }
+    }
+    out.into_iter().collect()
 }
 
 fn extract_skill_identifiers_from_value(value: &Value) -> Vec<String> {
@@ -441,5 +453,61 @@ fn response_item_phase(item: &Map<String, Value>) -> String {
         Some("updated") => "updated".to_string(),
         Some("completed" | "failed" | "error" | "cancelled") => "completed".to_string(),
         _ => "completed".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{extract_skill_identifiers_from_shell_payload, extract_skill_identifiers_from_value};
+    use serde_json::{json, Map, Value};
+
+    #[test]
+    fn skill_identifier_extraction_reads_explicit_skill_paths() {
+        let identifiers = extract_skill_identifiers_from_value(&json!({
+            "command": "cat /tmp/skills/openspec-explore/SKILL.md"
+        }));
+
+        assert_eq!(identifiers, vec!["openspec-explore".to_string()]);
+    }
+
+    #[test]
+    fn shell_payload_skill_extraction_ignores_stdout_only_skill_mentions() {
+        let payload = Map::from_iter([
+            (
+                "output".to_string(),
+                Value::from("quoted block (file: /home/alko/.codex/skills/.system/openai-docs/SKILL.md)"),
+            ),
+            (
+                "formatted_output".to_string(),
+                Value::from("same quoted output"),
+            ),
+        ]);
+
+        assert!(extract_skill_identifiers_from_shell_payload(&payload).is_empty());
+    }
+
+    #[test]
+    fn shell_payload_skill_extraction_uses_input_and_parsed_command() {
+        let payload = Map::from_iter([
+            (
+                "input".to_string(),
+                json!({
+                    "cmd": "sed -n '1,80p' /home/alko/.codex/skills/openspec-explore/SKILL.md"
+                }),
+            ),
+            (
+                "parsed_cmd".to_string(),
+                json!([
+                    {
+                        "cmd": "read /home/alko/.codex/skills/openspec-explore/SKILL.md"
+                    }
+                ]),
+            ),
+        ]);
+
+        assert_eq!(
+            extract_skill_identifiers_from_shell_payload(&payload),
+            vec!["openspec-explore".to_string()]
+        );
     }
 }

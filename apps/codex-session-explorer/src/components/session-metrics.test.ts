@@ -312,6 +312,7 @@ function makeBackendMetrics(overrides: Partial<SessionMetrics> = {}): SessionMet
     },
     used_skills: {
       identifiers: [],
+      count: covered(null),
       coverage: "unknown",
       source: "unavailable",
     },

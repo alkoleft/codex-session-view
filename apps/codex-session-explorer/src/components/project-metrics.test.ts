@@ -104,6 +104,7 @@ function makeSession(overrides: Partial<SessionMetrics> = {}): SessionMetrics {
     task_facts: [],
     used_skills: {
       identifiers: [],
+      count: covered(null),
       coverage: "unknown",
       source: "unavailable",
     },
@@ -172,6 +173,7 @@ function makeResponse(sessions: SessionMetrics[]): ProjectMetricsResponse {
     task_facts: sessions.flatMap((session) => session.task_facts),
     used_skills: {
       skills: [],
+      count: covered(null),
       coverage: "unknown",
       source: "unavailable",
     },
@@ -220,6 +222,12 @@ describe("buildProjectMetricsViewModel", () => {
       makeSession({
         session_id: "session-1",
         started_at: "2026-04-23T09:00:00Z",
+        used_skills: {
+          identifiers: ["openspec-apply-change", "shadcn"],
+          count: covered(2),
+          coverage: "known",
+          source: "normalized_events",
+        },
       }),
       makeSession({
         session_id: "session-2",
@@ -257,6 +265,15 @@ describe("buildProjectMetricsViewModel", () => {
         error_count: covered(2, "partial"),
       }),
     ]);
+    response.used_skills = {
+      skills: [
+        { identifier: "openspec-apply-change", session_count: 1, usage_count: 1 },
+        { identifier: "shadcn", session_count: 1, usage_count: 1 },
+      ],
+      count: covered(2, "partial"),
+      coverage: "partial",
+      source: "derived",
+    };
 
     const viewModel = buildProjectMetricsViewModel(response, false);
 
@@ -268,8 +285,19 @@ describe("buildProjectMetricsViewModel", () => {
     expect(viewModel.chartSeries.find((series) => series.key === "startContext")).toMatchObject({
       category: "factors",
     });
+    expect(viewModel.chartSeries.find((series) => series.key === "usedSkillsCount")).toMatchObject({
+      category: "factors",
+    });
     expect(viewModel.chartSeries.find((series) => series.key === "tokenInput")).toMatchObject({
       category: "tokens",
+    });
+    expect(getProjectMetricPoint(viewModel.chartRows[0], "usedSkillsCount")).toMatchObject({
+      coverage: "known",
+      value: 2,
+    });
+    expect(getProjectMetricPoint(viewModel.chartRows[1], "usedSkillsCount")).toMatchObject({
+      coverage: "unknown",
+      value: null,
     });
     expect(getProjectMetricPoint(viewModel.chartRows[1], "tokens")).toMatchObject({
       coverage: "unknown",
@@ -284,7 +312,8 @@ describe("buildProjectMetricsViewModel", () => {
     expect(viewModel.sessions[0].tokens).toBe("2 900");
     expect(viewModel.sessions[1].sessionScope).toBe("unknown");
     expect(viewModel.sessions[1].failures).toContain("partial");
-    expect(viewModel.usedSkillsCoverage).toBe("unknown");
+    expect(viewModel.summaryCards.find((card) => card.label === "Used skills")?.value).toBe("2 (partial)");
+    expect(viewModel.usedSkillsCoverage).toBe("partial");
   });
 });
 
@@ -314,5 +343,6 @@ describe("aggregateProjectMetricsResponses", () => {
     expect(merged.factors.skills_count.value).toBe(0);
     expect(merged.task_metrics.task_count.value).toBe(2);
     expect(merged.duration_ms.value).toBe(1200000);
+    expect(merged.used_skills.count.value).toBeNull();
   });
 });

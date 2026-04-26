@@ -7,6 +7,8 @@ import type {
   ProjectMetricsCatalogEntry,
   ProjectMetricsResponse,
   ProjectMetricsSessionDetail,
+  RecomputeMetricsRequest,
+  RecomputeMetricsResponse,
   SessionMetrics,
   SessionMetricsQuery,
   SessionPreview,
@@ -142,6 +144,12 @@ export class TauriViewerBackendClient implements ViewerBackendClient {
   public queryProjectMetrics(query: SessionMetricsQuery) {
     return invokeBackend<ProjectMetricsResponse>("query_project_metrics", {
       query,
+    });
+  }
+
+  public recomputeMetrics(request: RecomputeMetricsRequest) {
+    return invokeBackend<RecomputeMetricsResponse>("recompute_metrics", {
+      request,
     });
   }
 

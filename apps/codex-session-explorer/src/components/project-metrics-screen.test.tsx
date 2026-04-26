@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -108,6 +108,12 @@ function covered(
 }
 
 function makeSession(index: number): SessionMetrics {
+  const skillIdentifiers =
+    index % 3 === 0
+      ? ["openspec-apply-change"]
+      : index === 8
+        ? ["shadcn", "openspec-explore"]
+        : [];
   return {
     session_id: `session-${index}`,
     metrics_schema_version: 1,
@@ -185,9 +191,13 @@ function makeSession(index: number): SessionMetrics {
     },
     task_facts: [],
     used_skills: {
-      identifiers: index % 3 === 0 ? ["openspec-apply-change"] : [],
-      coverage: index % 3 === 0 ? "known" : "unknown",
-      source: index % 3 === 0 ? "normalized_events" : "unavailable",
+      identifiers: skillIdentifiers,
+      count: covered(
+        skillIdentifiers.length > 0 ? skillIdentifiers.length : null,
+        skillIdentifiers.length > 0 ? "known" : "unknown",
+      ),
+      coverage: skillIdentifiers.length > 0 ? "known" : "unknown",
+      source: skillIdentifiers.length > 0 ? "normalized_events" : "unavailable",
     },
     business_review: {
       review_cycles: covered(0),
@@ -260,6 +270,7 @@ function makeResponse(count: number): ProjectMetricsResponse {
           session_count: Math.floor(count / 3),
         },
       ],
+      count: covered(Math.floor(count / 3), "partial"),
       coverage: "partial",
       source: "derived",
     },
@@ -330,6 +341,7 @@ describe("ProjectMetricsShellControls", () => {
     const onProjectChange = vi.fn();
     const onScopeFilterChange = vi.fn();
     const onIncludeSpawnAgentsChange = vi.fn();
+    const onRecompute = vi.fn();
     const onRangeChange = vi.fn();
 
     render(
@@ -338,6 +350,7 @@ describe("ProjectMetricsShellControls", () => {
         includeSpawnAgents={true}
         onIncludeSpawnAgentsChange={onIncludeSpawnAgentsChange}
         onProjectChange={onProjectChange}
+        onRecompute={onRecompute}
         onRangeChange={onRangeChange}
         onScopeFilterChange={onScopeFilterChange}
         projectOptions={[
@@ -352,6 +365,9 @@ describe("ProjectMetricsShellControls", () => {
           },
         ]}
         range={{ ...createInitialProjectMetricsRange(), preset: "custom", start: "2026-04-20T10:00", end: "2026-04-21T10:00" }}
+        recomputeBusy={false}
+        recomputeError={null}
+        recomputeStatus="Пересчёт готов"
         selectedProjectKey="project-alpha"
         scopeFilter="all"
       />,
@@ -363,12 +379,18 @@ describe("ProjectMetricsShellControls", () => {
     expect(screen.getByDisplayValue("Custom range")).toBeTruthy();
     expect(screen.getByDisplayValue("2026-04-20T10:00")).toBeTruthy();
     expect(screen.getByDisplayValue("2026-04-21T10:00")).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-recompute-status").textContent).toContain(
+      "Пересчёт готов",
+    );
 
     await user.click(screen.getByRole("button", { name: "Main" }));
     expect(onScopeFilterChange).toHaveBeenCalledWith("main");
 
     await user.click(screen.getByText("Spawn agents"));
     expect(onIncludeSpawnAgentsChange).toHaveBeenCalledWith(false);
+
+    await user.click(screen.getByRole("button", { name: "Recompute" }));
+    expect(onRecompute).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -397,7 +419,7 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByRole("tab", { name: "Series" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Chart" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "Pinned session" })).toBeTruthy();
-    expect(screen.queryByText("Used skills")).toBeNull();
+    expect(screen.getByText("Used skills")).toBeTruthy();
     expect(screen.queryByText("Contributing sessions")).toBeNull();
     expect(screen.queryByText("Partial data remains visible")).toBeNull();
 
@@ -411,6 +433,10 @@ describe("ProjectMetricsScreen", () => {
 
     await user.click(screen.getByRole("tab", { name: "Pinned session" }));
     expect(screen.getByTestId("project-metrics-pinned-tab")).toBeTruthy();
+    expect(screen.getByTestId("project-metrics-pinned-used-skills").textContent).toContain("shadcn");
+    expect(screen.getByTestId("project-metrics-pinned-used-skills").textContent).toContain(
+      "openspec-explore",
+    );
 
     await user.click(screen.getByRole("button", { name: "Open session" }));
     expect(onOpenSession).toHaveBeenCalledWith("session-8");
@@ -710,17 +736,19 @@ describe("ProjectMetricsScreen", () => {
     await user.click(primaryBar as Element);
     expect(screen.getByText("Loading pinned detail...")).toBeTruthy();
 
-    resolveDetail({
-      session_id: "session-8",
-      session_ref: "session-8.jsonl",
-      title: "Pinned request title",
-      start_user_request: "Investigate the abnormal token spike.",
-      start_user_request_source: "indexed_first_user_message",
-      task_summary: "Compare the selected session against neighboring runs.",
-      task_summary_source: "indexed_title",
-      agent_role: "default",
-      task_class: "analysis",
-      task_class_confidence: "confident",
+    await act(async () => {
+      resolveDetail({
+        session_id: "session-8",
+        session_ref: "session-8.jsonl",
+        title: "Pinned request title",
+        start_user_request: "Investigate the abnormal token spike.",
+        start_user_request_source: "indexed_first_user_message",
+        task_summary: "Compare the selected session against neighboring runs.",
+        task_summary_source: "indexed_title",
+        agent_role: "default",
+        task_class: "analysis",
+        task_class_confidence: "confident",
+      });
     });
 
     await waitFor(() => {

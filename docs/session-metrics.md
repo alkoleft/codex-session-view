@@ -162,6 +162,18 @@ events. Для стартового контекста используется 
 Quality groups для feedback, evaluator, guardrail и handoff зарезервированы как отдельные группы
 и не выводятся из факта отсутствия технических ошибок.
 
+## Used skills
+
+Группа `used_skills` хранит два связанных представления одного и того же сигнала explicit usage:
+
+- `identifiers` содержит stable-ordered unique skill identifiers по явным `skill_identifiers`
+  markers;
+- `count` содержит количество этих unique identifiers и использует ту же coverage/source
+  semantics, что и сам usage signal.
+
+Если explicit markers отсутствуют, `used_skills.count` остаётся `unknown`: система не подменяет
+его ни нулём, ни `factors.skills_count`, ни длиной `runtime_context.skills`.
+
 ## Derived metrics и baseline
 
 Derived efficiency metrics считаются только при достаточном coverage входных метрик. Если входы
@@ -232,7 +244,7 @@ Frontend показывает backend-provided metrics, если они есть
 | `task_metrics.task_count`, `turn_count` | normalized events | `known`, если есть соответствующие markers; иначе `unknown` | implemented |
 | `task_metrics.agent_work_item_count` | `EventTree` или distinct `thread_id` | `known` через tree, `partial` через fallback distinct count | implemented |
 | `task_facts[]` operations/duration/token ledger | task boundaries + operation projection + scoped token snapshots | `known` для закрытых интервалов, `partial`/`unknown` для open boundaries | implemented |
-| `used_skills` | explicit `skill_identifiers` signals | `known`, если есть явные usage markers; иначе `unknown` | implemented |
+| `used_skills.identifiers`, `used_skills.count` | explicit `skill_identifiers` signals | `known`, если есть явные usage markers; иначе `unknown` без synthetic zero-fill | implemented |
 | `business_review.review_cycles`, `review_findings` | markers в normalized events и `EventTree` | `partial`, потому что счётчики marker-based | partial-by-source |
 | `context.context_growth` | нет канонического delta source | всегда `unknown` | unsupported-with-current-sources |
 | `context.compaction_events`, `context.context_compression` | normalized events | `known` по числу compaction markers | implemented |
@@ -253,6 +265,6 @@ Frontend показывает backend-provided metrics, если они есть
 | `operations.spawn_agent_calls` | сумма session rollups | `known`/`partial` по session coverage | implemented |
 | `task_metrics.task_count` | сумма session rollups | `known`/`partial` по session coverage | implemented |
 | `task_facts[]` | объединение session task facts без доп. вычислений | зависит от coverage каждого факта | implemented |
-| `used_skills` | derived union по session `used_skills` | `known`, если все contributing sessions дали known usage; иначе `partial` | implemented |
+| `used_skills.skills`, `used_skills.count` | derived union по session `used_skills` | `known`, если все contributing sessions дали known usage; иначе `partial`; `count` равен числу unique skills в окне | implemented |
 | `baseline.*` | project baseline ещё не материализован | всегда `unknown` | unsupported-with-current-sources |
 | `derived_efficiency.*` | project-level derived rollups пока не собраны поверх materialized sessions | всегда `unknown` | unsupported-with-current-sources |

@@ -448,6 +448,7 @@ export type SessionMetrics = {
   task_facts: TaskMetricsFact[];
   used_skills: {
     identifiers: string[];
+    count: CoveredMetric<number>;
     coverage: MetricCoverage;
     source: MetricSource;
   };
@@ -516,6 +517,7 @@ export type ProjectMetricsResponse = {
       usage_count: number;
       session_count: number;
     }>;
+    count: CoveredMetric<number>;
     coverage: MetricCoverage;
     source: MetricSource;
   };

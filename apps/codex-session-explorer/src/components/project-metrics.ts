@@ -46,6 +46,7 @@ export type ProjectMetricSeriesKey =
   | "toolCalls"
   | "startContext"
   | "skillsCount"
+  | "usedSkillsCount"
   | "mcpServerCount"
   | "taskCount"
   | "spawnAgentCalls"
@@ -306,6 +307,18 @@ const PROJECT_METRIC_SERIES_DEFINITIONS: readonly ProjectMetricSeriesDefinition[
     formatValue: formatCoveredNumber,
   },
   {
+    key: "usedSkillsCount",
+    label: "Used skills",
+    shortLabel: "Used",
+    valueLabel: "Used skills",
+    description: "Количество явно использованных skills по unique usage markers.",
+    category: "factors",
+    defaultVisible: false,
+    color: "#7c2d12",
+    selectMetric: (session) => session.used_skills.count,
+    formatValue: formatCoveredNumber,
+  },
+  {
     key: "mcpServerCount",
     label: "MCP servers",
     shortLabel: "MCP",
@@ -553,6 +566,10 @@ export function buildProjectMetricsViewModel(
         value: formatCoveredNumber(cachedTokens),
       },
       {
+        label: "Used skills",
+        value: formatCoveredNumber(response.used_skills.count),
+      },
+      {
         label: "Baseline",
         value: formatCoverage(response.baseline.coverage),
       },
@@ -762,6 +779,7 @@ function aggregateUsedSkills(sessions: SessionMetrics[]): ProjectMetricsResponse
   if (!hasKnown) {
     return {
       skills: [],
+      count: unknownCoveredMetric(),
       coverage: "unknown",
       source: "unavailable",
     };
@@ -775,6 +793,11 @@ function aggregateUsedSkills(sessions: SessionMetrics[]): ProjectMetricsResponse
         session_count: counts.session_count,
       }))
       .sort((left, right) => right.usage_count - left.usage_count || left.identifier.localeCompare(right.identifier)),
+    count: {
+      value: byIdentifier.size,
+      coverage: allKnown ? "known" : "partial",
+      source: "derived",
+    },
     coverage: allKnown ? "known" : "partial",
     source: "derived",
   };

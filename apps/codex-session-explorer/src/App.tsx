@@ -44,6 +44,7 @@ import {
   Dialog,
   DialogClose,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -490,6 +491,10 @@ export default function App() {
   const [projectMetricsIncludeSpawnAgents, setProjectMetricsIncludeSpawnAgents] = useState(true);
   const [projectMetricsLoading, setProjectMetricsLoading] = useState(false);
   const [projectMetricsError, setProjectMetricsError] = useState<string | null>(null);
+  const [projectMetricsRecomputeBusy, setProjectMetricsRecomputeBusy] = useState(false);
+  const [projectMetricsRecomputeError, setProjectMetricsRecomputeError] = useState<string | null>(null);
+  const [projectMetricsRecomputeStatus, setProjectMetricsRecomputeStatus] = useState<string | null>(null);
+  const [projectMetricsRefreshRevision, setProjectMetricsRefreshRevision] = useState(0);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [selectedAgentThreadId, setSelectedAgentThreadId] = useState<string | null>(null);
@@ -499,9 +504,11 @@ export default function App() {
   const [timelineFocusEventId, setTimelineFocusEventId] = useState<string | null>(null);
   const [timelineFocusRevision, setTimelineFocusRevision] = useState(0);
   const tailCursorRef = useRef<TailCursor | null>(null);
+  const selectedProjectKeyRef = useRef<string | null>(initialRouteRef.current.selectedProjectKey);
   const selectedSessionRefRef = useRef<string | null>(null);
   const sessionCatalogRequestIdRef = useRef(0);
   const sessionRequestIdRef = useRef(0);
+  const projectMetricsRecomputeRequestIdRef = useRef(0);
   const pendingSessionRefRef = useRef<string | null>(null);
   const initialCatalogRequestedRef = useRef(false);
   const initialAutoloadPendingRef = useRef(false);
@@ -638,6 +645,83 @@ export default function App() {
     },
     [updateViewerRouteUrl, viewerRouteState],
   );
+
+  useEffect(() => {
+    selectedProjectKeyRef.current = selectedProjectKey;
+  }, [selectedProjectKey]);
+
+  const recomputeProjectMetrics = useCallback(async () => {
+    if (!selectedProjectOption) {
+      return;
+    }
+
+    const requestId = ++projectMetricsRecomputeRequestIdRef.current;
+    const selectedWorkspaceProjectKey = selectedProjectOption.projectKey;
+    const backendProjectKeys = [...new Set(selectedProjectOption.backendProjectKeys)];
+    if (backendProjectKeys.length === 0) {
+      return;
+    }
+
+    setProjectMetricsRecomputeBusy(true);
+    setProjectMetricsRecomputeError(null);
+    setProjectMetricsRecomputeStatus("Пересчитываю materialized metrics для выбранного проекта.");
+
+    const responses = await Promise.allSettled(
+      backendProjectKeys.map((projectKey) =>
+        viewerBackendClient.recomputeMetrics({
+          project_key: projectKey,
+        }),
+      ),
+    );
+
+    if (
+      requestId !== projectMetricsRecomputeRequestIdRef.current
+      || selectedWorkspaceProjectKey !== selectedProjectKeyRef.current
+    ) {
+      return;
+    }
+
+    const succeeded = responses.filter(
+      (response): response is PromiseFulfilledResult<{ project_key: string | null; session_count: number }> =>
+        response.status === "fulfilled",
+    );
+    const failed = responses.filter(
+      (response): response is PromiseRejectedResult => response.status === "rejected",
+    );
+
+    if (succeeded.length > 0) {
+      const sessionCount = succeeded.reduce((total, response) => total + response.value.session_count, 0);
+      setProjectMetricsRecomputeError(
+        failed.length > 0
+          ? failed.map((response) => extractErrorMessage(response.reason)).join(" | ")
+          : null,
+      );
+      setProjectMetricsRefreshRevision((current) => current + 1);
+      if (failed.length === 0) {
+        setProjectMetricsRecomputeStatus(
+          `Пересчёт завершён: обновлено сессий ${sessionCount}. Перезагружаю project view.`,
+        );
+      } else {
+        setProjectMetricsRecomputeStatus(
+          `Пересчёт завершён: обновлено сессий ${sessionCount}. Частичный результат: ${succeeded.length} из ${backendProjectKeys.length} backend keys обновлены. Перезагружаю project view.`,
+        );
+      }
+    } else {
+      setProjectMetricsRecomputeStatus(null);
+      setProjectMetricsRecomputeError(
+        failed.length > 0
+          ? failed.map((response) => extractErrorMessage(response.reason)).join(" | ")
+          : "Recompute metrics failed.",
+      );
+    }
+
+    if (
+      requestId === projectMetricsRecomputeRequestIdRef.current
+      && selectedWorkspaceProjectKey === selectedProjectKeyRef.current
+    ) {
+      setProjectMetricsRecomputeBusy(false);
+    }
+  }, [selectedProjectOption]);
 
   const applyPreview = useCallback((preview: SessionPreview) => {
     tailCursorRef.current = preview.tail_cursor;
@@ -1131,6 +1215,13 @@ export default function App() {
   }, [bootState, selectedLoadedSession?.metrics?.project.project_key]);
 
   useEffect(() => {
+    projectMetricsRecomputeRequestIdRef.current += 1;
+    setProjectMetricsRecomputeBusy(false);
+    setProjectMetricsRecomputeStatus(null);
+    setProjectMetricsRecomputeError(null);
+  }, [selectedProjectKey]);
+
+  useEffect(() => {
     if (!selectedProjectOption) {
       setProjectMetrics(null);
       setProjectMetricsError(null);
@@ -1182,6 +1273,7 @@ export default function App() {
     };
   }, [
     projectMetricsIncludeSpawnAgents,
+    projectMetricsRefreshRevision,
     projectMetricsRange,
     projectMetricsScopeFilter,
     selectedProjectOption,
@@ -1277,7 +1369,9 @@ export default function App() {
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="flex flex-col gap-2">
                 <DialogTitle>Выбор сессии</DialogTitle>
-                <p className="text-xs text-muted-foreground">{catalogSessions.length} loaded</p>
+                <DialogDescription className="text-xs">
+                  {catalogSessions.length} loaded
+                </DialogDescription>
               </div>
             </div>
           </DialogHeader>
@@ -1542,10 +1636,16 @@ export default function App() {
                   includeSpawnAgents={projectMetricsIncludeSpawnAgents}
                   onIncludeSpawnAgentsChange={setProjectMetricsIncludeSpawnAgents}
                   onProjectChange={setSelectedProjectKey}
+                  onRecompute={() => {
+                    void recomputeProjectMetrics();
+                  }}
                   onRangeChange={setProjectMetricsRange}
                   onScopeFilterChange={setProjectMetricsScopeFilter}
                   projectOptions={projectOptions}
                   range={projectMetricsRange}
+                  recomputeBusy={projectMetricsRecomputeBusy}
+                  recomputeError={projectMetricsRecomputeError}
+                  recomputeStatus={projectMetricsRecomputeStatus}
                   selectedProjectKey={selectedProjectKey}
                   scopeFilter={projectMetricsScopeFilter}
                 />
@@ -1571,6 +1671,7 @@ export default function App() {
                   navigateToMainScreen("session");
                   void openSessionById(sessionId);
                 }}
+                recomputeRevision={projectMetricsRefreshRevision}
                 selectedProjectKey={selectedProjectKey}
               />
             ) : (

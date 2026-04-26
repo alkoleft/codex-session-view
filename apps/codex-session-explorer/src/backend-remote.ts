@@ -5,6 +5,8 @@ import type {
   ProjectMetricsCatalogEntry,
   ProjectMetricsResponse,
   ProjectMetricsSessionDetail,
+  RecomputeMetricsRequest,
+  RecomputeMetricsResponse,
   SessionMetrics,
   SessionMetricsQuery,
   SessionPreview,
@@ -139,6 +141,10 @@ export class RemoteViewerBackendClient implements ViewerBackendClient {
     return this.postJson<ProjectMetricsResponse>("/api/viewer/query_project_metrics", {
       query,
     });
+  }
+
+  public recomputeMetrics(request: RecomputeMetricsRequest) {
+    return this.postJson<RecomputeMetricsResponse>("/api/viewer/recompute_metrics", request);
   }
 
   public loadProjectMetricsSessionDetailById(sessionId: string) {

@@ -2,7 +2,7 @@ import { resolveViewerBackendConfig } from "./backend-config";
 import type { ViewerBackendClient, ViewerCommandHandlers } from "./backend-contract";
 import { RemoteViewerBackendClient } from "./backend-remote";
 import { TauriViewerBackendClient } from "./backend-tauri";
-import type { SessionMetricsQuery, TailCursor } from "./backend-types";
+import type { RecomputeMetricsRequest, SessionMetricsQuery, TailCursor } from "./backend-types";
 
 export * from "./backend-contract";
 export * from "./backend-types";
@@ -71,6 +71,10 @@ export function loadSessionMetrics(sessionRef: string) {
 
 export function queryProjectMetrics(query: SessionMetricsQuery) {
   return defaultViewerBackendClient.queryProjectMetrics(query);
+}
+
+export function recomputeMetrics(request: RecomputeMetricsRequest) {
+  return defaultViewerBackendClient.recomputeMetrics(request);
 }
 
 export function loadProjectMetricsSessionDetailById(sessionId: string) {

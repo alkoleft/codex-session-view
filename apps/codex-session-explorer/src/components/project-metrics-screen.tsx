@@ -132,10 +132,14 @@ export function ProjectMetricsShellControls({
   includeSpawnAgents,
   onIncludeSpawnAgentsChange,
   onProjectChange,
+  onRecompute,
   onRangeChange,
   onScopeFilterChange,
   projectOptions,
   range,
+  recomputeBusy,
+  recomputeError,
+  recomputeStatus,
   selectedProjectKey,
   scopeFilter,
 }: {
@@ -143,16 +147,20 @@ export function ProjectMetricsShellControls({
   includeSpawnAgents: boolean;
   onIncludeSpawnAgentsChange: (value: boolean) => void;
   onProjectChange: (projectKey: string) => void;
+  onRecompute: () => void;
   onRangeChange: (range: ProjectMetricsRangeSelection) => void;
   onScopeFilterChange: (value: SessionScopeFilter) => void;
   projectOptions: ProjectSelectorOption[];
   range: ProjectMetricsRangeSelection;
+  recomputeBusy: boolean;
+  recomputeError: string | null;
+  recomputeStatus: string | null;
   selectedProjectKey: string | null;
   scopeFilter: SessionScopeFilter;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-2" data-testid="project-metrics-shell-controls">
-      <div className="grid gap-2 xl:grid-cols-[minmax(0,1.6fr)_minmax(180px,0.7fr)_minmax(220px,0.9fr)_auto]">
+      <div className="grid gap-2 xl:grid-cols-[minmax(0,1.5fr)_minmax(180px,0.7fr)_minmax(220px,0.9fr)_auto_auto]">
         <label className="flex min-w-0 flex-col gap-1">
           <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
             Project
@@ -225,6 +233,16 @@ export function ProjectMetricsShellControls({
           />
           <span className="font-medium">Spawn agents</span>
         </label>
+
+        <Button
+          disabled={projectOptions.length === 0 || !selectedProjectKey || recomputeBusy}
+          onClick={onRecompute}
+          type="button"
+          variant="outline"
+        >
+          <LoaderCircle className={cn(recomputeBusy && "animate-spin")} data-icon="inline-start" />
+          {recomputeBusy ? "Recomputing…" : "Recompute"}
+        </Button>
       </div>
 
       {range.preset === "custom" ? (
@@ -259,6 +277,19 @@ export function ProjectMetricsShellControls({
           Catalog scan updates project labels in the background.
         </div>
       ) : null}
+      {recomputeStatus ? (
+        <div className="text-xs text-muted-foreground" data-testid="project-metrics-recompute-status">
+          {recomputeStatus}
+        </div>
+      ) : null}
+      {recomputeError ? (
+        <div
+          className="text-xs text-destructive"
+          data-testid="project-metrics-recompute-error"
+        >
+          {recomputeError}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -270,6 +301,7 @@ export function ProjectMetricsScreen({
   loading,
   metrics,
   onOpenSession,
+  recomputeRevision = 0,
   selectedProjectKey,
 }: {
   currentSessionId: string | null;
@@ -278,6 +310,7 @@ export function ProjectMetricsScreen({
   loading: boolean;
   metrics: ProjectMetricsResponse | null;
   onOpenSession: (sessionId: string) => void;
+  recomputeRevision?: number;
   selectedProjectKey: string | null;
 }) {
   const queryModel = useMemo(
@@ -304,10 +337,12 @@ export function ProjectMetricsScreen({
     startIndex: null,
   });
   const [detailCache, setDetailCache] = useState<Record<string, LazyDetailState>>({});
+  const detailCacheRef = useRef<Record<string, LazyDetailState>>({});
   const selectionRef = useRef<ChartSelection>({
     endIndex: null,
     startIndex: null,
   });
+  const pendingPrimaryBarActivationRef = useRef<{ sessionId: string | null } | null>(null);
   const suppressDirectActivationRef = useRef(false);
   const suppressPrimaryBarFollowupRef = useRef(false);
   const workspaceDataKeyRef = useRef<string | null>(null);
@@ -320,6 +355,10 @@ export function ProjectMetricsScreen({
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
+
+  useEffect(() => {
+    detailCacheRef.current = detailCache;
+  }, [detailCache]);
 
   useEffect(() => {
     if (!queryModel) {
@@ -445,13 +484,14 @@ export function ProjectMetricsScreen({
     series: visibleSeries,
     sessionsById: sessionMap,
   });
-  const detailState = pinnedSessionId ? detailCache[pinnedSessionId] : undefined;
+  const detailCacheKey = pinnedSessionId ? `${recomputeRevision}:${pinnedSessionId}` : null;
+  const detailState = detailCacheKey ? detailCache[detailCacheKey] : undefined;
 
   useEffect(() => {
-    if (!pinnedSessionId) {
+    if (!pinnedSessionId || !detailCacheKey) {
       return;
     }
-    const cached = detailCache[pinnedSessionId];
+    const cached = detailCacheRef.current[detailCacheKey];
     if (cached?.status === "loading" || cached?.status === "ready") {
       return;
     }
@@ -459,7 +499,7 @@ export function ProjectMetricsScreen({
     let cancelled = false;
     setDetailCache((current) => ({
       ...current,
-      [pinnedSessionId]: { status: "loading" },
+      [detailCacheKey]: { status: "loading" },
     }));
 
     void loadProjectMetricsSessionDetailById(pinnedSessionId)
@@ -467,7 +507,7 @@ export function ProjectMetricsScreen({
         if (!cancelled) {
           setDetailCache((current) => ({
             ...current,
-            [pinnedSessionId]: { detail, status: "ready" },
+            [detailCacheKey]: { detail, status: "ready" },
           }));
         }
       })
@@ -475,7 +515,7 @@ export function ProjectMetricsScreen({
         if (!cancelled) {
           setDetailCache((current) => ({
             ...current,
-            [pinnedSessionId]: {
+            [detailCacheKey]: {
               error: extractErrorMessage(loadError),
               status: "error",
             },
@@ -486,7 +526,7 @@ export function ProjectMetricsScreen({
     return () => {
       cancelled = true;
     };
-  }, [pinnedSessionId]);
+  }, [detailCacheKey, pinnedSessionId]);
 
   function updateSeriesConfig(
     seriesKey: ProjectMetricSeriesKey,
@@ -509,10 +549,18 @@ export function ProjectMetricsScreen({
   }
 
   function clearSelection() {
-    setSelection({
+    selectionRef.current = {
       endIndex: null,
       startIndex: null,
-    });
+    };
+    setSelection((current) => (
+      current.startIndex == null && current.endIndex == null
+        ? current
+        : {
+            endIndex: null,
+            startIndex: null,
+          }
+    ));
   }
 
   function focusRange(nextWindow: { endIndex: number; startIndex: number }) {
@@ -545,17 +593,26 @@ export function ProjectMetricsScreen({
       clearSelection();
       return;
     }
-    setSelection({
+    selectionRef.current = {
       endIndex: index,
       startIndex: index,
-    });
+    };
+    setSelection((current) => (
+      current.startIndex == null && current.endIndex == null
+        ? current
+        : {
+            endIndex: index,
+            startIndex: index,
+          }
+    ));
   }
 
   function handleChartMouseMove(state: unknown) {
     const chartRow = extractChartRow((state as { activePayload?: unknown } | null)?.activePayload);
     setHoveredSessionId(chartRow?.sessionId ?? null);
 
-    if (selection.startIndex == null) {
+    const activeSelection = selectionRef.current;
+    if (activeSelection.startIndex == null) {
       return;
     }
 
@@ -564,17 +621,19 @@ export function ProjectMetricsScreen({
       return;
     }
 
-    if (index !== selection.startIndex) {
+    if (index !== activeSelection.startIndex) {
       suppressDirectActivationRef.current = true;
     }
 
+    const nextSelection = {
+      endIndex: index,
+      startIndex: activeSelection.startIndex,
+    };
+    selectionRef.current = nextSelection;
     setSelection((current) => (
-      current.startIndex == null || current.endIndex === index
+      current.startIndex === nextSelection.startIndex && current.endIndex === nextSelection.endIndex
         ? current
-        : {
-            ...current,
-            endIndex: index,
-          }
+        : nextSelection
     ));
   }
 
@@ -583,7 +642,7 @@ export function ProjectMetricsScreen({
       clearSelection();
       return;
     }
-    const nextWindow = resolveSelectionWindow(selection.startIndex, selection.endIndex, totalRows);
+    const nextWindow = resolveSelectionWindow(selectionRef.current.startIndex, selectionRef.current.endIndex, totalRows);
     if (nextWindow) {
       focusRange(nextWindow);
       queueMicrotask(() => {
@@ -640,26 +699,42 @@ export function ProjectMetricsScreen({
   const selectionPreview = resolveSelectionWindow(selection.startIndex, selection.endIndex, totalRows);
   function beginPrimaryBarSelection(index: number) {
     suppressDirectActivationRef.current = false;
-    setSelection({
+    selectionRef.current = {
       endIndex: index,
       startIndex: index,
-    });
+    };
+    setSelection((current) => (
+      current.startIndex == null && current.endIndex == null
+        ? current
+        : {
+            endIndex: index,
+            startIndex: index,
+          }
+    ));
   }
 
   function extendPrimaryBarSelection(index: number) {
+    const activeSelection = selectionRef.current;
+    if (activeSelection.startIndex == null) {
+      return;
+    }
+    if (index !== activeSelection.startIndex) {
+      suppressDirectActivationRef.current = true;
+    }
+    const nextSelection = {
+      endIndex: index,
+      startIndex: activeSelection.startIndex,
+    };
+    selectionRef.current = nextSelection;
     setSelection((current) => {
-      if (current.startIndex == null) {
+      if (current.startIndex === nextSelection.startIndex && current.endIndex === nextSelection.endIndex) {
         return current;
       }
-      if (index !== current.startIndex) {
-        suppressDirectActivationRef.current = true;
-      }
-      return current.endIndex === index
-        ? current
-        : {
-            ...current,
-            endIndex: index,
-          };
+      return {
+        ...current,
+        endIndex: nextSelection.endIndex,
+        startIndex: nextSelection.startIndex,
+      };
     });
   }
 
@@ -683,6 +758,29 @@ export function ProjectMetricsScreen({
     suppressDirectActivationRef.current = false;
     return false;
   }
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    function handleWindowMouseUp() {
+      const pendingActivation = pendingPrimaryBarActivationRef.current;
+      if (!pendingActivation) {
+        return;
+      }
+      pendingPrimaryBarActivationRef.current = null;
+      const didZoomSelection = commitPrimaryBarSelection();
+      if (!didZoomSelection && pendingActivation.sessionId) {
+        focusSession(pendingActivation.sessionId);
+      }
+    }
+
+    window.addEventListener("mouseup", handleWindowMouseUp);
+    return () => {
+      window.removeEventListener("mouseup", handleWindowMouseUp);
+    };
+  }, [commitPrimaryBarSelection, focusSession]);
 
   const hasVisibleChartData = chartAnalysis
     ? visibleSeries.some((series) =>
@@ -877,12 +975,18 @@ export function ProjectMetricsScreen({
                                 onMouseMove={handleChartMouseMove}
                                 onMouseUp={handleChartMouseUp}
                               >
-                                <CartesianGrid stroke="currentColor" strokeDasharray="4 6" strokeOpacity={0.12} />
+                                <CartesianGrid
+                                  pointerEvents="none"
+                                  stroke="currentColor"
+                                  strokeDasharray="4 6"
+                                  strokeOpacity={0.12}
+                                />
                                 {selectionPreview ? (
                                   <ReferenceArea
                                     fill="color-mix(in srgb, var(--accent-strong) 16%, transparent)"
                                     fillOpacity={0.8}
                                     ifOverflow="visible"
+                                    pointerEvents="none"
                                     stroke="color-mix(in srgb, var(--accent-strong) 50%, transparent)"
                                     strokeOpacity={0.9}
                                     x1={selectionPreview.startIndex}
@@ -934,10 +1038,14 @@ export function ProjectMetricsScreen({
                                       <PrimaryBarShape
                                         {...props}
                                         currentSessionId={pinnedSessionId}
-                                        onActivateSession={focusSession}
                                         onBeginSelection={beginPrimaryBarSelection}
                                         onCommitSelection={commitPrimaryBarSelection}
                                         onExtendSelection={extendPrimaryBarSelection}
+                                        onPressStart={(nextSessionId) => {
+                                          pendingPrimaryBarActivationRef.current = {
+                                            sessionId: nextSessionId,
+                                          };
+                                        }}
                                       />
                                     )}
                                   />
@@ -1491,6 +1599,8 @@ function PinnedSessionTab({
   }
 
   const detail = detailState?.status === "ready" ? detailState.detail : null;
+  const usedSkillIdentifiers = pinnedSession.used_skills.identifiers;
+  const usedSkillsCoverage = pinnedSession.used_skills.coverage;
 
   return (
     <div className="flex flex-col gap-3 pr-3" data-testid="project-metrics-pinned-tab">
@@ -1522,6 +1632,28 @@ function PinnedSessionTab({
           <PinnedMeta label="Cached tokens" value={pinnedRow.metrics.tokenCachedInput.formattedValue} />
           <PinnedMeta label="Tool calls" value={pinnedRow.metrics.toolCalls.formattedValue} />
           <PinnedMeta label="Failures" value={pinnedRow.metrics.failures.formattedValue} />
+        </div>
+
+        <div className="mt-3 rounded-xl border border-border/70 bg-muted/10 p-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              Used skills
+            </div>
+            <CoveragePill coverage={usedSkillsCoverage} />
+          </div>
+          {usedSkillIdentifiers.length > 0 ? (
+            <div className="mt-3 flex flex-wrap gap-2" data-testid="project-metrics-pinned-used-skills">
+              {usedSkillIdentifiers.map((identifier) => (
+                <CompactFlag key={identifier}>{identifier}</CompactFlag>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 text-sm text-muted-foreground">
+              {usedSkillsCoverage === "unknown"
+                ? "Used skills unavailable for this session."
+                : "No explicit skill usage markers for this session."}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1839,21 +1971,21 @@ function SeriesDot({
 
 function PrimaryBarShape({
   currentSessionId,
-  onActivateSession,
   onBeginSelection,
   onCommitSelection,
   onExtendSelection,
+  onPressStart,
   ...props
 }: BarShapeProps & {
   currentSessionId: string | null;
-  onActivateSession: (sessionId: string) => void;
   onBeginSelection: (index: number) => void;
   onCommitSelection: () => boolean;
   onExtendSelection: (index: number) => void;
+  onPressStart: (sessionId: string | null) => void;
 }) {
   const chartRow = extractChartRowFromActivationPayload(props);
   const sessionId = chartRow?.sessionId ?? null;
-  const rowIndex = chartRow && "row" in chartRow && chartRow.row ? chartRow.row.index : null;
+  const rowIndex = chartRow?.index ?? null;
   const selected = sessionId != null && sessionId === currentSessionId;
   const {
     background: _background,
@@ -1888,7 +2020,6 @@ function PrimaryBarShape({
       data-pinned-session={selected ? "true" : "false"}
       data-session-id={sessionId ?? undefined}
       data-testid="project-metrics-primary-bar-shape"
-      pointerEvents="none"
     >
       <rect
         className="cursor-pointer"
@@ -1896,20 +2027,10 @@ function PrimaryBarShape({
         fill="currentColor"
         fillOpacity={0.001}
         height={hitboxHeight}
-        onClick={(event) => {
-          const dragSelection = event.currentTarget.dataset.dragSelection === "true";
-          event.currentTarget.dataset.dragSelection = "false";
-          event.stopPropagation();
-          if (dragSelection) {
-            return;
-          }
-          if (sessionId) {
-            onActivateSession(sessionId);
-          }
-        }}
         onMouseDown={(event) => {
+          event.preventDefault();
           event.stopPropagation();
-          event.currentTarget.dataset.dragSelection = "false";
+          onPressStart(sessionId);
           if (rowIndex != null) {
             onBeginSelection(rowIndex);
           }
@@ -1920,9 +2041,9 @@ function PrimaryBarShape({
           }
           onExtendSelection(rowIndex);
         }}
-        onMouseUp={(event) => {
+        onClick={(event) => {
+          event.preventDefault();
           event.stopPropagation();
-          event.currentTarget.dataset.dragSelection = onCommitSelection() ? "true" : "false";
         }}
         pointerEvents="all"
         width={hitboxWidth}
@@ -2290,6 +2411,32 @@ function buildWindowPulseSummary({
   const averageDurationMs = knownDurationValues.length > 0
     ? Math.round(knownDurationValues.reduce((sum, value) => sum + value, 0) / knownDurationValues.length)
     : null;
+  const usedSkills = new Set<string>();
+  let hasKnownUsedSkills = false;
+  let allKnownUsedSkills = rows.length > 0;
+  for (const row of rows) {
+    const session = sessionsById.get(row.sessionId);
+    if (!session || session.used_skills.coverage === "unknown") {
+      allKnownUsedSkills = false;
+      continue;
+    }
+    hasKnownUsedSkills = true;
+    if (session.used_skills.coverage !== "known") {
+      allKnownUsedSkills = false;
+    }
+    for (const identifier of session.used_skills.identifiers) {
+      usedSkills.add(identifier);
+    }
+  }
+  const usedSkillsCount: { coverage: MetricCoverage; value: number | null } = hasKnownUsedSkills
+    ? {
+        value: usedSkills.size,
+        coverage: allKnownUsedSkills ? "known" : "partial",
+      }
+    : {
+        value: null,
+        coverage: "unknown",
+      };
   const tokenDriftRows = rows.filter((row) => row.metrics.tokens.value != null);
   const tokenDriftStart = tokenDriftRows[0] ?? null;
   const tokenDriftEnd = tokenDriftRows.at(-1) ?? null;
@@ -2323,6 +2470,13 @@ function buildWindowPulseSummary({
         hint: "Visible token volume from the current window",
         label: "Tokens",
         value: formatProjectMetricSeriesValue("tokens", totalTokens),
+      },
+      {
+        hint: hasKnownUsedSkills
+          ? `${usedSkills.size} unique explicitly used skills in the current window`
+          : "No explicit used-skills markers in the current window",
+        label: "Used skills",
+        value: formatProjectMetricSeriesValue("usedSkillsCount", usedSkillsCount.value, usedSkillsCount.coverage),
       },
       {
         hint:

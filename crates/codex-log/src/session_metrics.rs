@@ -14,14 +14,14 @@ use crate::events::record::EventRecord;
 use crate::events::types::{
     AGENT_ABORTED, AGENT_COMPLETED, AGENT_FAILED, AGENT_REASONING, CONTEXT_COMPACTED, ERROR,
     INFO_TOKENS, MCP_CALL, MESSAGE_AGENT, MESSAGE_COMMENTARY, MESSAGE_USER, RUNTIME_CONTEXT,
-    TASK_COMPLETED, TASK_STARTED,
+    SHELL_CALL, TASK_COMPLETED, TASK_STARTED,
 };
 use crate::session::{IndexedSessionSummary, StateThreadSummary};
 use crate::tree::{EventTree, TimelineItem};
 use crate::util::{hash8, normalize_path, utc_now_iso};
 
 pub const METRICS_SCHEMA_VERSION: u32 = 5;
-pub const METRICS_PROJECTION_VERSION: u32 = 7;
+pub const METRICS_PROJECTION_VERSION: u32 = 9;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -283,6 +283,8 @@ pub struct UsedSkillsMetrics {
     #[serde(default)]
     pub identifiers: Vec<String>,
     #[serde(default)]
+    pub count: CoveredMetric<u64>,
+    #[serde(default)]
     pub coverage: MetricCoverage,
     #[serde(default)]
     pub source: MetricSource,
@@ -299,6 +301,8 @@ pub struct UsedSkillRollupEntry {
 pub struct UsedSkillsRollup {
     #[serde(default)]
     pub skills: Vec<UsedSkillRollupEntry>,
+    #[serde(default)]
+    pub count: CoveredMetric<u64>,
     #[serde(default)]
     pub coverage: MetricCoverage,
     #[serde(default)]
@@ -2023,28 +2027,64 @@ fn parse_available_skill_line(line: &str) -> Option<String> {
 }
 
 fn extract_used_skills(events: &[EventRecord]) -> UsedSkillsMetrics {
-    let identifiers = events
-        .iter()
-        .filter_map(|event| event.payload.as_object())
-        .filter_map(|payload| payload.get("skill_identifiers"))
-        .filter_map(Value::as_array)
-        .flat_map(|items| items.iter())
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut identifiers = BTreeSet::new();
+
+    for event in events {
+        if matches!(
+            event.event_type.as_str(),
+            MESSAGE_USER | MESSAGE_AGENT | MESSAGE_COMMENTARY | AGENT_REASONING
+        ) {
+            if let Some(text) = event
+                .payload
+                .as_object()
+                .and_then(|payload| payload.get("text"))
+                .and_then(Value::as_str)
+            {
+                if let Some(identifier) = extract_explicit_skill_identifier_from_message_text(text) {
+                    identifiers.insert(identifier);
+                }
+            }
+        }
+
+        if event.event_type != SHELL_CALL {
+            continue;
+        }
+
+        let Some(payload) = event.payload.as_object() else {
+            continue;
+        };
+        let Some(items) = payload.get("skill_identifiers").and_then(Value::as_array) else {
+            continue;
+        };
+        for identifier in items.iter().filter_map(Value::as_str).map(str::trim) {
+            if !identifier.is_empty() {
+                identifiers.insert(identifier.to_string());
+            }
+        }
+    }
+
+    let identifiers = identifiers.into_iter().collect::<Vec<_>>();
     if identifiers.is_empty() {
         UsedSkillsMetrics::default()
     } else {
         UsedSkillsMetrics {
+            count: CoveredMetric::known(identifiers.len() as u64, MetricSource::NormalizedEvents),
             identifiers,
             coverage: MetricCoverage::Known,
             source: MetricSource::NormalizedEvents,
         }
     }
+}
+
+fn extract_explicit_skill_identifier_from_message_text(text: &str) -> Option<String> {
+    let skill_start = text.find("<skill>")?;
+    let skill_end = text[skill_start..].find("</skill>")?;
+    let block = &text[skill_start..skill_start + skill_end];
+    let name_start = block.find("<name>")?;
+    let after_name_start = name_start + "<name>".len();
+    let name_end = block[after_name_start..].find("</name>")?;
+    let identifier = block[after_name_start..after_name_start + name_end].trim();
+    (!identifier.is_empty()).then_some(identifier.to_string())
 }
 
 fn aggregate_used_skills(sessions: &[SessionMetrics]) -> UsedSkillsRollup {
@@ -2069,6 +2109,7 @@ fn aggregate_used_skills(sessions: &[SessionMetrics]) -> UsedSkillsRollup {
     if !has_known {
         return UsedSkillsRollup::default();
     }
+    let unique_skill_count = skills.len() as u64;
     UsedSkillsRollup {
         skills: skills
             .into_iter()
@@ -2080,6 +2121,11 @@ fn aggregate_used_skills(sessions: &[SessionMetrics]) -> UsedSkillsRollup {
                 },
             )
             .collect(),
+        count: if all_known {
+            CoveredMetric::known(unique_skill_count, MetricSource::Derived)
+        } else {
+            CoveredMetric::partial(unique_skill_count, MetricSource::Derived)
+        },
         coverage: if all_known {
             MetricCoverage::Known
         } else {
@@ -3558,6 +3604,7 @@ mod tests {
             CoveredMetric::known(1, MetricSource::OperationProjection);
         first.used_skills = UsedSkillsMetrics {
             identifiers: vec!["openspec-apply-change".to_string()],
+            count: CoveredMetric::known(1, MetricSource::NormalizedEvents),
             coverage: MetricCoverage::Known,
             source: MetricSource::NormalizedEvents,
         };
@@ -3584,6 +3631,7 @@ mod tests {
             CoveredMetric::known(2, MetricSource::OperationProjection);
         second.used_skills = UsedSkillsMetrics {
             identifiers: vec!["openspec-apply-change".to_string(), "shadcn".to_string()],
+            count: CoveredMetric::known(2, MetricSource::NormalizedEvents),
             coverage: MetricCoverage::Known,
             source: MetricSource::NormalizedEvents,
         };
@@ -3624,6 +3672,8 @@ mod tests {
         );
         assert_eq!(project.operations.spawn_agent_calls.value, Some(3));
         assert_eq!(project.used_skills.coverage, MetricCoverage::Known);
+        assert_eq!(project.used_skills.count.value, Some(2));
+        assert_eq!(project.used_skills.count.coverage, MetricCoverage::Known);
         assert_eq!(project.used_skills.skills.len(), 2);
         assert_eq!(
             project.used_skills.skills[0].identifier,
@@ -4028,7 +4078,49 @@ mod tests {
         );
 
         assert!(metrics.used_skills.identifiers.is_empty());
+        assert_eq!(metrics.used_skills.count.value, None);
         assert_eq!(metrics.used_skills.coverage, MetricCoverage::Unknown);
+    }
+
+    #[test]
+    fn used_skills_count_deduplicates_repeated_markers_within_session() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[
+                event(
+                    1,
+                    SHELL_CALL,
+                    "2026-04-23T10:00:01Z",
+                    json!({
+                        "thread_id": "root",
+                        "tool_name": "exec_command",
+                        "skill_identifiers": ["openspec-apply-change", "shadcn"]
+                    }),
+                ),
+                event(
+                    2,
+                    SHELL_CALL,
+                    "2026-04-23T10:00:02Z",
+                    json!({
+                        "thread_id": "root",
+                        "tool_name": "exec_command",
+                        "skill_identifiers": ["shadcn", "openspec-apply-change"]
+                    }),
+                ),
+            ],
+            None,
+            Some(&summary()),
+        );
+
+        assert_eq!(
+            metrics.used_skills.identifiers,
+            vec![
+                "openspec-apply-change".to_string(),
+                "shadcn".to_string(),
+            ]
+        );
+        assert_eq!(metrics.used_skills.count.value, Some(2));
+        assert_eq!(metrics.used_skills.count.coverage, MetricCoverage::Known);
     }
 
     #[test]
@@ -4096,6 +4188,7 @@ mod tests {
             metrics.used_skills.identifiers,
             vec!["openspec-explore".to_string()]
         );
+        assert_eq!(metrics.used_skills.count.value, Some(1));
     }
 
     #[test]
@@ -4155,6 +4248,77 @@ mod tests {
         assert_eq!(metrics.factors.skills_count.value, Some(1));
         assert_eq!(metrics.used_skills.coverage, MetricCoverage::Known);
         assert_eq!(metrics.used_skills.identifiers, vec!["shadcn".to_string()]);
+        assert_eq!(metrics.used_skills.count.value, Some(1));
+    }
+
+    #[test]
+    fn explicit_skill_message_counts_as_used_skill_without_rewriting_enabled_skills() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[
+                event(
+                    1,
+                    MESSAGE_USER,
+                    "2026-04-23T10:00:00Z",
+                    json!({
+                        "text": "## Skills\n### Available skills\n- openspec-apply-change\n- shadcn\n"
+                    }),
+                ),
+                event(
+                    2,
+                    MESSAGE_USER,
+                    "2026-04-23T10:00:01Z",
+                    json!({
+                        "text": "<skill>\n<name>openspec-explore</name>\n<path>/tmp/skills/openspec-explore/SKILL.md</path>\n</skill>"
+                    }),
+                ),
+            ],
+            None,
+            Some(&summary()),
+        );
+
+        assert_eq!(metrics.factors.skills_count.value, Some(2));
+        assert_eq!(
+            metrics.used_skills.identifiers,
+            vec!["openspec-explore".to_string()]
+        );
+        assert_eq!(metrics.used_skills.count.value, Some(1));
+        assert_eq!(metrics.used_skills.coverage, MetricCoverage::Known);
+    }
+
+    #[test]
+    fn shell_result_output_skill_paths_do_not_count_as_used_skills() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[
+                event(
+                    1,
+                    SHELL_CALL,
+                    "2026-04-23T10:00:00Z",
+                    json!({
+                        "thread_id": "root",
+                        "tool_name": "exec_command",
+                        "command": "rg -n \"skill\" ."
+                    }),
+                ),
+                event(
+                    2,
+                    SHELL_RESULT,
+                    "2026-04-23T10:00:01Z",
+                    json!({
+                        "thread_id": "root",
+                        "tool_name": "exec_command",
+                        "output": "quoted block (file: /home/alko/.codex/skills/.system/openai-docs/SKILL.md)"
+                    }),
+                ),
+            ],
+            None,
+            Some(&summary()),
+        );
+
+        assert!(metrics.used_skills.identifiers.is_empty());
+        assert_eq!(metrics.used_skills.count.value, None);
+        assert_eq!(metrics.used_skills.coverage, MetricCoverage::Unknown);
     }
 
     #[test]
@@ -4183,7 +4347,42 @@ mod tests {
 
         assert_eq!(metrics.factors.skills_count.value, Some(2));
         assert!(metrics.used_skills.identifiers.is_empty());
+        assert_eq!(metrics.used_skills.count.value, None);
         assert_eq!(metrics.used_skills.coverage, MetricCoverage::Unknown);
+    }
+
+    #[test]
+    fn project_used_skills_count_keeps_partial_coverage_when_some_sessions_are_unknown() {
+        let mut known = compute_session_metrics(
+            "session-1",
+            &[event(1, AGENT_COMPLETED, "2026-04-23T10:00:00Z", json!({}))],
+            None,
+            Some(&summary()),
+        );
+        known.used_skills = UsedSkillsMetrics {
+            identifiers: vec!["openspec-apply-change".to_string(), "shadcn".to_string()],
+            count: CoveredMetric::known(2, MetricSource::NormalizedEvents),
+            coverage: MetricCoverage::Known,
+            source: MetricSource::NormalizedEvents,
+        };
+
+        let unknown = compute_session_metrics(
+            "session-2",
+            &[event(1, AGENT_COMPLETED, "2026-04-23T11:00:00Z", json!({}))],
+            None,
+            Some(&summary()),
+        );
+
+        let project = aggregate_project_metrics(
+            "project:test".to_string(),
+            vec![known, unknown],
+            SessionScopeFilter::All,
+            SessionScopeCounts::default(),
+        );
+
+        assert_eq!(project.used_skills.count.value, Some(2));
+        assert_eq!(project.used_skills.count.coverage, MetricCoverage::Partial);
+        assert_eq!(project.used_skills.coverage, MetricCoverage::Partial);
     }
 
     #[test]
@@ -4298,5 +4497,7 @@ mod tests {
             metrics.context.context_compression.coverage,
             MetricCoverage::Unknown
         );
+        assert_eq!(metrics.used_skills.count.value, None);
+        assert_eq!(metrics.used_skills.count.coverage, MetricCoverage::Unknown);
     }
 }
