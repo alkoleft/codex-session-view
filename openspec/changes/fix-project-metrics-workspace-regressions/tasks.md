@@ -19,17 +19,17 @@
       всех видимых series
 - [x] 2.5 Обновить normalization help text и тестовые ожидания так, чтобы sparse series вроде
       `failures` и `tool calls` оставались читаемыми без перехода на per-series normalization
-- [ ] 2.6 Добавить persistent visual affordance для pinned session прямо на графике
-- [ ] 2.7 Снизить opacity primary bar до более читаемого уровня, сохранив его как dominant layer
+- [x] 2.6 Добавить persistent visual affordance для pinned session прямо на графике
+- [x] 2.7 Снизить opacity primary bar до более читаемого уровня, сохранив его как dominant layer
 
 ## 3. Window pulse and side panel readability
 
-- [ ] 3.1 Расширить `Window pulse`, добавив как минимум `duration` и `token drift` в compact
+- [x] 3.1 Расширить `Window pulse`, добавив как минимум `duration` и `token drift` в compact
       window-level summary
-- [ ] 3.2 Исправить flex/height/overflow chain правой панели так, чтобы переполненный tab content
+- [x] 3.2 Исправить flex/height/overflow chain правой панели так, чтобы переполненный tab content
       имел независимый рабочий scroll-owner
-- [ ] 3.3 Усилить читаемость active/inactive состояний у compact badges и actions в side panel
-- [ ] 3.4 Обновить или дополнить unit tests так, чтобы они ловили регрессии scroll, pinned
+- [x] 3.3 Усилить читаемость active/inactive состояний у compact badges и actions в side panel
+- [x] 3.4 Обновить или дополнить unit tests так, чтобы они ловили регрессии scroll, pinned
       affordance и state readability-contract, а не только проверяли наличие CSS-классов
 
 ## 4. Validation
@@ -38,22 +38,22 @@
 - [x] 4.2 Добавить frontend test на pin выбранной сессии кликом по `primary` bar
 - [x] 4.3 Добавить frontend test или chart-analysis test на improved shared normalization для sparse
       series
-- [ ] 4.4 Добавить frontend test на `Window pulse` с `duration` и `token drift`
-- [ ] 4.5 Добавить frontend/Playwright check на видимое отражение pinned session прямо на графике
-- [ ] 4.6 Прогнать `npm --prefix apps/codex-session-explorer test`
-- [ ] 4.7 Прогнать `npm --prefix apps/codex-session-explorer run build`
-- [ ] 4.8 Выполнить Playwright UAT экрана `Project metrics`, исправить найденные замечания и
+- [x] 4.4 Добавить frontend test на `Window pulse` с `duration` и `token drift`
+- [x] 4.5 Добавить frontend/Playwright check на видимое отражение pinned session прямо на графике
+- [x] 4.6 Прогнать `npm --prefix apps/codex-session-explorer test`
+- [x] 4.7 Прогнать `npm --prefix apps/codex-session-explorer run build`
+- [x] 4.8 Выполнить Playwright UAT экрана `Project metrics`, исправить найденные замечания и
       повторить проверку до зелёного результата
-- [ ] 4.9 Прогнать `openspec validate fix-project-metrics-workspace-regressions --strict`
+- [x] 4.9 Прогнать `openspec validate fix-project-metrics-workspace-regressions --strict`
 
 ## 5. Skills metrics semantics
 
-- [ ] 5.1 Проверить, что `Enabled skills`/`skills_count` считается по стартовому списку available
+- [x] 5.1 Проверить, что `Enabled skills`/`skills_count` считается по стартовому списку available
       skills из первого сообщения сессии, а не по поздним usage markers
-- [ ] 5.2 Если текущая нормализация смешивает `connected/enabled skills` и explicit
+- [x] 5.2 Если текущая нормализация смешивает `connected/enabled skills` и explicit
       `<skill>...</skill>` usage markers, исправить extraction/aggregation без изменения внешнего
       response shape
-- [ ] 5.3 Добавить tests как минимум на три кейса: count подключённых skills по первому сообщению,
+- [x] 5.3 Добавить tests как минимум на три кейса: count подключённых skills по первому сообщению,
       отдельный usage/load signal по явному `<skill>` message без переписывания `Enabled skills`,
       и quoted `skills_instructions` / `Available skills` block, который не считается загрузкой
       skill

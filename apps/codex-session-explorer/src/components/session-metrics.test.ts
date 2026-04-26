@@ -475,7 +475,7 @@ describe("buildSessionMetricsViewModel", () => {
     expect(metricValue("Success rate", metrics)).toBe("66,7%");
     expect(metricValue("Error rate", metrics)).toBe("25%");
     expect(metricValue("Messages", metrics)).toBe("1");
-    expect(metricValue("Tokens", metrics)).toBe("4 321");
+    expect(metricValue("All tokens", metrics)).toBe("4 321");
   });
 
   it("keeps operations separate across scopes when operation ids repeat", () => {
@@ -748,7 +748,7 @@ describe("buildSessionMetricsViewModel", () => {
     expect(metricValue("Tool calls", metrics)).toBe("n/a");
     expect(metricValue("Errors", metrics)).toBe("n/a");
     expect(metricValue("Threads", metrics)).toBe("n/a");
-    expect(metricValue("Tokens", metrics)).toBe("n/a");
+    expect(metricValue("All tokens", metrics)).toBe("n/a");
   });
 
   it("shows message counts for legacy loaded sessions without operation metadata", () => {
@@ -949,6 +949,7 @@ describe("buildSessionMetricsViewModel", () => {
     expect(metricValue("Reasoning tokens", metrics)).toBe("12");
     expect(metricValue("Start context", metrics)).toBe("80");
     expect(metricValue("Tokens", metrics)).toBe("200");
+    expect(metricValue("All tokens", metrics)).toBe("200");
     expect(metricValue("Context compression", metrics)).toBe("0");
     expect(metricValue("Tool test", metrics)).toBe("1 / 0 failed");
   });
@@ -965,6 +966,7 @@ describe("buildSessionMetricsViewModel", () => {
     });
 
     expect(metricValue("Tokens", metrics)).toBe("150");
+    expect(metricValue("All tokens", metrics)).toBe("150");
     expect(metricValue("Time worked", metrics)).toBe("0s");
   });
 });

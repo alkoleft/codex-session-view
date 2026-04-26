@@ -764,8 +764,11 @@ export function ProjectMetricsScreen({
             </div>
 
             <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden pt-3">
-              <div className="flex h-full min-h-0 flex-col overflow-y-auto pr-3" data-testid="project-metrics-main-scroll">
-                <div className="flex min-h-full flex-1 flex-col gap-3">
+              <div
+                className="flex h-full min-h-0 flex-col overflow-x-hidden overflow-y-scroll pr-3 [scrollbar-gutter:stable]"
+                data-testid="project-metrics-main-scroll"
+              >
+                <div className="flex flex-col gap-3 pb-1">
                   {visibleSeries.length === 0 ? (
                     <Alert>
                       <Search className="size-4" />
@@ -789,10 +792,9 @@ export function ProjectMetricsScreen({
                       ) : null}
 
                       <div
-                        className="relative min-h-[32rem] flex-1 rounded-2xl border border-border/70 bg-muted/10 p-3 lg:min-h-[38rem] xl:min-h-[42rem]"
+                        className="relative h-[32rem] shrink-0 rounded-2xl border border-border/70 bg-muted/10 p-3 lg:h-[38rem] xl:h-[42rem]"
                         data-testid="project-metrics-chart-surface"
                         onWheel={handleChartWheel}
-                        ref={setChartSurfaceNode}
                       >
                         <div
                           className="absolute left-6 top-6 z-10 flex items-center gap-1 rounded-xl border border-border/70 bg-background/92 p-1 shadow-sm"
@@ -852,146 +854,150 @@ export function ProjectMetricsScreen({
                           </Button>
                         </div>
 
-                        {visibleRows.length === 1 ? (
-                          <SingleSessionChartState
-                            row={visibleRows[0]}
-                            series={visibleSeries}
-                          />
-                        ) : chartAnalysis && canRenderResponsiveChart ? (
-                          <ResponsiveContainer
-                            height={chartSurfaceSize.height}
-                            width={chartSurfaceSize.width}
-                          >
-                            <ComposedChart
-                              className="cursor-crosshair"
-                              data={chartAnalysis.chartData}
-                              margin={{ top: 28, right: 24, bottom: 16, left: 8 }}
-                              onClick={handleChartClick}
-                              onMouseDown={handleChartMouseDown}
-                              onMouseLeave={() => setHoveredSessionId(null)}
-                              onMouseMove={handleChartMouseMove}
-                              onMouseUp={handleChartMouseUp}
+                        <div className="absolute inset-3 overflow-hidden" ref={setChartSurfaceNode}>
+                          {visibleRows.length === 1 ? (
+                            <div className="flex h-full items-center justify-center">
+                              <SingleSessionChartState
+                                row={visibleRows[0]}
+                                series={visibleSeries}
+                              />
+                            </div>
+                          ) : chartAnalysis && canRenderResponsiveChart ? (
+                            <ResponsiveContainer
+                              height={chartSurfaceSize.height}
+                              width={chartSurfaceSize.width}
                             >
-                              <CartesianGrid stroke="currentColor" strokeDasharray="4 6" strokeOpacity={0.12} />
-                              {selectionPreview ? (
-                                <ReferenceArea
-                                  fill="color-mix(in srgb, var(--accent-strong) 16%, transparent)"
-                                  fillOpacity={0.8}
-                                  ifOverflow="visible"
-                                  stroke="color-mix(in srgb, var(--accent-strong) 50%, transparent)"
-                                  strokeOpacity={0.9}
-                                  x1={selectionPreview.startIndex}
-                                  x2={selectionPreview.endIndex}
-                                />
-                              ) : null}
-                              <XAxis
-                                allowDataOverflow
-                                dataKey="index"
-                                domain={[clampedWindow.startIndex, clampedWindow.endIndex]}
-                                minTickGap={24}
-                                stroke="currentColor"
-                                strokeOpacity={0.45}
-                                tick={{ fill: "currentColor", fontSize: 12 }}
-                                tickFormatter={(value) => chartAnalysis.chartData[Number(value)]?.label ?? ""}
-                                type="number"
-                              />
-                              <YAxis domain={[-0.05, 1.05]} hide />
-                              <Tooltip
-                                content={(props) => (
-                                  <SummaryChartTooltip
-                                    {...props}
-                                    hoveredSessionId={hoveredSessionId}
-                                    series={visibleSeries}
-                                    seriesModeMap={seriesModeMap}
-                                    workspaceState={workspaceState}
+                              <ComposedChart
+                                className="cursor-crosshair"
+                                data={chartAnalysis.chartData}
+                                margin={{ top: 28, right: 24, bottom: 16, left: 8 }}
+                                onClick={handleChartClick}
+                                onMouseDown={handleChartMouseDown}
+                                onMouseLeave={() => setHoveredSessionId(null)}
+                                onMouseMove={handleChartMouseMove}
+                                onMouseUp={handleChartMouseUp}
+                              >
+                                <CartesianGrid stroke="currentColor" strokeDasharray="4 6" strokeOpacity={0.12} />
+                                {selectionPreview ? (
+                                  <ReferenceArea
+                                    fill="color-mix(in srgb, var(--accent-strong) 16%, transparent)"
+                                    fillOpacity={0.8}
+                                    ifOverflow="visible"
+                                    stroke="color-mix(in srgb, var(--accent-strong) 50%, transparent)"
+                                    strokeOpacity={0.9}
+                                    x1={selectionPreview.startIndex}
+                                    x2={selectionPreview.endIndex}
                                   />
-                                )}
-                              />
-
-                              {primarySeriesKey ? (
-                                <Bar
-                                  barSize={Math.max(6, Math.min(18, Math.floor(420 / Math.max(visibleRows.length, 12))))}
-                                  className="cursor-pointer"
-                                  dataKey={(row: ChartDisplayRow) =>
-                                    getChartModeValue(
-                                      row,
-                                      seriesModeMap.get(primarySeriesKey) ?? workspaceState.defaultMode,
-                                      primarySeriesKey,
-                                    )}
-                                  data-testid="project-metrics-primary-bar"
-                                  fill={visibleSeries.find((series) => series.key === primarySeriesKey)?.color ?? "#2563eb"}
-                                  fillOpacity={PRIMARY_BAR_FILL_OPACITY}
-                                  isAnimationActive={false}
-                                  name={`${primarySeriesKey}:primary`}
-                                  onClick={handlePrimaryBarClick}
-                                  radius={[6, 6, 0, 0]}
-                                  shape={(props) => (
-                                    <PrimaryBarShape
+                                ) : null}
+                                <XAxis
+                                  allowDataOverflow
+                                  dataKey="index"
+                                  domain={[clampedWindow.startIndex, clampedWindow.endIndex]}
+                                  minTickGap={24}
+                                  stroke="currentColor"
+                                  strokeOpacity={0.45}
+                                  tick={{ fill: "currentColor", fontSize: 12 }}
+                                  tickFormatter={(value) => chartAnalysis.chartData[Number(value)]?.label ?? ""}
+                                  type="number"
+                                />
+                                <YAxis domain={[-0.05, 1.05]} hide />
+                                <Tooltip
+                                  content={(props) => (
+                                    <SummaryChartTooltip
                                       {...props}
-                                      currentSessionId={pinnedSessionId}
-                                      onActivateSession={focusSession}
-                                      onBeginSelection={beginPrimaryBarSelection}
-                                      onCommitSelection={commitPrimaryBarSelection}
-                                      onExtendSelection={extendPrimaryBarSelection}
+                                      hoveredSessionId={hoveredSessionId}
+                                      series={visibleSeries}
+                                      seriesModeMap={seriesModeMap}
+                                      workspaceState={workspaceState}
                                     />
                                   )}
                                 />
-                              ) : null}
 
-                              {visibleSeries
-                                .filter((series) => series.key !== primarySeriesKey)
-                                .map((series) => {
-                                  const emphasized =
-                                    workspaceState.seriesConfig[series.key]?.emphasized || hoveredSeriesKey === series.key;
-                                  return (
+                                {primarySeriesKey ? (
+                                  <Bar
+                                    barSize={Math.max(6, Math.min(18, Math.floor(420 / Math.max(visibleRows.length, 12))))}
+                                    className="cursor-pointer"
+                                    dataKey={(row: ChartDisplayRow) =>
+                                      getChartModeValue(
+                                        row,
+                                        seriesModeMap.get(primarySeriesKey) ?? workspaceState.defaultMode,
+                                        primarySeriesKey,
+                                      )}
+                                    data-testid="project-metrics-primary-bar"
+                                    fill={visibleSeries.find((series) => series.key === primarySeriesKey)?.color ?? "#2563eb"}
+                                    fillOpacity={PRIMARY_BAR_FILL_OPACITY}
+                                    isAnimationActive={false}
+                                    name={`${primarySeriesKey}:primary`}
+                                    onClick={handlePrimaryBarClick}
+                                    radius={[6, 6, 0, 0]}
+                                    shape={(props) => (
+                                      <PrimaryBarShape
+                                        {...props}
+                                        currentSessionId={pinnedSessionId}
+                                        onActivateSession={focusSession}
+                                        onBeginSelection={beginPrimaryBarSelection}
+                                        onCommitSelection={commitPrimaryBarSelection}
+                                        onExtendSelection={extendPrimaryBarSelection}
+                                      />
+                                    )}
+                                  />
+                                ) : null}
+
+                                {visibleSeries
+                                  .filter((series) => series.key !== primarySeriesKey)
+                                  .map((series) => {
+                                    const emphasized =
+                                      workspaceState.seriesConfig[series.key]?.emphasized || hoveredSeriesKey === series.key;
+                                    return (
+                                      <Line
+                                        activeDot={{ r: 5.5, strokeWidth: 2 }}
+                                        connectNulls={false}
+                                        dataKey={(row: ChartDisplayRow) =>
+                                          getChartModeValue(
+                                            row,
+                                            seriesModeMap.get(series.key) ?? workspaceState.defaultMode,
+                                            series.key,
+                                          )}
+                                        dot={visibleRows.length <= 18 ? (
+                                          <SeriesDot
+                                            currentSessionId={pinnedSessionId}
+                                            onActivateSession={focusSession}
+                                            payloadKey={series.key}
+                                            stroke={series.color}
+                                          />
+                                        ) : false}
+                                        isAnimationActive={false}
+                                        key={`${series.key}:normalized`}
+                                        pointerEvents="none"
+                                        stroke={series.color}
+                                        strokeOpacity={emphasized ? 0.95 : 0.38}
+                                        strokeWidth={emphasized ? 2.8 : 1.6}
+                                        type="monotone"
+                                      />
+                                    );
+                                  })}
+
+                                {visibleSeries
+                                  .filter((series) => workspaceState.seriesConfig[series.key]?.showRawValues)
+                                  .map((series) => (
                                     <Line
-                                      activeDot={{ r: 5.5, strokeWidth: 2 }}
                                       connectNulls={false}
-                                      dataKey={(row: ChartDisplayRow) =>
-                                        getChartModeValue(
-                                          row,
-                                          seriesModeMap.get(series.key) ?? workspaceState.defaultMode,
-                                          series.key,
-                                        )}
-                                      dot={visibleRows.length <= 18 ? (
-                                        <SeriesDot
-                                          currentSessionId={pinnedSessionId}
-                                          onActivateSession={focusSession}
-                                          payloadKey={series.key}
-                                          stroke={series.color}
-                                        />
-                                      ) : false}
+                                      dataKey={(row: ChartDisplayRow) => row.rawNormalizedValues[series.key] ?? null}
+                                      dot={false}
                                       isAnimationActive={false}
-                                      key={`${series.key}:normalized`}
+                                      key={`${series.key}:raw`}
                                       pointerEvents="none"
                                       stroke={series.color}
-                                      strokeOpacity={emphasized ? 0.95 : 0.38}
-                                      strokeWidth={emphasized ? 2.8 : 1.6}
+                                      strokeDasharray="5 5"
+                                      strokeOpacity={0.22}
+                                      strokeWidth={1.2}
                                       type="monotone"
                                     />
-                                  );
-                                })}
-
-                              {visibleSeries
-                                .filter((series) => workspaceState.seriesConfig[series.key]?.showRawValues)
-                                .map((series) => (
-                                  <Line
-                                    connectNulls={false}
-                                    dataKey={(row: ChartDisplayRow) => row.rawNormalizedValues[series.key] ?? null}
-                                    dot={false}
-                                    isAnimationActive={false}
-                                    key={`${series.key}:raw`}
-                                    pointerEvents="none"
-                                    stroke={series.color}
-                                    strokeDasharray="5 5"
-                                    strokeOpacity={0.22}
-                                    strokeWidth={1.2}
-                                    type="monotone"
-                                  />
-                                ))}
-                            </ComposedChart>
-                          </ResponsiveContainer>
-                        ) : null}
+                                  ))}
+                              </ComposedChart>
+                            </ResponsiveContainer>
+                          ) : null}
+                        </div>
                       </div>
                     </>
                   )}
@@ -1512,6 +1518,8 @@ function PinnedSessionTab({
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           <PinnedMeta label="Duration" value={pinnedRow.metrics.duration.formattedValue} />
           <PinnedMeta label="Tokens" value={pinnedRow.metrics.tokens.formattedValue} />
+          <PinnedMeta label="All tokens" value={pinnedRow.metrics.allTokens.formattedValue} />
+          <PinnedMeta label="Cached tokens" value={pinnedRow.metrics.tokenCachedInput.formattedValue} />
           <PinnedMeta label="Tool calls" value={pinnedRow.metrics.toolCalls.formattedValue} />
           <PinnedMeta label="Failures" value={pinnedRow.metrics.failures.formattedValue} />
         </div>

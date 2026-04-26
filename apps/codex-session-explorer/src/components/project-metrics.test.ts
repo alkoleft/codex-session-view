@@ -262,7 +262,9 @@ describe("buildProjectMetricsViewModel", () => {
 
     expect(viewModel.degraded).toBe(true);
     expect(viewModel.hasUnknownScope).toBe(false);
-    expect(viewModel.summaryCards.find((card) => card.label === "Total tokens")?.value).toBe("6 000");
+    expect(viewModel.summaryCards.find((card) => card.label === "Tokens")?.value).toBe("5 800");
+    expect(viewModel.summaryCards.find((card) => card.label === "All tokens")?.value).toBe("6 000");
+    expect(viewModel.summaryCards.find((card) => card.label === "Cached tokens")?.value).toBe("200");
     expect(viewModel.chartSeries.find((series) => series.key === "startContext")).toMatchObject({
       category: "factors",
     });
@@ -279,7 +281,7 @@ describe("buildProjectMetricsViewModel", () => {
     });
     expect(viewModel.defaultVisibleSeriesKeys).toEqual(["duration", "tokens", "failures", "toolCalls"]);
     expect(viewModel.initialZoomWindow).toEqual({ startIndex: 0, endIndex: 1 });
-    expect(viewModel.sessions[0].tokens).toBe("3 000");
+    expect(viewModel.sessions[0].tokens).toBe("2 900");
     expect(viewModel.sessions[1].sessionScope).toBe("unknown");
     expect(viewModel.sessions[1].failures).toContain("partial");
     expect(viewModel.usedSkillsCoverage).toBe("unknown");

@@ -504,7 +504,8 @@ describe("ProjectMetricsScreen", () => {
     );
 
     await user.click(screen.getByRole("tab", { name: "Series" }));
-    const tokensCard = screen.getByText("Total tokens").closest("div.rounded-xl") as HTMLElement | null;
+    const seriesTab = screen.getByTestId("project-metrics-series-tab");
+    const tokensCard = within(seriesTab).getByText("Tokens").closest("div.rounded-xl") as HTMLElement | null;
     expect(tokensCard).toBeTruthy();
     await user.click(within(tokensCard!).getByRole("button", { name: "Raw values" }));
 
@@ -528,7 +529,8 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByRole("button", { name: "Exclude outliers" }).getAttribute("aria-pressed")).toBe("true");
 
     await user.click(screen.getByRole("tab", { name: "Series" }));
-    const refreshedTokensCard = screen.getByText("Total tokens").closest("div.rounded-xl") as HTMLElement | null;
+    const refreshedSeriesTab = screen.getByTestId("project-metrics-series-tab");
+    const refreshedTokensCard = within(refreshedSeriesTab).getByText("Tokens").closest("div.rounded-xl") as HTMLElement | null;
     expect(refreshedTokensCard).toBeTruthy();
     expect(within(refreshedTokensCard!).getByRole("button", { name: "Raw values" }).getAttribute("aria-pressed")).toBe("true");
 
@@ -559,7 +561,8 @@ describe("ProjectMetricsScreen", () => {
     await user.click(screen.getByRole("button", { name: "Exclude outliers" }));
 
     await user.click(screen.getByRole("tab", { name: "Series" }));
-    const totalTokensCard = screen.getByText("Total tokens").closest("div.rounded-xl") as HTMLElement | null;
+    const initialSeriesTab = screen.getByTestId("project-metrics-series-tab");
+    const totalTokensCard = within(initialSeriesTab).getByText("Tokens").closest("div.rounded-xl") as HTMLElement | null;
     expect(totalTokensCard).toBeTruthy();
     await user.click(within(totalTokensCard!).getByRole("button", { name: "Make primary" }));
     await user.click(within(totalTokensCard!).getByRole("button", { name: "Raw values" }));
@@ -575,7 +578,8 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByRole("button", { name: "Exclude outliers" }).getAttribute("aria-pressed")).toBe("true");
 
     await user.click(screen.getByRole("tab", { name: "Series" }));
-    const restoredTokensCard = screen.getByText("Total tokens").closest("div.rounded-xl") as HTMLElement | null;
+    const restoredSeriesTab = screen.getByTestId("project-metrics-series-tab");
+    const restoredTokensCard = within(restoredSeriesTab).getByText("Tokens").closest("div.rounded-xl") as HTMLElement | null;
     expect(restoredTokensCard).toBeTruthy();
     expect(within(restoredTokensCard!).getByRole("button", { name: "Raw values" }).getAttribute("aria-pressed")).toBe("true");
     expect(within(restoredTokensCard!).getByText("primary")).toBeTruthy();
@@ -667,7 +671,8 @@ describe("ProjectMetricsScreen", () => {
     expect(screen.getByTestId("project-metrics-pinned-tab")).toBeTruthy();
 
     await user.click(screen.getByRole("tab", { name: "Series" }));
-    const tokensCard = screen.getByText("Total tokens").closest("div.rounded-xl") as HTMLElement | null;
+    const pinnedSeriesTab = screen.getByTestId("project-metrics-series-tab");
+    const tokensCard = within(pinnedSeriesTab).getByText("Tokens").closest("div.rounded-xl") as HTMLElement | null;
     expect(tokensCard).toBeTruthy();
     const visibleButton = within(tokensCard!).getByRole("button", { name: "Visible" });
     await user.click(visibleButton);

@@ -35,6 +35,7 @@ export type ProjectSummaryCard = {
 export type ProjectMetricSeriesKey =
   | "duration"
   | "tokens"
+  | "allTokens"
   | "tokenInput"
   | "tokenOutput"
   | "tokenCachedInput"
@@ -153,13 +154,31 @@ const PROJECT_METRIC_SERIES_DEFINITIONS: readonly ProjectMetricSeriesDefinition[
   },
   {
     key: "tokens",
-    label: "Total tokens",
+    label: "Tokens",
     shortLabel: "Tokens",
     valueLabel: "Tokens",
-    description: "Общий токен usage по сессии.",
+    description: "Токены без cached-input slice.",
     category: "operational",
     defaultVisible: true,
     color: "#2563eb",
+    selectMetric: (session, includeSpawnAgents) =>
+      subtractCoveredMetric(
+        includeSpawnAgents
+          ? session.token_ledger.total
+          : subtractCoveredMetric(session.token_ledger.total, session.token_ledger.spawn_agent),
+        session.token_ledger.cached_input,
+      ),
+    formatValue: formatCoveredNumber,
+  },
+  {
+    key: "allTokens",
+    label: "All tokens",
+    shortLabel: "All tok",
+    valueLabel: "All tokens",
+    description: "Полный token ledger по сессии, включая cached-input slice.",
+    category: "operational",
+    defaultVisible: false,
+    color: "#1d4ed8",
     selectMetric: (session, includeSpawnAgents) =>
       includeSpawnAgents
         ? session.token_ledger.total
@@ -192,10 +211,10 @@ const PROJECT_METRIC_SERIES_DEFINITIONS: readonly ProjectMetricSeriesDefinition[
   },
   {
     key: "tokenCachedInput",
-    label: "Cached input",
+    label: "Cached tokens",
     shortLabel: "Cached",
-    valueLabel: "Cached input tokens",
-    description: "Cached input tokens без подмены unknown нулями.",
+    valueLabel: "Cached tokens",
+    description: "Cached-token slice без подмены unknown нулями.",
     category: "tokens",
     defaultVisible: false,
     color: "#0891b2",
@@ -493,6 +512,8 @@ export function buildProjectMetricsViewModel(
         response.token_ledger.total,
         response.token_ledger.spawn_agent,
       );
+  const nonCachedTokens = subtractCoveredMetric(totalTokens, response.token_ledger.cached_input);
+  const cachedTokens = response.token_ledger.cached_input;
   const chartRows = sessions.map((session, index) =>
     buildChartRow(session, index, includeSpawnAgents),
   );
@@ -520,8 +541,16 @@ export function buildProjectMetricsViewModel(
         value: formatDurationMetric(totalDuration),
       },
       {
-        label: "Total tokens",
+        label: "Tokens",
+        value: formatCoveredNumber(nonCachedTokens),
+      },
+      {
+        label: "All tokens",
         value: formatCoveredNumber(totalTokens),
+      },
+      {
+        label: "Cached tokens",
+        value: formatCoveredNumber(cachedTokens),
       },
       {
         label: "Baseline",
@@ -554,9 +583,12 @@ export function buildProjectMetricsViewModel(
           : subtractCoveredMetric(session.duration.total_ms, session.duration.spawn_agent_ms),
       ),
       tokens: formatCoveredNumber(
-        includeSpawnAgents
-          ? session.token_ledger.total
-          : subtractCoveredMetric(session.token_ledger.total, session.token_ledger.spawn_agent),
+        subtractCoveredMetric(
+          includeSpawnAgents
+            ? session.token_ledger.total
+            : subtractCoveredMetric(session.token_ledger.total, session.token_ledger.spawn_agent),
+          session.token_ledger.cached_input,
+        ),
       ),
       toolCalls: formatCoveredNumber(session.operations.tool_calls),
       failures: formatCoveredNumber(preferFailureMetric(session)),

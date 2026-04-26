@@ -21,7 +21,7 @@ use crate::tree::{EventTree, TimelineItem};
 use crate::util::{hash8, normalize_path, utc_now_iso};
 
 pub const METRICS_SCHEMA_VERSION: u32 = 5;
-pub const METRICS_PROJECTION_VERSION: u32 = 5;
+pub const METRICS_PROJECTION_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -1326,7 +1326,7 @@ fn build_factor_metadata(
             .and_then(|value| cleaned(value.sandbox_policy_kind.as_deref())),
         approval_mode: indexed_summary.and_then(|value| cleaned(value.approval_mode.as_deref())),
         agent_role: indexed_summary.and_then(|value| cleaned(value.agent_role.as_deref())),
-        skills_count: count_runtime_array(events, "skills"),
+        skills_count: resolve_enabled_skills_count(events),
         mcp_server_count: count_runtime_array(events, "mcp_servers"),
         mcp_call_count: CoveredMetric::known(
             events
@@ -1472,27 +1472,31 @@ fn build_token_ledger(
     events: &[EventRecord],
     indexed_summary: Option<&IndexedSessionSummary>,
 ) -> TokenLedger {
-    if let Some(snapshot) = latest_token_snapshot(events) {
+    if let Some(ledger) = build_scoped_token_ledger(events) {
+        return ledger;
+    }
+
+    if let Some(snapshot) = latest_unscoped_token_snapshot(events) {
         return TokenLedger {
             total: snapshot
                 .total
-                .map(|value| CoveredMetric::known(value, MetricSource::NormalizedEvents))
+                .map(|value| CoveredMetric::partial(value, MetricSource::NormalizedEvents))
                 .unwrap_or_else(CoveredMetric::unknown),
             input: snapshot
                 .input
-                .map(|value| CoveredMetric::known(value, MetricSource::NormalizedEvents))
+                .map(|value| CoveredMetric::partial(value, MetricSource::NormalizedEvents))
                 .unwrap_or_else(CoveredMetric::unknown),
             output: snapshot
                 .output
-                .map(|value| CoveredMetric::known(value, MetricSource::NormalizedEvents))
+                .map(|value| CoveredMetric::partial(value, MetricSource::NormalizedEvents))
                 .unwrap_or_else(CoveredMetric::unknown),
             cached_input: snapshot
                 .cached_input
-                .map(|value| CoveredMetric::known(value, MetricSource::NormalizedEvents))
+                .map(|value| CoveredMetric::partial(value, MetricSource::NormalizedEvents))
                 .unwrap_or_else(CoveredMetric::unknown),
             reasoning_output: snapshot
                 .reasoning_output
-                .map(|value| CoveredMetric::known(value, MetricSource::NormalizedEvents))
+                .map(|value| CoveredMetric::partial(value, MetricSource::NormalizedEvents))
                 .unwrap_or_else(CoveredMetric::unknown),
             tool_call: CoveredMetric::unknown(),
             task: CoveredMetric::unknown(),
@@ -1523,6 +1527,205 @@ fn build_token_ledger(
         task: CoveredMetric::unknown(),
         spawn_agent: CoveredMetric::unknown(),
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct ThreadParentState {
+    parent_thread_id: Option<String>,
+    ambiguous: bool,
+}
+
+fn build_scoped_token_ledger(events: &[EventRecord]) -> Option<TokenLedger> {
+    let latest_snapshots = latest_token_snapshots_by_thread(events);
+    if latest_snapshots.is_empty() {
+        return None;
+    }
+
+    let all_snapshots = latest_snapshots.values().collect::<Vec<_>>();
+    let parent_states = thread_parent_states(events);
+    let parentless_thread_count = latest_snapshots
+        .keys()
+        .filter(|thread_id| {
+            parent_states
+                .get(*thread_id)
+                .and_then(|state| state.parent_thread_id.as_deref())
+                .is_none()
+        })
+        .count();
+    let hierarchy_partial = has_unscoped_token_snapshot(events)
+        || parent_states.values().any(|state| state.ambiguous)
+        || parentless_thread_count > 1;
+    let child_snapshots = latest_snapshots
+        .iter()
+        .filter_map(|(thread_id, snapshot)| {
+            parent_states
+                .get(thread_id)
+                .and_then(|state| state.parent_thread_id.as_ref())
+                .map(|_| snapshot)
+        })
+        .collect::<Vec<_>>();
+
+    let total = aggregate_token_snapshot_metric(
+        &all_snapshots,
+        has_unscoped_token_snapshot(events),
+        MetricSource::NormalizedEvents,
+        |snapshot| snapshot.total,
+    );
+    let spawn_agent =
+        aggregate_child_token_metric(&child_snapshots, hierarchy_partial, |snapshot| {
+            snapshot.total
+        });
+
+    Some(TokenLedger {
+        total: total.clone(),
+        input: aggregate_token_snapshot_metric(
+            &all_snapshots,
+            has_unscoped_token_snapshot(events),
+            MetricSource::NormalizedEvents,
+            |snapshot| snapshot.input,
+        ),
+        output: aggregate_token_snapshot_metric(
+            &all_snapshots,
+            has_unscoped_token_snapshot(events),
+            MetricSource::NormalizedEvents,
+            |snapshot| snapshot.output,
+        ),
+        cached_input: aggregate_token_snapshot_metric(
+            &all_snapshots,
+            has_unscoped_token_snapshot(events),
+            MetricSource::NormalizedEvents,
+            |snapshot| snapshot.cached_input,
+        ),
+        reasoning_output: aggregate_token_snapshot_metric(
+            &all_snapshots,
+            has_unscoped_token_snapshot(events),
+            MetricSource::NormalizedEvents,
+            |snapshot| snapshot.reasoning_output,
+        ),
+        tool_call: CoveredMetric::unknown(),
+        task: subtract_u64_metrics(&total, &spawn_agent, MetricSource::Derived),
+        spawn_agent,
+    })
+}
+
+fn aggregate_token_snapshot_metric(
+    snapshots: &[&TokenSnapshot],
+    force_partial: bool,
+    source: MetricSource,
+    select: impl Fn(&TokenSnapshot) -> Option<u64>,
+) -> CoveredMetric<u64> {
+    let mut sum = 0u64;
+    let mut has_value = false;
+    let mut all_have_values = true;
+
+    for snapshot in snapshots {
+        if let Some(value) = select(snapshot) {
+            has_value = true;
+            sum = sum.saturating_add(value);
+        } else {
+            all_have_values = false;
+        }
+    }
+
+    if !has_value {
+        return CoveredMetric::unknown();
+    }
+
+    if all_have_values && !force_partial {
+        CoveredMetric::known(sum, source)
+    } else {
+        CoveredMetric::partial(sum, source)
+    }
+}
+
+fn aggregate_child_token_metric(
+    snapshots: &[&TokenSnapshot],
+    force_partial: bool,
+    select: impl Fn(&TokenSnapshot) -> Option<u64>,
+) -> CoveredMetric<u64> {
+    if snapshots.is_empty() {
+        return if force_partial {
+            CoveredMetric::partial(0, MetricSource::Derived)
+        } else {
+            CoveredMetric::known(0, MetricSource::Derived)
+        };
+    }
+
+    aggregate_token_snapshot_metric(snapshots, force_partial, MetricSource::Derived, select)
+}
+
+fn subtract_u64_metrics(
+    total: &CoveredMetric<u64>,
+    excluded: &CoveredMetric<u64>,
+    source: MetricSource,
+) -> CoveredMetric<u64> {
+    let (Some(total_value), Some(excluded_value)) = (total.value, excluded.value) else {
+        return CoveredMetric::unknown();
+    };
+
+    let coverage =
+        if total.coverage == MetricCoverage::Known && excluded.coverage == MetricCoverage::Known {
+            MetricCoverage::Known
+        } else {
+            MetricCoverage::Partial
+        };
+
+    covered_u64_metric(total_value.saturating_sub(excluded_value), coverage, source)
+}
+
+fn latest_token_snapshots_by_thread(events: &[EventRecord]) -> BTreeMap<String, TokenSnapshot> {
+    let mut snapshots = BTreeMap::new();
+    for event in events
+        .iter()
+        .filter(|event| event.event_type == INFO_TOKENS)
+    {
+        let Some(thread_id) = event_thread_id(event) else {
+            continue;
+        };
+        let Some(snapshot) = token_snapshot_from_payload(event.payload.as_object()) else {
+            continue;
+        };
+        snapshots.insert(thread_id, snapshot);
+    }
+    snapshots
+}
+
+fn latest_unscoped_token_snapshot(events: &[EventRecord]) -> Option<TokenSnapshot> {
+    let mut snapshot = None;
+    for event in events
+        .iter()
+        .filter(|event| event.event_type == INFO_TOKENS)
+    {
+        if event_thread_id(event).is_some() {
+            continue;
+        }
+        snapshot = token_snapshot_from_payload(event.payload.as_object());
+    }
+    snapshot
+}
+
+fn has_unscoped_token_snapshot(events: &[EventRecord]) -> bool {
+    latest_unscoped_token_snapshot(events).is_some()
+}
+
+fn thread_parent_states(events: &[EventRecord]) -> BTreeMap<String, ThreadParentState> {
+    let mut states = BTreeMap::<String, ThreadParentState>::new();
+    for event in events {
+        let Some(thread_id) = event_thread_id(event) else {
+            continue;
+        };
+        let Some(parent_thread_id) = payload_string(event.payload.as_object(), "parent_thread_id")
+        else {
+            continue;
+        };
+        let state = states.entry(thread_id).or_default();
+        match state.parent_thread_id.as_deref() {
+            None => state.parent_thread_id = Some(parent_thread_id),
+            Some(current) if current == parent_thread_id => {}
+            Some(_) => state.ambiguous = true,
+        }
+    }
+    states
 }
 
 fn build_tool_breakdown(
@@ -1717,6 +1920,18 @@ fn count_runtime_array(events: &[EventRecord], key: &str) -> CoveredMetric<u64> 
         .unwrap_or_else(CoveredMetric::unknown)
 }
 
+fn resolve_enabled_skills_count(events: &[EventRecord]) -> CoveredMetric<u64> {
+    first_message_available_skills_count(events)
+        .or_else(|| {
+            runtime_context_values(events, "skills")
+                .into_iter()
+                .find_map(|value| value.as_array())
+                .map(|items| items.len() as u64)
+        })
+        .map(|value| CoveredMetric::known(value, MetricSource::NormalizedEvents))
+        .unwrap_or_else(CoveredMetric::unknown)
+}
+
 fn runtime_context_values<'a>(events: &'a [EventRecord], key: &str) -> Vec<&'a Value> {
     let mut values = Vec::new();
     for event in events
@@ -1748,6 +1963,63 @@ fn resolve_start_context_size(events: &[EventRecord]) -> CoveredMetric<u64> {
         .or_else(|| events.iter().find_map(start_context_size_from_event))
         .map(|value| CoveredMetric::known(value, MetricSource::NormalizedEvents))
         .unwrap_or_else(CoveredMetric::unknown)
+}
+
+fn first_message_available_skills_count(events: &[EventRecord]) -> Option<u64> {
+    let message_text = events
+        .iter()
+        .find(|event| event.event_type.starts_with("message."))
+        .and_then(|event| event.payload.as_object())
+        .and_then(|payload| payload.get("text"))
+        .and_then(Value::as_str)?;
+    let skills = extract_available_skills_from_message_text(message_text);
+    (!skills.is_empty()).then_some(skills.len() as u64)
+}
+
+fn extract_available_skills_from_message_text(text: &str) -> Vec<String> {
+    let mut collecting = false;
+    let mut skills = BTreeSet::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !collecting {
+            if trimmed == "### Available skills" {
+                collecting = true;
+            }
+            continue;
+        }
+
+        if let Some(skill) = parse_available_skill_line(trimmed) {
+            skills.insert(skill);
+            continue;
+        }
+
+        if !trimmed.is_empty() {
+            break;
+        }
+    }
+
+    skills.into_iter().collect()
+}
+
+fn parse_available_skill_line(line: &str) -> Option<String> {
+    let item = line.strip_prefix("- ")?.trim();
+    if item.is_empty() {
+        return None;
+    }
+
+    let identifier = item
+        .split_once(':')
+        .map(|(value, _)| value)
+        .unwrap_or(item)
+        .trim()
+        .trim_matches('`');
+    let identifier = identifier
+        .split_whitespace()
+        .next()
+        .unwrap_or(identifier)
+        .trim();
+    (!identifier.is_empty()).then_some(identifier.to_string())
 }
 
 fn extract_used_skills(events: &[EventRecord]) -> UsedSkillsMetrics {
@@ -2732,28 +3004,6 @@ struct TokenSnapshot {
     total: Option<u64>,
 }
 
-fn latest_token_snapshot(events: &[EventRecord]) -> Option<TokenSnapshot> {
-    let mut snapshot = TokenSnapshot::default();
-    let mut seen = false;
-    for event in events
-        .iter()
-        .filter(|event| event.event_type == INFO_TOKENS)
-    {
-        let Some(payload) = event.payload.as_object() else {
-            continue;
-        };
-        seen = true;
-        snapshot.input = payload.get("input_tokens").and_then(Value::as_u64);
-        snapshot.cached_input = payload.get("cached_input_tokens").and_then(Value::as_u64);
-        snapshot.output = payload.get("output_tokens").and_then(Value::as_u64);
-        snapshot.reasoning_output = payload
-            .get("reasoning_output_tokens")
-            .and_then(Value::as_u64);
-        snapshot.total = payload.get("total_tokens").and_then(Value::as_u64);
-    }
-    seen.then_some(snapshot)
-}
-
 fn first_nonempty_tokens_start_context(events: &[EventRecord]) -> Option<u64> {
     events
         .iter()
@@ -3006,6 +3256,74 @@ mod tests {
         assert_eq!(metrics.token_ledger.reasoning_output.value, Some(3));
         assert_eq!(metrics.token_ledger.total.value, Some(27));
         assert_eq!(metrics.context.start_context_size.value, Some(10));
+    }
+
+    #[test]
+    fn scoped_session_token_ledger_sums_latest_snapshot_per_thread() {
+        let events = vec![
+            event(
+                1,
+                INFO_TOKENS,
+                "2026-04-23T10:00:00Z",
+                json!({"thread_id": "root", "input_tokens": 10, "output_tokens": 8, "reasoning_output_tokens": 2, "total_tokens": 18}),
+            ),
+            event(
+                2,
+                INFO_TOKENS,
+                "2026-04-23T10:00:01Z",
+                json!({"thread_id": "sub-1", "parent_thread_id": "root", "input_tokens": 7, "cached_input_tokens": 3, "output_tokens": 5, "total_tokens": 15}),
+            ),
+            event(
+                3,
+                INFO_TOKENS,
+                "2026-04-23T10:00:02Z",
+                json!({"thread_id": "sub-1", "parent_thread_id": "root", "input_tokens": 9, "cached_input_tokens": 4, "output_tokens": 7, "total_tokens": 20}),
+            ),
+        ];
+
+        let metrics = compute_session_metrics("session-1", &events, None, Some(&summary()));
+        assert_eq!(metrics.token_ledger.total.value, Some(38));
+        assert_eq!(metrics.token_ledger.total.coverage, MetricCoverage::Known);
+        assert_eq!(metrics.token_ledger.input.value, Some(19));
+        assert_eq!(metrics.token_ledger.cached_input.value, Some(4));
+        assert_eq!(metrics.token_ledger.output.value, Some(15));
+        assert_eq!(metrics.token_ledger.reasoning_output.value, Some(2));
+        assert_eq!(metrics.token_ledger.task.value, Some(18));
+        assert_eq!(metrics.token_ledger.task.coverage, MetricCoverage::Known);
+        assert_eq!(metrics.token_ledger.spawn_agent.value, Some(20));
+        assert_eq!(
+            metrics.token_ledger.spawn_agent.coverage,
+            MetricCoverage::Known
+        );
+    }
+
+    #[test]
+    fn scoped_session_token_ledger_keeps_unscoped_snapshots_partial() {
+        let events = vec![
+            event(
+                1,
+                INFO_TOKENS,
+                "2026-04-23T10:00:00Z",
+                json!({"thread_id": "root", "input_tokens": 10, "output_tokens": 8, "total_tokens": 18}),
+            ),
+            event(
+                2,
+                INFO_TOKENS,
+                "2026-04-23T10:00:01Z",
+                json!({"input_tokens": 14, "output_tokens": 11, "total_tokens": 25}),
+            ),
+        ];
+
+        let metrics = compute_session_metrics("session-1", &events, None, Some(&summary()));
+        assert_eq!(metrics.token_ledger.total.value, Some(18));
+        assert_eq!(metrics.token_ledger.total.coverage, MetricCoverage::Partial);
+        assert_eq!(metrics.token_ledger.task.value, Some(18));
+        assert_eq!(metrics.token_ledger.task.coverage, MetricCoverage::Partial);
+        assert_eq!(metrics.token_ledger.spawn_agent.value, Some(0));
+        assert_eq!(
+            metrics.token_ledger.spawn_agent.coverage,
+            MetricCoverage::Partial
+        );
     }
 
     fn assert_materialized_metrics_store_contract(store: &dyn MaterializedMetricsStore) {
@@ -3521,6 +3839,12 @@ mod tests {
             parent.raw_signals.receiver_role.as_deref(),
             Some("reviewer")
         );
+        assert_eq!(metrics.token_ledger.total.value, Some(30));
+        assert_eq!(metrics.token_ledger.input.value, Some(17));
+        assert_eq!(metrics.token_ledger.output.value, Some(13));
+        assert_eq!(metrics.token_ledger.reasoning_output.value, Some(2));
+        assert_eq!(metrics.token_ledger.task.value, Some(18));
+        assert_eq!(metrics.token_ledger.spawn_agent.value, Some(12));
 
         let child = metrics
             .task_facts
@@ -3708,6 +4032,33 @@ mod tests {
     }
 
     #[test]
+    fn enabled_skills_come_from_first_session_message_available_skills_block() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[
+                event(
+                    1,
+                    MESSAGE_USER,
+                    "2026-04-23T10:00:00Z",
+                    json!({
+                        "text": "## Skills\n### Available skills\n- openspec-apply-change: apply OpenSpec tasks\n- shadcn: manage shadcn components\n\n### How to use skills\n- ..."
+                    }),
+                ),
+                event(
+                    2,
+                    RUNTIME_CONTEXT,
+                    "2026-04-23T10:00:01Z",
+                    json!({"skills": ["openspec-explore"]}),
+                ),
+            ],
+            None,
+            Some(&summary()),
+        );
+
+        assert_eq!(metrics.factors.skills_count.value, Some(2));
+    }
+
+    #[test]
     fn enabled_skills_stay_tied_to_first_runtime_context_list() {
         let metrics = compute_session_metrics(
             "session-1",
@@ -3745,6 +4096,33 @@ mod tests {
             metrics.used_skills.identifiers,
             vec!["openspec-explore".to_string()]
         );
+    }
+
+    #[test]
+    fn enabled_skills_fall_back_to_runtime_context_when_first_message_has_no_skills_block() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[
+                event(
+                    1,
+                    MESSAGE_USER,
+                    "2026-04-23T10:00:00Z",
+                    json!({
+                        "text": "Обычное пользовательское сообщение без списка skills"
+                    }),
+                ),
+                event(
+                    2,
+                    RUNTIME_CONTEXT,
+                    "2026-04-23T10:00:01Z",
+                    json!({"skills": ["openspec-apply-change", "shadcn"]}),
+                ),
+            ],
+            None,
+            Some(&summary()),
+        );
+
+        assert_eq!(metrics.factors.skills_count.value, Some(2));
     }
 
     #[test]

@@ -59,17 +59,25 @@ Token ledger содержит:
 - `input`;
 - `output`;
 - `cached_input`;
+- `reasoning_output`;
 - `tool_call`;
 - `task`;
 - `spawn_agent`.
 
-При наличии `info.tokens` используются детальные значения из последнего непустого
-нормализованного token snapshot. Эти поля в логе уже накопительные, поэтому слой метрик не
-суммирует несколько `info.tokens` между собой. Если есть только `tokens_used` из indexed
-metadata, заполняется общий `total` с `partial` coverage, а недоступные разрезы остаются
-`unknown`.
+Для session-level totals слой метрик использует scope-aware схему:
 
-Дополнительно token ledger теперь выделяет `reasoning_output` как отдельный разрез.
+- если `info.tokens` привязаны к `thread_id`, берётся последний накопительный snapshot на каждый
+  thread/scope и затем значения суммируются по всем подтверждённым scope;
+- `spawn_agent` считается как сумма child-thread snapshots с подтверждённым `parent_thread_id`;
+- `task` считается как `total - spawn_agent`, когда иерархия scope известна достаточно надёжно;
+- если одновременно есть scoped и unscoped token snapshots, подтверждённые scoped значения
+  сохраняются, но coverage по этим полям становится `partial`;
+- если scoped snapshots нет вообще, используется последний unscoped snapshot с `partial`
+  coverage;
+- если есть только `tokens_used` из indexed metadata, заполняется общий `total` с `partial`
+  coverage, а недоступные разрезы остаются `unknown`.
+
+`tool_call` пока не вычисляется из текущих источников и остаётся `unknown`.
 
 ## Duration breakdown
 
@@ -196,3 +204,55 @@ Operational expectations:
 
 Frontend показывает backend-provided metrics, если они есть. Локальная агрегация в React
 сохраняется только как compatibility path для сессий без backend metrics.
+
+## Аудит покрытия публичных метрик
+
+### SessionMetrics
+
+| Группа | Источник | Семантика coverage | Статус |
+| --- | --- | --- | --- |
+| `event_count`, `message_count`, `error_count`, `abort_count`, `failure_count` | normalized events | `known`, если события есть в нормализованной ленте | implemented |
+| `outcome` | terminal session events | `known` для явного terminal marker, иначе `unknown` | implemented |
+| `thread_count` | `EventTree` или distinct `thread_id` | `known` через tree, `partial` через fallback distinct count | implemented |
+| `factors.model`, `reasoning_effort`, `cli_version`, `sandbox_policy_kind`, `approval_mode`, `agent_role` | indexed session metadata | `known`, если поле есть в summary; иначе `unknown` | implemented |
+| `factors.skills_count` | первый session message с `### Available skills` -> fallback `runtime_context.skills` | `known` при найденном стартовом списке skills, иначе `unknown` | implemented |
+| `factors.mcp_server_count` | `runtime_context.mcp_servers` | `known` по первому доступному списку, иначе `unknown` | implemented |
+| `factors.mcp_call_count` | normalized events | `known` по числу `mcp.call` events | implemented |
+| `factors.start_context_size`, `context.start_context_size` | `runtime_context` -> first non-empty `info.tokens` -> legacy event field | `known` при найденном доверенном источнике, иначе `unknown` | implemented |
+| `operations.*` | operation projection | `known`, если есть projection snapshots; иначе `unknown` | implemented |
+| `duration.total_ms` | timestamps первого и последнего события | `known`, если обе границы распознаны | implemented |
+| `duration.tool_ms`, `shell_ms`, `mcp_ms`, `spawn_agent_ms`, `idle_unknown_ms` | operation projection + derived remainder | `partial`, потому что покрывают только атрибутируемую часть длительности | partial-by-source |
+| `duration.generation_ms` | нет источника в текущей нормализации | всегда `unknown` | unsupported-with-current-sources |
+| `token_ledger.total`, `input`, `output`, `cached_input`, `reasoning_output` | scope-aware `info.tokens`; fallback `tokens_used` | `known` для полностью scoped snapshots, `partial` при unscoped/fallback cases | implemented |
+| `token_ledger.task`, `spawn_agent` | derived from scoped token snapshots и thread hierarchy | `known` при подтверждённой иерархии, `partial` при ambiguous scope, `unknown` без snapshot | implemented |
+| `token_ledger.tool_call` | нет отдельного token source per tool category | всегда `unknown` | unsupported-with-current-sources |
+| `tool_breakdown.count`, `failures` | operation projection | `known` по counted snapshots | implemented |
+| `tool_breakdown.duration_ms` | operation projection durations | `partial` | partial-by-source |
+| `tool_breakdown.token_contribution` | нет per-tool token ledger в текущих событиях | всегда `unknown` | unsupported-with-current-sources |
+| `task_metrics.task_count`, `turn_count` | normalized events | `known`, если есть соответствующие markers; иначе `unknown` | implemented |
+| `task_metrics.agent_work_item_count` | `EventTree` или distinct `thread_id` | `known` через tree, `partial` через fallback distinct count | implemented |
+| `task_facts[]` operations/duration/token ledger | task boundaries + operation projection + scoped token snapshots | `known` для закрытых интервалов, `partial`/`unknown` для open boundaries | implemented |
+| `used_skills` | explicit `skill_identifiers` signals | `known`, если есть явные usage markers; иначе `unknown` | implemented |
+| `business_review.review_cycles`, `review_findings` | markers в normalized events и `EventTree` | `partial`, потому что счётчики marker-based | partial-by-source |
+| `context.context_growth` | нет канонического delta source | всегда `unknown` | unsupported-with-current-sources |
+| `context.compaction_events`, `context.context_compression` | normalized events | `known` по числу compaction markers | implemented |
+| `quality.*` | нет поддержанного источника | всегда `unknown` | unsupported-with-current-sources |
+| `baseline.*` | требует materialized baseline window, пока не реализован | всегда `unknown` | unsupported-with-current-sources |
+| `derived_efficiency.tokens_per_successful_session` | derived from session total + outcome | `known` только для completed session с известным total | implemented |
+| `derived_efficiency.review_findings_per_1k_tokens` | derived from review findings + total tokens | `partial`, потому что зависит от marker-based review group | partial-by-source |
+| `derived_efficiency.tokens_per_accepted_task` | нет accepted-task source of truth в текущем payload | всегда `unknown` | unsupported-with-current-sources |
+
+### ProjectMetricsResponse
+
+| Группа | Источник | Семантика coverage | Статус |
+| --- | --- | --- | --- |
+| `session_count`, `contributing_session_ids`, `scope_filter`, `available_scope_counts`, `sessions[]` | materialized session rows | структурные поля без отдельного coverage | implemented |
+| `token_ledger.*` | сумма session-level token ledger | `known`, если все contributing sessions `known`; иначе `partial` | implemented |
+| `duration_ms` | сумма `sessions[].duration.total_ms` | `known`/`partial` по session coverage | implemented |
+| `factors.start_context_size`, `skills_count`, `mcp_server_count` | сумма session rollups | `known`/`partial` по session coverage | implemented |
+| `operations.spawn_agent_calls` | сумма session rollups | `known`/`partial` по session coverage | implemented |
+| `task_metrics.task_count` | сумма session rollups | `known`/`partial` по session coverage | implemented |
+| `task_facts[]` | объединение session task facts без доп. вычислений | зависит от coverage каждого факта | implemented |
+| `used_skills` | derived union по session `used_skills` | `known`, если все contributing sessions дали known usage; иначе `partial` | implemented |
+| `baseline.*` | project baseline ещё не материализован | всегда `unknown` | unsupported-with-current-sources |
+| `derived_efficiency.*` | project-level derived rollups пока не собраны поверх materialized sessions | всегда `unknown` | unsupported-with-current-sources |

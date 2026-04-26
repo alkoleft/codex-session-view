@@ -119,7 +119,7 @@ export function buildSessionMetricsViewModel({
         value: formatMetricPercent(loadedAggregates?.errorRate ?? null),
       },
       { label: "Messages", value: formatMetricNumber(loadedAggregates?.messages ?? null) },
-      { label: "Tokens", value: tokens },
+      { label: "All tokens", value: tokens },
     ],
   };
 }
@@ -131,6 +131,7 @@ function buildBackendMetricsViewModel(
   const totalTokens = includeSpawnAgents
     ? metrics.token_ledger.total
     : subtractCovered(metrics.token_ledger.total, metrics.token_ledger.spawn_agent);
+  const displayedTokens = subtractCovered(totalTokens, metrics.token_ledger.cached_input);
   const totalDuration = includeSpawnAgents
     ? metrics.duration.total_ms
     : subtractCovered(metrics.duration.total_ms, metrics.duration.spawn_agent_ms);
@@ -154,10 +155,11 @@ function buildBackendMetricsViewModel(
       { label: "Events", value: formatCoveredNumber(metrics.event_count) },
       { label: "Threads", value: formatCoveredNumber(metrics.thread_count) },
       { label: "Messages", value: formatCoveredNumber(metrics.message_count) },
-      { label: "Tokens", value: formatCoveredNumber(totalTokens) },
+      { label: "Tokens", value: formatCoveredNumber(displayedTokens) },
+      { label: "All tokens", value: formatCoveredNumber(totalTokens) },
       { label: "Input tokens", value: formatCoveredNumber(metrics.token_ledger.input) },
       { label: "Output tokens", value: formatCoveredNumber(metrics.token_ledger.output) },
-      { label: "Cached input", value: formatCoveredNumber(metrics.token_ledger.cached_input) },
+      { label: "Cached tokens", value: formatCoveredNumber(metrics.token_ledger.cached_input) },
       { label: "Reasoning tokens", value: formatCoveredNumber(metrics.token_ledger.reasoning_output) },
       { label: "Start context", value: formatCoveredNumber(metrics.context.start_context_size) },
       { label: "Spawn agent", value: formatCoveredNumber(metrics.operations.spawn_agent_calls) },
