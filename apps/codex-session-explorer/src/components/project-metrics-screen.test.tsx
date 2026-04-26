@@ -5,21 +5,6 @@ import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/components/ui/scroll-area", () => ({
-  ScrollArea: ({
-    children,
-    className,
-    ...props
-  }: {
-    children: ReactNode;
-    className?: string;
-  } & React.HTMLAttributes<HTMLDivElement>) => (
-    <div className={className} {...props}>
-      {children}
-    </div>
-  ),
-}));
-
 vi.mock("@/backend", async () => {
   const actual = await vi.importActual<typeof import("@/backend")>("@/backend");
   return {
@@ -47,14 +32,30 @@ vi.mock("recharts", async (importOriginal) => {
     CartesianGrid: () => null,
     Bar: ({
       onClick,
+      shape,
+      fill = "#2563eb",
+      fillOpacity = 0.2,
     }: {
       onClick?: (payload: unknown) => void;
+      shape?: ((props: unknown) => ReactNode) | ReactNode;
+      fill?: string;
+      fillOpacity?: number;
     }) => (
       <g
         data-testid="mock-primary-bar"
         onClick={() => onClick?.({ sessionId: "session-8" })}
       >
-        <rect height="180" width="24" x="12" y="24" />
+        {typeof shape === "function"
+          ? shape({
+              fill,
+              fillOpacity,
+              height: 180,
+              payload: { sessionId: "session-8" },
+              width: 24,
+              x: 12,
+              y: 24,
+            })
+          : <rect height="180" width="24" x="12" y="24" />}
       </g>
     ),
     ComposedChart: ({
@@ -430,7 +431,10 @@ describe("ProjectMetricsScreen", () => {
 
     expect(screen.getByTestId("project-metrics-shell").className).toContain("overflow-hidden");
     expect(screen.getByTestId("project-metrics-split-view").className).toContain("overflow-hidden");
-    expect(screen.getAllByTestId("project-metrics-side-scroll")[0]?.className).toContain("h-full");
+    const sideScroll = screen.getAllByTestId("project-metrics-side-scroll")[0]!;
+    expect(sideScroll.className).toContain("h-full");
+    expect(sideScroll.getAttribute("data-slot")).toBe("scroll-area");
+    expect(sideScroll.querySelector("[data-slot='scroll-area-viewport']")).toBeTruthy();
     expect(screen.getByTestId("project-metrics-main-scroll").className).toContain("h-full");
   });
 
@@ -456,9 +460,31 @@ describe("ProjectMetricsScreen", () => {
     expect(within(seriesTab).getAllByText("Make primary").length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("tab", { name: "Chart" }));
-    expect(screen.getByRole("button", { name: "Trend" }).getAttribute("aria-pressed")).toBe("true");
+    const trendButton = screen.getByRole("button", { name: "Trend" });
+    expect(trendButton.getAttribute("aria-pressed")).toBe("true");
+    expect(trendButton.getAttribute("data-active-state")).toBe("on");
     await user.click(screen.getByRole("button", { name: "Exclude outliers" }));
-    expect(screen.getByRole("button", { name: "Exclude outliers" }).getAttribute("aria-pressed")).toBe("true");
+    const excludeOutliersButton = screen.getByRole("button", { name: "Exclude outliers" });
+    expect(excludeOutliersButton.getAttribute("aria-pressed")).toBe("true");
+    expect(excludeOutliersButton.getAttribute("data-active-state")).toBe("on");
+  });
+
+  it("shows duration and token drift in the compact window pulse summary", () => {
+    render(
+      <ProjectMetricsScreen
+        currentSessionId={null}
+        error={null}
+        includeSpawnAgents={true}
+        loading={false}
+        metrics={makeResponse(8)}
+        onOpenSession={vi.fn()}
+        selectedProjectKey="project-alpha"
+      />,
+    );
+
+    expect(screen.getByText("Avg duration")).toBeTruthy();
+    expect(screen.getByText("Token drift")).toBeTruthy();
+    expect(screen.getByText((content) => content.replace(/\s/g, "") === "+21000")).toBeTruthy();
   });
 
   it("reconciles workspace state across dataset refresh and preserves pinned session when still present", async () => {
@@ -617,6 +643,7 @@ describe("ProjectMetricsScreen", () => {
 
     expect(screen.getByTestId("project-metrics-pinned-tab")).toBeTruthy();
     expect(screen.getByTestId("project-metrics-pinned-tab").textContent).toContain("session-8");
+    expect(screen.getByTestId("project-metrics-pinned-chart-marker")).toBeTruthy();
   });
 
   it("opens pinned-session tab from a pin action and keeps hidden series in pinned detail", async () => {

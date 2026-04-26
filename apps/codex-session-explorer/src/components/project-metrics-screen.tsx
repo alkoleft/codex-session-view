@@ -119,7 +119,7 @@ type AnomalyGroup = {
 };
 
 const SURFACE_CARD_CLASS = "border-border bg-background shadow-none";
-const PRIMARY_BAR_FILL_OPACITY = 0.28;
+const PRIMARY_BAR_FILL_OPACITY = 0.2;
 const PROJECT_METRICS_WORKSPACE_STORAGE_PREFIX = "codex-session-explorer.project-metrics.workspace.v1";
 
 export function ProjectMetricsShellControls({
@@ -298,11 +298,20 @@ export function ProjectMetricsScreen({
     startIndex: null,
   });
   const [detailCache, setDetailCache] = useState<Record<string, LazyDetailState>>({});
+  const selectionRef = useRef<ChartSelection>({
+    endIndex: null,
+    startIndex: null,
+  });
   const suppressDirectActivationRef = useRef(false);
+  const suppressPrimaryBarFollowupRef = useRef(false);
   const workspaceDataKeyRef = useRef<string | null>(null);
   const workspaceStorageKeyRef = useRef<string | null>(null);
   const pendingWorkspaceStorageKeyRef = useRef<string | null>(null);
   const hydratedWorkspaceStorageKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    selectionRef.current = selection;
+  }, [selection]);
 
   useEffect(() => {
     if (!queryModel) {
@@ -562,6 +571,10 @@ export function ProjectMetricsScreen({
   }
 
   function handleChartMouseUp() {
+    if (suppressPrimaryBarFollowupRef.current) {
+      clearSelection();
+      return;
+    }
     const nextWindow = resolveSelectionWindow(selection.startIndex, selection.endIndex, totalRows);
     if (nextWindow) {
       focusRange(nextWindow);
@@ -580,7 +593,7 @@ export function ProjectMetricsScreen({
   }
 
   function handlePrimaryBarClick(payload: unknown) {
-    if (suppressDirectActivationRef.current) {
+    if (suppressDirectActivationRef.current || suppressPrimaryBarFollowupRef.current) {
       return;
     }
     const chartRow = extractChartRowFromActivationPayload(payload);
@@ -590,7 +603,7 @@ export function ProjectMetricsScreen({
   }
 
   function handleChartClick(state: unknown) {
-    if (suppressDirectActivationRef.current) {
+    if (suppressDirectActivationRef.current || suppressPrimaryBarFollowupRef.current) {
       return;
     }
     const chartRow = extractChartRow((state as { activePayload?: unknown } | null)?.activePayload);
@@ -617,6 +630,52 @@ export function ProjectMetricsScreen({
   }
 
   const selectionPreview = resolveSelectionWindow(selection.startIndex, selection.endIndex, totalRows);
+  function beginPrimaryBarSelection(index: number) {
+    suppressDirectActivationRef.current = false;
+    setSelection({
+      endIndex: index,
+      startIndex: index,
+    });
+  }
+
+  function extendPrimaryBarSelection(index: number) {
+    setSelection((current) => {
+      if (current.startIndex == null) {
+        return current;
+      }
+      if (index !== current.startIndex) {
+        suppressDirectActivationRef.current = true;
+      }
+      return current.endIndex === index
+        ? current
+        : {
+            ...current,
+            endIndex: index,
+          };
+    });
+  }
+
+  function commitPrimaryBarSelection() {
+    const nextWindow = resolveSelectionWindow(
+      selectionRef.current.startIndex,
+      selectionRef.current.endIndex,
+      totalRows,
+    );
+    if (nextWindow) {
+      suppressPrimaryBarFollowupRef.current = true;
+      focusRange(nextWindow);
+      queueMicrotask(() => {
+        suppressDirectActivationRef.current = false;
+        suppressPrimaryBarFollowupRef.current = false;
+      });
+      clearSelection();
+      return true;
+    }
+    clearSelection();
+    suppressDirectActivationRef.current = false;
+    return false;
+  }
+
   const hasVisibleChartData = chartAnalysis
     ? visibleSeries.some((series) =>
         visibleChartRows.some((row) => getChartModeValue(row, seriesModeMap.get(series.key) ?? workspaceState.defaultMode, series.key) != null),
@@ -857,7 +916,11 @@ export function ProjectMetricsScreen({
                                   shape={(props) => (
                                     <PrimaryBarShape
                                       {...props}
+                                      currentSessionId={pinnedSessionId}
                                       onActivateSession={focusSession}
+                                      onBeginSelection={beginPrimaryBarSelection}
+                                      onCommitSelection={commitPrimaryBarSelection}
+                                      onExtendSelection={extendPrimaryBarSelection}
                                     />
                                   )}
                                 />
@@ -1130,6 +1193,7 @@ function AnomaliesTab({
                   </div>
                   <div className="mt-3">
                     <Button
+                      className={compactActionButtonClass(true)}
                       onClick={() => {
                         if (item.actionType === "focus-range" && item.range) {
                           onFocusRange(item.range);
@@ -1235,36 +1299,44 @@ function SeriesTab({
                     <div className="mt-3 flex flex-wrap gap-2">
                       <Button
                         aria-pressed={config.visible}
+                        className={compactActionButtonClass(config.visible)}
+                        data-active-state={config.visible ? "on" : "off"}
                         onClick={() => onUpdateSeriesConfig(item.key, (current) => ({ ...current, visible: !current.visible }))}
                         size="xs"
                         type="button"
-                        variant={config.visible ? "secondary" : "outline"}
+                        variant="outline"
                       >
                         {config.visible ? "Visible" : "Hidden"}
                       </Button>
                       <Button
+                        className={compactActionButtonClass(primarySeriesKey === item.key)}
+                        data-active-state={primarySeriesKey === item.key ? "on" : "off"}
                         onClick={() => onSetPrimarySeries(item.key)}
                         size="xs"
                         type="button"
-                        variant={primarySeriesKey === item.key ? "secondary" : "outline"}
+                        variant="outline"
                       >
                         Make primary
                       </Button>
                       <Button
                         aria-pressed={config.emphasized}
+                        className={compactActionButtonClass(config.emphasized)}
+                        data-active-state={config.emphasized ? "on" : "off"}
                         onClick={() => onUpdateSeriesConfig(item.key, (current) => ({ ...current, emphasized: !current.emphasized }))}
                         size="xs"
                         type="button"
-                        variant={config.emphasized ? "secondary" : "outline"}
+                        variant="outline"
                       >
                         Emphasize
                       </Button>
                       <Button
                         aria-pressed={config.showRawValues}
+                        className={compactActionButtonClass(config.showRawValues)}
+                        data-active-state={config.showRawValues ? "on" : "off"}
                         onClick={() => onUpdateSeriesConfig(item.key, (current) => ({ ...current, showRawValues: !current.showRawValues }))}
                         size="xs"
                         type="button"
-                        variant={config.showRawValues ? "secondary" : "outline"}
+                        variant="outline"
                       >
                         Raw values
                       </Button>
@@ -1333,11 +1405,13 @@ function ChartTab({
           {PROJECT_METRICS_CHART_MODES.map((mode) => (
             <Button
               aria-pressed={defaultMode === mode}
+              className={compactActionButtonClass(defaultMode === mode)}
+              data-active-state={defaultMode === mode ? "on" : "off"}
               key={mode}
               onClick={() => onDefaultModeChange(mode)}
               size="xs"
               type="button"
-              variant={defaultMode === mode ? "secondary" : "outline"}
+              variant="outline"
             >
               {PROJECT_METRICS_CHART_MODE_META[mode].label}
             </Button>
@@ -1356,11 +1430,13 @@ function ChartTab({
           {(["keep", "clamp", "exclude"] as ChartOutlierMode[]).map((mode) => (
             <Button
               aria-pressed={outlierMode === mode}
+              className={compactActionButtonClass(outlierMode === mode)}
+              data-active-state={outlierMode === mode ? "on" : "off"}
               key={mode}
               onClick={() => onOutlierModeChange(mode)}
               size="xs"
               type="button"
-              variant={outlierMode === mode ? "secondary" : "outline"}
+              variant="outline"
             >
               {describeOutlierMode(mode)}
             </Button>
@@ -1610,9 +1686,10 @@ function ModeBadge({
       className={cn(
         "rounded-full border px-2.5 py-1 text-xs font-medium transition",
         active
-          ? "border-foreground/20 bg-muted text-foreground"
+          ? "border-[color:var(--accent-strong)]/45 bg-[color:var(--accent-strong)]/14 text-foreground shadow-sm"
           : "border-border/70 bg-background text-muted-foreground hover:bg-muted/40 hover:text-foreground",
       )}
+      data-active-state={active ? "on" : "off"}
       onClick={onClick}
       type="button"
     >
@@ -1728,25 +1805,36 @@ function SeriesDot({
       className="cursor-pointer"
       cx={props.cx}
       cy={props.cy}
+      data-pinned-session={selected ? "true" : "false"}
       data-session-id={row.sessionId}
       fill={props.stroke ?? "currentColor"}
       fillOpacity={selected ? 1 : 0.92}
       onClick={() => onActivateSession(row.sessionId)}
-      r={selected ? 5 : 3.5}
-      stroke="var(--background)"
-      strokeWidth={selected ? 2 : 1.5}
+      r={selected ? 5.5 : 3.5}
+      stroke={selected ? "var(--accent-strong)" : "var(--background)"}
+      strokeWidth={selected ? 2.5 : 1.5}
     />
   );
 }
 
 function PrimaryBarShape({
+  currentSessionId,
   onActivateSession,
+  onBeginSelection,
+  onCommitSelection,
+  onExtendSelection,
   ...props
 }: BarShapeProps & {
+  currentSessionId: string | null;
   onActivateSession: (sessionId: string) => void;
+  onBeginSelection: (index: number) => void;
+  onCommitSelection: () => boolean;
+  onExtendSelection: (index: number) => void;
 }) {
   const chartRow = extractChartRowFromActivationPayload(props);
   const sessionId = chartRow?.sessionId ?? null;
+  const rowIndex = chartRow && "row" in chartRow && chartRow.row ? chartRow.row.index : null;
+  const selected = sessionId != null && sessionId === currentSessionId;
   const {
     background: _background,
     dataKey: _dataKey,
@@ -1771,31 +1859,50 @@ function PrimaryBarShape({
   const hitboxX = x - (hitboxWidth - width) / 2;
   const hitboxY = Math.min(y, y + height);
   const hitboxHeight = Math.max(Math.abs(height), 18);
+  const markerX = x + width / 2;
+  const markerY = Math.max(12, Math.min(y, y + height) - 8);
 
   return (
-    <g className="cursor-pointer">
+    <g
+      className="cursor-pointer"
+      data-pinned-session={selected ? "true" : "false"}
+      data-session-id={sessionId ?? undefined}
+      data-testid="project-metrics-primary-bar-shape"
+      pointerEvents="none"
+    >
       <rect
         className="cursor-pointer"
         data-testid="project-metrics-primary-bar"
         fill="currentColor"
         fillOpacity={0.001}
         height={hitboxHeight}
-        onMouseDown={(event) => {
-          event.preventDefault();
+        onClick={(event) => {
+          const dragSelection = event.currentTarget.dataset.dragSelection === "true";
+          event.currentTarget.dataset.dragSelection = "false";
           event.stopPropagation();
+          if (dragSelection) {
+            return;
+          }
+          if (sessionId) {
+            onActivateSession(sessionId);
+          }
+        }}
+        onMouseDown={(event) => {
+          event.stopPropagation();
+          event.currentTarget.dataset.dragSelection = "false";
+          if (rowIndex != null) {
+            onBeginSelection(rowIndex);
+          }
+        }}
+        onMouseEnter={(event) => {
+          if (event.buttons !== 1 || rowIndex == null) {
+            return;
+          }
+          onExtendSelection(rowIndex);
         }}
         onMouseUp={(event) => {
-          event.preventDefault();
           event.stopPropagation();
-          if (sessionId) {
-            onActivateSession(sessionId);
-          }
-        }}
-        onClick={(event) => {
-          event.stopPropagation();
-          if (sessionId) {
-            onActivateSession(sessionId);
-          }
+          event.currentTarget.dataset.dragSelection = onCommitSelection() ? "true" : "false";
         }}
         pointerEvents="all"
         width={hitboxWidth}
@@ -1806,7 +1913,32 @@ function PrimaryBarShape({
         {...rectangleProps}
         className={cn(rectangleProps.className, "cursor-pointer")}
         pointerEvents="none"
+        stroke={selected ? "var(--accent-strong)" : undefined}
+        strokeOpacity={selected ? 0.95 : undefined}
+        strokeWidth={selected ? 2 : undefined}
       />
+      {selected ? (
+        <g data-testid="project-metrics-pinned-chart-marker" pointerEvents="none">
+          <line
+            stroke="var(--accent-strong)"
+            strokeLinecap="round"
+            strokeOpacity={0.9}
+            strokeWidth={1.5}
+            x1={markerX}
+            x2={markerX}
+            y1={markerY + 4}
+            y2={Math.max(6, Math.min(y, y + height))}
+          />
+          <circle
+            cx={markerX}
+            cy={markerY}
+            fill="var(--accent-strong)"
+            r={4.5}
+            stroke="var(--background)"
+            strokeWidth={2}
+          />
+        </g>
+      ) : null}
     </g>
   );
 }
@@ -2132,6 +2264,18 @@ function buildWindowPulseSummary({
   }, 0);
   const coverageKnownCount = rows.reduce((count, row) => count + (dominantCoverage(row, series) === "known" ? 1 : 0), 0);
   const totalTokens = rows.reduce((sum, row) => sum + (row.metrics.tokens.value ?? 0), 0);
+  const knownDurationValues = rows
+    .map((row) => row.metrics.duration.value)
+    .filter((value): value is number => value != null);
+  const averageDurationMs = knownDurationValues.length > 0
+    ? Math.round(knownDurationValues.reduce((sum, value) => sum + value, 0) / knownDurationValues.length)
+    : null;
+  const tokenDriftRows = rows.filter((row) => row.metrics.tokens.value != null);
+  const tokenDriftStart = tokenDriftRows[0] ?? null;
+  const tokenDriftEnd = tokenDriftRows.at(-1) ?? null;
+  const tokenDrift = tokenDriftStart && tokenDriftEnd
+    ? (tokenDriftEnd.metrics.tokens.value ?? 0) - (tokenDriftStart.metrics.tokens.value ?? 0)
+    : null;
 
   return {
     items: [
@@ -2161,6 +2305,22 @@ function buildWindowPulseSummary({
         value: formatProjectMetricSeriesValue("tokens", totalTokens),
       },
       {
+        hint:
+          averageDurationMs != null
+            ? `${knownDurationValues.length}/${sessionCount || 0} sessions contribute to the duration signal`
+            : "No known duration values in the current window",
+        label: "Avg duration",
+        value: formatWindowDuration(averageDurationMs),
+      },
+      {
+        hint:
+          tokenDriftStart && tokenDriftEnd
+            ? `${tokenDriftStart.label} -> ${tokenDriftEnd.label}`
+            : "Need at least two visible token points",
+        label: "Token drift",
+        value: formatSignedWindowMetric(tokenDrift),
+      },
+      {
         hint: chartRows.length > 0 ? `${chartRows[0]?.label} -> ${chartRows.at(-1)?.label}` : "n/a",
         label: "Window span",
         value: chartRows.length > 0 ? `${chartRows[0]?.label} -> ${chartRows.at(-1)?.label}` : "n/a",
@@ -2169,6 +2329,40 @@ function buildWindowPulseSummary({
     subtitle: "Quick summary for the current visible chart window without reintroducing overview blocks into main area.",
     title: "Window pulse",
   };
+}
+
+function compactActionButtonClass(active: boolean) {
+  return cn(
+    "border transition-colors",
+    active
+      ? "border-[color:var(--accent-strong)]/45 bg-[color:var(--accent-strong)]/14 text-foreground shadow-sm hover:bg-[color:var(--accent-strong)]/18"
+      : "border-border/70 bg-background text-muted-foreground hover:border-foreground/15 hover:bg-muted/45 hover:text-foreground",
+  );
+}
+
+function formatWindowDuration(value: number | null) {
+  if (value == null) {
+    return "n/a";
+  }
+  const totalSeconds = Math.floor(value / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, "0")}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  }
+  return `${seconds}s`;
+}
+
+function formatSignedWindowMetric(value: number | null) {
+  if (value == null) {
+    return "n/a";
+  }
+  const sign = value > 0 ? "+" : value < 0 ? "−" : "±";
+  return `${sign}${new Intl.NumberFormat("ru-RU").format(Math.abs(Math.round(value)))}`;
 }
 
 function buildAnomalyGroups({
