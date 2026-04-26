@@ -45,3 +45,15 @@
 - [ ] 4.8 Выполнить Playwright UAT экрана `Project metrics`, исправить найденные замечания и
       повторить проверку до зелёного результата
 - [ ] 4.9 Прогнать `openspec validate fix-project-metrics-workspace-regressions --strict`
+
+## 5. Skills metrics semantics
+
+- [ ] 5.1 Проверить, что `Enabled skills`/`skills_count` считается по стартовому списку available
+      skills из первого сообщения сессии, а не по поздним usage markers
+- [ ] 5.2 Если текущая нормализация смешивает `connected/enabled skills` и explicit
+      `<skill>...</skill>` usage markers, исправить extraction/aggregation без изменения внешнего
+      response shape
+- [ ] 5.3 Добавить tests как минимум на три кейса: count подключённых skills по первому сообщению,
+      отдельный usage/load signal по явному `<skill>` message без переписывания `Enabled skills`,
+      и quoted `skills_instructions` / `Available skills` block, который не считается загрузкой
+      skill

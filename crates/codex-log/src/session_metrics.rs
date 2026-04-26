@@ -3708,6 +3708,107 @@ mod tests {
     }
 
     #[test]
+    fn enabled_skills_stay_tied_to_first_runtime_context_list() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[
+                event(
+                    1,
+                    RUNTIME_CONTEXT,
+                    "2026-04-23T10:00:00Z",
+                    json!({"skills": ["openspec-apply-change", "shadcn"]}),
+                ),
+                event(
+                    2,
+                    SHELL_CALL,
+                    "2026-04-23T10:00:01Z",
+                    json!({
+                        "thread_id": "root",
+                        "tool_name": "exec_command",
+                        "command": "sed -n '1,80p' /tmp/skills/openspec-explore/SKILL.md",
+                        "skill_identifiers": ["openspec-explore"]
+                    }),
+                ),
+                event(
+                    3,
+                    RUNTIME_CONTEXT,
+                    "2026-04-23T10:00:02Z",
+                    json!({"skills": ["openspec-explore"]}),
+                ),
+            ],
+            None,
+            Some(&summary()),
+        );
+
+        assert_eq!(metrics.factors.skills_count.value, Some(2));
+        assert_eq!(
+            metrics.used_skills.identifiers,
+            vec!["openspec-explore".to_string()]
+        );
+    }
+
+    #[test]
+    fn explicit_skill_usage_stays_separate_from_enabled_skills_count() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[
+                event(
+                    1,
+                    RUNTIME_CONTEXT,
+                    "2026-04-23T10:00:00Z",
+                    json!({"skills": ["openspec-apply-change"]}),
+                ),
+                event(
+                    2,
+                    SHELL_CALL,
+                    "2026-04-23T10:00:01Z",
+                    json!({
+                        "thread_id": "root",
+                        "tool_name": "exec_command",
+                        "command": "cat /tmp/skills/shadcn/SKILL.md",
+                        "skill_identifiers": ["shadcn"]
+                    }),
+                ),
+            ],
+            None,
+            Some(&summary()),
+        );
+
+        assert_eq!(metrics.factors.skills_count.value, Some(1));
+        assert_eq!(metrics.used_skills.coverage, MetricCoverage::Known);
+        assert_eq!(metrics.used_skills.identifiers, vec!["shadcn".to_string()]);
+    }
+
+    #[test]
+    fn quoted_available_skills_blocks_do_not_count_as_skill_usage() {
+        let metrics = compute_session_metrics(
+            "session-1",
+            &[
+                event(
+                    1,
+                    RUNTIME_CONTEXT,
+                    "2026-04-23T10:00:00Z",
+                    json!({"skills": ["openspec-apply-change", "shadcn"]}),
+                ),
+                event(
+                    2,
+                    MESSAGE_USER,
+                    "2026-04-23T10:00:01Z",
+                    json!({
+                        "text": "<skills_instructions>\n### Available skills\n- openspec-apply-change\n- shadcn\n</skills_instructions>"
+                    }),
+                ),
+            ],
+            None,
+            Some(&summary()),
+        );
+
+        assert_eq!(metrics.factors.skills_count.value, Some(2));
+        assert!(metrics.used_skills.identifiers.is_empty());
+        assert_eq!(metrics.used_skills.coverage, MetricCoverage::Unknown);
+    }
+
+    #[test]
     fn deserializes_legacy_metrics_without_new_fields() {
         let legacy = serde_json::json!({
             "session_id": "session-1",

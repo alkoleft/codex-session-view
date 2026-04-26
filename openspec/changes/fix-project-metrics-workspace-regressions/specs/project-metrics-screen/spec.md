@@ -34,3 +34,26 @@ The `Project metrics` workspace SHALL keep `Window pulse` compact, while exposin
 - **THEN** the quick summary MUST include a token-drift signal for that window
 - **THEN** these signals MUST remain part of the compact window-level summary instead of becoming a
   separate overview block above the chart
+
+### Requirement: Enabled skills stay tied to the first session skill list
+The `Project metrics` workspace SHALL treat `Enabled skills` as the count of skills connected to the
+session at startup, based on the first session message that enumerates available skills, rather than
+on later explicit skill-usage markers.
+
+#### Scenario: Counting connected skills from the first session message
+- **WHEN** the first session message contains the available-skills list for that session
+- **THEN** `skills_count` MUST equal the number of skills in that startup list
+- **THEN** later skill-usage evidence MUST NOT rewrite that connected-skills count
+
+#### Scenario: Explicit skill marker appears later in the session
+- **WHEN** the session later contains an explicit `<skill>...</skill>` message for a concrete skill
+- **THEN** the system MUST treat that marker as skill usage/load evidence
+- **THEN** that marker MUST remain separate from the `Enabled skills` count shown for the session
+
+#### Scenario: Quoted available-skills block does not become skill usage
+- **WHEN** the session contains a quoted or repeated `skills_instructions` / `### Available skills`
+  block without an explicit `<skill>...</skill>` marker
+- **THEN** the system MUST treat that content as session context text rather than as concrete skill
+  usage/load evidence
+- **THEN** this quoted block MUST NOT increment or rewrite `used_skills` and MUST NOT rewrite
+  `Enabled skills`

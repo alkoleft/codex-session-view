@@ -15,7 +15,8 @@
 
 - [ ] 3.1 Повысить `METRICS_PROJECTION_VERSION` или эквивалентную materialization version и проверить, что recompute пересобирает corrected metrics payload, а не только token fields.
 - [ ] 3.2 Обновить backend transport/view-model contract так, чтобы downstream consumers честно различали corrected, partial и unsupported metric groups.
-- [ ] 3.3 Обновить `docs/log-events.md`, если реализация меняет обработку `info.tokens`, mapping payload или другие правила обработки событий.
+- [ ] 3.3 Довести backend/read-model contract до явной token semantics: `tokens = all tokens - cached tokens`, `all tokens = полный total`, без локального пересчёта этой пары в UI consumer'ах.
+- [ ] 3.4 Обновить `docs/log-events.md`, если реализация меняет обработку `info.tokens`, mapping payload или другие правила обработки событий.
 
 ## 4. Consumer sync
 

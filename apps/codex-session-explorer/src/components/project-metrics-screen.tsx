@@ -64,6 +64,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
+type ElementSize = {
+  height: number;
+  width: number;
+};
+
 type ChartSelection = {
   endIndex: number | null;
   startIndex: number | null;
@@ -293,6 +298,7 @@ export function ProjectMetricsScreen({
   const [hoveredSessionId, setHoveredSessionId] = useState<string | null>(null);
   const [hoveredSeriesKey, setHoveredSeriesKey] = useState<ProjectMetricSeriesKey | null>(null);
   const [pinnedSessionId, setPinnedSessionId] = useState<string | null>(null);
+  const [chartSurfaceNode, setChartSurfaceNode] = useState<HTMLDivElement | null>(null);
   const [selection, setSelection] = useState<ChartSelection>({
     endIndex: null,
     startIndex: null,
@@ -308,6 +314,8 @@ export function ProjectMetricsScreen({
   const workspaceStorageKeyRef = useRef<string | null>(null);
   const pendingWorkspaceStorageKeyRef = useRef<string | null>(null);
   const hydratedWorkspaceStorageKeyRef = useRef<string | null>(null);
+  const chartSurfaceSize = useElementSize(chartSurfaceNode);
+  const canRenderResponsiveChart = chartSurfaceSize.width > 0 && chartSurfaceSize.height > 0;
 
   useEffect(() => {
     selectionRef.current = selection;
@@ -784,6 +792,7 @@ export function ProjectMetricsScreen({
                         className="relative min-h-[32rem] flex-1 rounded-2xl border border-border/70 bg-muted/10 p-3 lg:min-h-[38rem] xl:min-h-[42rem]"
                         data-testid="project-metrics-chart-surface"
                         onWheel={handleChartWheel}
+                        ref={setChartSurfaceNode}
                       >
                         <div
                           className="absolute left-6 top-6 z-10 flex items-center gap-1 rounded-xl border border-border/70 bg-background/92 p-1 shadow-sm"
@@ -848,8 +857,11 @@ export function ProjectMetricsScreen({
                             row={visibleRows[0]}
                             series={visibleSeries}
                           />
-                        ) : chartAnalysis ? (
-                          <ResponsiveContainer height="100%" width="100%">
+                        ) : chartAnalysis && canRenderResponsiveChart ? (
+                          <ResponsiveContainer
+                            height={chartSurfaceSize.height}
+                            width={chartSurfaceSize.width}
+                          >
                             <ComposedChart
                               className="cursor-crosshair"
                               data={chartAnalysis.chartData}
@@ -2363,6 +2375,40 @@ function formatSignedWindowMetric(value: number | null) {
   }
   const sign = value > 0 ? "+" : value < 0 ? "−" : "±";
   return `${sign}${new Intl.NumberFormat("ru-RU").format(Math.abs(Math.round(value)))}`;
+}
+
+function useElementSize(node: HTMLElement | null): ElementSize {
+  const [size, setSize] = useState<ElementSize>({ height: 0, width: 0 });
+
+  useEffect(() => {
+    if (!node) {
+      setSize({ height: 0, width: 0 });
+      return;
+    }
+
+    const updateSize = () => {
+      setSize({
+        height: node.clientHeight,
+        width: node.clientWidth,
+      });
+    };
+
+    updateSize();
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      updateSize();
+    });
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+    };
+  }, [node]);
+
+  return size;
 }
 
 function buildAnomalyGroups({

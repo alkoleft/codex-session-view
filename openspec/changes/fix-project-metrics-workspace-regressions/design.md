@@ -10,6 +10,9 @@ Change остаётся узким follow-up к уже принятому redesi
 3. Правая панель визуально оформлена как независимый scroll-owner, но реальная flex/height-цепочка
    для tab content и `ScrollArea` недостаточно жёсткая, поэтому переполненный контент может
    перестать прокручиваться как отдельная область.
+4. Вокруг skill-метрик есть semantic drift: `Enabled skills` должно отражать стартовый список
+   available skills из первого сообщения сессии, а явные `<skill>...</skill>` сообщения означают
+   уже факт загрузки/использования skill и не должны переписывать count подключённых skills.
 
 Отдельно есть два UX-полиша, не меняющих архитектуру:
 
@@ -163,6 +166,46 @@ secondary lines лучше читались поверх того же viewport.
 Причина: это чистый visual polish в рамках уже принятой grammar `primary bar + muted secondary
 lines`, а не изменение самой grammar.
 
+### 9. `Enabled skills` и explicit `<skill>` markers фиксируются как разные semantic layers
+
+Решение: `Enabled skills` и соответствующий `skills_count` должны вычисляться по стартовому списку
+available skills из первого сообщения сессии, а не по более поздним usage markers.
+
+Практически это означает:
+
+- если первое сообщение сессии содержит блок `skills_instructions`/`Available skills` или
+  эквивалентный стартовый context list, именно он задаёт count подключённых skills;
+- явное сообщение вида `<skill><name>...</name><path>.../SKILL.md</path></skill>` означает, что
+  skill был загружен/использован в сессии;
+- простой показ или цитирование текста `skills_instructions` / `### Available skills` не означает
+  загрузку skill сам по себе;
+- такие `<skill>` markers должны учитываться отдельно как usage/load signal и не должны менять
+  `Enabled skills` count;
+- shell/tool чтение `.../SKILL.md` может оставаться вспомогательным signal usage, но не источником
+  значения для `connected/enabled skills`.
+
+Concrete evidence: текущая сессия `019dc925-2dad-7901-9118-628b4e3f08f9` показывает оба вида
+сигналов одновременно:
+
+- в [rollout-2026-04-26T12-35-50-019dc925-2dad-7901-9118-628b4e3f08f9.jsonl](/home/alko/.codex/sessions/2026/04/26/rollout-2026-04-26T12-35-50-019dc925-2dad-7901-9118-628b4e3f08f9.jsonl:3)
+  есть блок `<skills_instructions> ... ### Available skills ... </skills_instructions>`, который
+  описывает skills, подключённые к runtime context, и сам по себе не означает загрузку конкретного
+  skill;
+- в [rollout-2026-04-26T12-35-50-019dc925-2dad-7901-9118-628b4e3f08f9.jsonl](/home/alko/.codex/sessions/2026/04/26/rollout-2026-04-26T12-35-50-019dc925-2dad-7901-9118-628b4e3f08f9.jsonl:6)
+  пользователь цитирует кусок `<skills_instructions> ... ### Available skills ...`, и такая цитата
+  тоже не должна считаться загрузкой skill;
+- в [rollout-2026-04-26T12-35-50-019dc925-2dad-7901-9118-628b4e3f08f9.jsonl](/home/alko/.codex/sessions/2026/04/26/rollout-2026-04-26T12-35-50-019dc925-2dad-7901-9118-628b4e3f08f9.jsonl:8)
+  есть explicit `<skill>` marker для `openspec-explore`, и именно этот сигнал уже должен
+  трактоваться как фактическая загрузка/использование skill.
+
+Причина: иначе система смешивает два разных вопроса: «что было доступно агенту в этой сессии с
+самого начала» и «какой skill реально активировали по ходу разговора». Это делает метрику
+`Количество подключенных skills в сессии` недостоверной.
+
+Альтернатива: продолжать выводить `Enabled skills` по любому позднему usage signal или по чтению
+`SKILL.md`. Минус: это подменяет availability metric usage metric-ой и ломает интерпретацию
+проектной аналитики.
+
 ## Risks / Trade-offs
 
 - [Risk] Сохранение старого workspace state может протянуть невалидную конфигурацию в новый
@@ -176,6 +219,9 @@ lines`, а не изменение самой grammar.
   использовать один компактный persistent marker без превращения его в отдельный marker system.
 - [Risk] Усиление active states может сделать панель визуально тяжелее. -> Mitigation: усиливать
   contrast точечно, не меняя общий compact rhythm правой панели.
+- [Risk] Исторические логи могут по-разному представлять стартовый список available skills и
+  explicit `<skill>` markers. -> Mitigation: зафиксировать precedence и покрыть reader/metrics
+  тестами как минимум кейсы `first message available skills` и `later explicit skill usage`.
 
 ## Migration Plan
 
@@ -185,5 +231,7 @@ lines`, а не изменение самой grammar.
 4. Уточнить `Window pulse` и pinned affordance в chart viewport.
 5. Исправить layout/scroll chain правой панели и обновить tests.
 6. Подкрутить visual states compact controls и opacity primary bar.
-7. Прогнать `openspec validate ... --strict`, frontend tests и Playwright UAT уже при выходе из
+7. Проверить и при необходимости исправить extraction/aggregation semantics для `Enabled skills`
+   против explicit `<skill>` markers.
+8. Прогнать `openspec validate ... --strict`, frontend tests и Playwright UAT уже при выходе из
    explore mode и реализации.

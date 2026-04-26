@@ -10,6 +10,10 @@
 - состояния `active / inactive` у compact badges и actions читаются слабо;
 - primary bar-layer визуально слишком тяжёлый и мешает считыванию secondary lines;
 - содержимое вкладок правой панели не получает надёжный независимый scroll-owner при переполнении.
+- семантика skill-метрик читается неоднозначно: `Enabled skills` должно считаться по стартовому
+  списку skills из первого сообщения сессии, тогда как явные `<skill>...</skill>` сообщения
+  означают фактическую загрузку/использование skill и не должны подменять count подключённых
+  skills.
 
 Эти замечания не требуют нового redesign и не меняют продуктовый scope экрана, но нарушают уже
 принятый UX-контракт chart-first workspace.
@@ -34,13 +38,16 @@
   читался не только в summary и side panel, но и прямо в chart viewport.
 - Восстановить рабочий независимый scroll внутри tab-content правой панели и закрыть это
   контрактом в OpenSpec и тестах.
+- Зафиксировать и проверить semantics skill metrics: `Enabled skills` считать по стартовому списку
+  available skills из первого сообщения сессии, а явные `<skill>` markers трактовать как отдельный
+  сигнал фактического usage/load без влияния на count подключённых skills.
 
 ## Capabilities
 
 ### Modified Capabilities
 
 - `project-metrics-screen`: уточняется поведение workspace state при requery и поведение pinned
-  selection после обновления данных.
+  selection после обновления данных, а также semantics `Enabled skills` vs explicit skill usage.
 - `project-metrics-charts`: уточняется контракт `click -> pin` для всех визуальных слоёв графика и
   читаемость primary/secondary visual hierarchy, а также shared normalization для sparse series.
 - `project-metrics-layout-focus`: уточняются требования к независимому scroll правой панели и к
@@ -55,6 +62,10 @@
   normalization без отказа от общей chart-scale.
 - `apps/codex-session-explorer/src/components/project-metrics-screen.test.tsx`: контрактные тесты
   на сохранение workspace state, прямой pin по графику и независимый scroll side tabs.
+- `crates/codex-log/src/session_metrics.rs`,
+  `crates/codex-log/src/events/readers/session.rs`,
+  `crates/codex-log/src/events/readers.rs`: проверка и при необходимости исправление различения
+  `connected/enabled skills` и `used/loaded skills`.
 - `apps/codex-session-explorer/src/components/ui/scroll-area.tsx`,
   `apps/codex-session-explorer/src/components/ui/button.tsx`,
   `apps/codex-session-explorer/src/components/ui/badge.tsx`: при необходимости точечные UI-правки
